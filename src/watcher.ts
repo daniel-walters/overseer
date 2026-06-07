@@ -1,4 +1,4 @@
-import chokidar, { type FSWatcher } from "chokidar";
+import chokidar from "chokidar";
 
 /**
  * How long the root must be quiet after the last filesystem event before we
@@ -52,7 +52,5 @@ export function watchRoot(
 
 /** Real chokidar watcher: ignore the initial add storm; the first scan is eager. */
 function defaultCreateWatcher(root: string): Watcher {
-  return chokidar.watch(root, {
-    ignoreInitial: true,
-  }) as unknown as FSWatcher as Watcher;
+  return chokidar.watch(root, { ignoreInitial: true });
 }
