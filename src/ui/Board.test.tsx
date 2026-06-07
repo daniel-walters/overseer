@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { render } from "ink-testing-library";
 import { BoardView } from "./Board.js";
-import type { Board } from "../model.js";
+import type { Board, PRD } from "../model.js";
 
 const emptyBoard: Board = { prds: [] };
+
+/** Build a PRD for rendering tests; Issues are irrelevant at the board level. */
+function prd(p: Omit<PRD, "issues">): PRD {
+  return { ...p, issues: [] };
+}
 
 const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
@@ -59,9 +64,9 @@ describe("BoardView", () => {
   it("places each PRD card under its lane's column", () => {
     const board: Board = {
       prds: [
-        { id: "auth", title: "AuthCard", lane: "in-progress" },
-        { id: "lost", title: "LostCard", lane: "unsorted" },
-        { id: "shipped", title: "DoneCard", lane: "done" },
+        prd({ id: "auth", title: "AuthCard", lane: "in-progress" }),
+        prd({ id: "lost", title: "LostCard", lane: "unsorted" }),
+        prd({ id: "shipped", title: "DoneCard", lane: "done" }),
       ],
     };
 
@@ -75,8 +80,8 @@ describe("BoardView", () => {
   it("shows a human/agent badge on a ready card", () => {
     const board: Board = {
       prds: [
-        { id: "h", title: "Hman", lane: "ready", readyFor: "human" },
-        { id: "a", title: "Agnt", lane: "ready", readyFor: "agent" },
+        prd({ id: "h", title: "Hman", lane: "ready", readyFor: "human" }),
+        prd({ id: "a", title: "Agnt", lane: "ready", readyFor: "agent" }),
       ],
     };
 
