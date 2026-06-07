@@ -1,16 +1,21 @@
 import React from "react";
 import { Box } from "ink";
 import { Column } from "./Column.js";
+import { groupByLane } from "./lanes.js";
 import { LANES, LANE_LABELS } from "../model.js";
-import type { Board, PRD, Lane } from "../model.js";
+import type { Board } from "../model.js";
 
 interface BoardViewProps {
   board: Board;
+  /** Index into `board.prds` of the selected PRD, if any. */
+  selectedIndex?: number;
 }
 
 /** The board-level kanban: PRDs as cards across Unsorted + the five columns. */
-export function BoardView({ board }: BoardViewProps) {
+export function BoardView({ board, selectedIndex }: BoardViewProps) {
   const byLane = groupByLane(board.prds);
+  const selectedId =
+    selectedIndex === undefined ? undefined : board.prds[selectedIndex]?.id;
 
   return (
     <Box flexDirection="row">
@@ -19,20 +24,9 @@ export function BoardView({ board }: BoardViewProps) {
           key={lane}
           heading={LANE_LABELS[lane]}
           cards={byLane[lane]}
+          selectedId={selectedId}
         />
       ))}
     </Box>
   );
-}
-
-/** Bucket PRDs into their lanes, preserving the order the scanner produced. */
-function groupByLane(prds: readonly PRD[]): Record<Lane, PRD[]> {
-  const byLane = Object.fromEntries(
-    LANES.map((lane) => [lane, [] as PRD[]]),
-  ) as Record<Lane, PRD[]>;
-
-  for (const prd of prds) {
-    byLane[prd.lane].push(prd);
-  }
-  return byLane;
 }
