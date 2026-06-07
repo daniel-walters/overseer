@@ -13,14 +13,28 @@ export type Column = "backlog" | "ready" | "in-progress" | "in-review" | "done";
 /** Where a card lands. Missing/unknown authored status falls to "unsorted". */
 export type Lane = Column | "unsorted";
 
-/** The columns in render order, left to right (Unsorted is rendered before these). */
-export const COLUMNS: readonly Column[] = [
+/**
+ * The lanes in render order, left to right: Unsorted first (so missing/unknown
+ * status is never lost), then the five fixed columns.
+ */
+export const LANES: readonly Lane[] = [
+  "unsorted",
   "backlog",
   "ready",
   "in-progress",
   "in-review",
   "done",
 ] as const;
+
+/** Human-readable column headings, keyed by lane. */
+export const LANE_LABELS: Readonly<Record<Lane, string>> = {
+  unsorted: "Unsorted",
+  backlog: "Backlog",
+  ready: "Ready",
+  "in-progress": "In Progress",
+  "in-review": "In Review",
+  done: "Done",
+};
 
 /**
  * The routing badge carried by a card while it is in the "ready" column,
