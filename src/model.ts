@@ -42,6 +42,17 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
  */
 export type ReadyFor = "human" | "agent";
 
+export interface Issue {
+  /** Identity: the Issue filename (e.g. `001-auth.md`). */
+  readonly id: string;
+  /** Display title: `title` frontmatter, falling back to the filename slug. */
+  readonly title: string;
+  /** The lane this Issue's card belongs in. */
+  readonly lane: Lane;
+  /** Set only when `lane === "ready"`; drives the human/agent badge. */
+  readonly readyFor?: ReadyFor;
+}
+
 export interface PRD {
   /** Identity: the PRD directory name. */
   readonly id: string;
@@ -51,6 +62,11 @@ export interface PRD {
   readonly lane: Lane;
   /** Set only when `lane === "ready"`; drives the human/agent badge. */
   readonly readyFor?: ReadyFor;
+  /**
+   * The Issues belonging to this PRD, ordered by their `NNN-` filename prefix.
+   * Every markdown file in the PRD directory other than `prd.md` is an Issue.
+   */
+  readonly issues: readonly Issue[];
 }
 
 export interface Board {
