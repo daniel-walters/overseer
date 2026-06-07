@@ -1,0 +1,3 @@
+# Copy to ~/.config/overseer/config.toml and edit `root`.
+# `root` is the directory that holds your PRD folders. A leading ~ is expanded.
+root = "~/work/prds"
