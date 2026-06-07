@@ -46,7 +46,16 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     );
   }
 
-  const parsed = parse(raw) as Record<string, unknown>;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = parse(raw) as Record<string, unknown>;
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new ConfigError(
+      `Config at ${configPath} is not valid TOML: ${detail}`,
+    );
+  }
+
   const rawRoot = parsed.root;
   if (typeof rawRoot !== "string" || rawRoot.trim() === "") {
     throw new ConfigError(
