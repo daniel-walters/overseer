@@ -14,7 +14,7 @@
     "start": "tsx src/cli.tsx",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
     "chokidar": "^4.0.3",
