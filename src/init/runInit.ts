@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ensureConfig } from "./ensureConfig.js";
 import { installSkills } from "./installSkills.js";
 import { resolveSkillsSource } from "./resolveSkillsSource.js";
 
@@ -27,11 +28,15 @@ function skillsTarget(home: string): string {
   return join(configDir, "skills");
 }
 
+/** The default root a freshly-bootstrapped config points at. */
+const DEFAULT_ROOT = "~/overseer";
+
 /**
  * Thin onboarding orchestrator for `overseer init`.
  *
  * Resolves the shipped `skills/` source, installs every bundled skill into the
- * global Claude skills root, and prints a summary naming what was installed.
+ * global Claude skills root, ensures a working config exists (bootstrapping a
+ * default one if absent), and prints a summary of what it did.
  */
 export function runInit(options: RunInitOptions): void {
   const home = options.home ?? homedir();
@@ -41,9 +46,15 @@ export function runInit(options: RunInitOptions): void {
   const target = skillsTarget(home);
   const installed = installSkills({ source, target });
 
+  const config = ensureConfig({ home, defaultRoot: DEFAULT_ROOT });
+
   const lines = [
     `Installed ${installed.length} skill${installed.length === 1 ? "" : "s"} into ${target}:`,
     ...installed.map((name) => `  - ${name}`),
+    config.created
+      ? `Created config ${config.configPath} with root ${DEFAULT_ROOT}.`
+      : `Config already exists at ${config.configPath}; left unchanged.`,
+    `Default root is ${DEFAULT_ROOT}; edit ${config.configPath} to point elsewhere.`,
   ];
   write(lines.join("\n") + "\n");
 }
