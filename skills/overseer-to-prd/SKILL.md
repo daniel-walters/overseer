@@ -9,7 +9,7 @@ This skill takes the current conversation context and codebase understanding and
 
 A PRD is **a directory under the configured root containing a `prd.md` file**. Its Issues are sibling files inside that directory, created later by `/overseer-to-issues`. The root is **not a code repo** — it is the native home of PRD/Issue markdown, read live by the Overseer TUI. The code the PRD is about lives in separate repos (your session's working directories); only the PRD/Issue artifacts go to the root.
 
-(If you are working in the Overseer source repo itself, `CONTEXT.md` and `docs/adr/` there hold the full domain model; otherwise the rules in this skill are self-contained.)
+This skill is self-contained — everything you need is below.
 
 ### Resolve the root
 

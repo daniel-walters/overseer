@@ -9,7 +9,7 @@ Break a plan into independently-grabbable **Issues** using vertical slices (trac
 
 ## The Overseer model (read this first)
 
-An **Issue** is a markdown file inside a PRD directory. It belongs to that PRD by virtue of where it lives — there is no "parent" reference, the folder *is* the parent. Issues are read by the Overseer TUI as kanban cards, and by Overseer's dispatcher to spawn implementor agents — so the frontmatter contract below must be emitted exactly. (If you are working in the Overseer source repo itself, its `CONTEXT.md` and `docs/adr/` hold the full domain model; otherwise this skill is self-contained.)
+An **Issue** is a markdown file inside a PRD directory. It belongs to that PRD by virtue of where it lives — there is no "parent" reference, the folder *is* the parent. Issues are read by the Overseer TUI as kanban cards, and by Overseer's dispatcher to spawn implementor agents — so the frontmatter contract below must be emitted exactly. This skill is self-contained — everything you need is below.
 
 ### Resolve the root and the PRD folder
 
