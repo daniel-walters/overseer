@@ -219,7 +219,7 @@ describe("App dispatch", () => {
     await tick();
 
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatcher.dispatch.mock.calls[0][0]).toEqual(fakeFrontier("auth"));
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(fakeFrontier("auth"));
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
   });
 
