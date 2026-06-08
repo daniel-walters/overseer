@@ -2,3 +2,7 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# Per-developer Claude Code overrides (personal permissions/env); shared
+# project config lives in .claude/settings.json, which IS committed.
+.claude/settings.local.json
