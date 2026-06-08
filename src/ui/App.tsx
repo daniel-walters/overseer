@@ -37,9 +37,15 @@ interface AppProps {
 export function App({ board, dispatcher }: AppProps) {
   const { exit } = useApp();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
-  // The frontier captured when the preview opened — what the preview renders and
-  // what a confirm dispatches. Held outside the reducer (it's data, not nav).
-  const [frontier, setFrontier] = useState<readonly FrontierEntry[]>([]);
+  // The plan captured when the preview opened — the frontier a confirm
+  // dispatches and the PRD title it renders. Frozen at open time and held
+  // outside the reducer (it's data, not nav) so a live re-scan under the modal
+  // can never re-point the header or the dispatch at a different PRD, nor leave
+  // the modal stranded if its PRD's card disappears from the board.
+  const [preview, setPreview] = useState<{
+    readonly prdTitle: string;
+    readonly frontier: readonly FrontierEntry[];
+  }>({ prdTitle: "", frontier: [] });
 
   // Clamp the stored selection against the current board so a shrunk board
   // (after a live refresh) can never leave us pointing past the last card.
@@ -52,7 +58,7 @@ export function App({ board, dispatcher }: AppProps) {
     // The modal preview owns input while it is open: only confirm/cancel apply.
     if (nav.confirming) {
       if (key.return || input === "y") {
-        dispatcher?.dispatch(frontier);
+        dispatcher?.dispatch(preview.frontier);
         dispatch({ type: "confirm" });
       } else if (key.escape) {
         dispatch({ type: "cancel" });
@@ -62,7 +68,10 @@ export function App({ board, dispatcher }: AppProps) {
 
     if (input === "d") {
       if (nav.level === "board" && dispatcher && selectedPrd) {
-        setFrontier(dispatcher.readFrontier(selectedPrd.id));
+        setPreview({
+          prdTitle: selectedPrd.title,
+          frontier: dispatcher.readFrontier(selectedPrd.id),
+        });
         dispatch({ type: "open-preview" });
       }
       return;
@@ -91,8 +100,10 @@ export function App({ board, dispatcher }: AppProps) {
     }
   });
 
-  if (nav.confirming && selectedPrd) {
-    return <DispatchPreview prdTitle={selectedPrd.title} frontier={frontier} />;
+  // The modal renders from the frozen capture, not the live board, so it stays
+  // up and correctly labelled even if a re-scan removes its PRD's card.
+  if (nav.confirming) {
+    return <DispatchPreview prdTitle={preview.prdTitle} frontier={preview.frontier} />;
   }
   if (nav.level === "issues" && selectedPrd) {
     return <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />;

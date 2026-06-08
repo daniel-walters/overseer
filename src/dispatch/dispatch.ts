@@ -27,6 +27,11 @@ const IN_PROGRESS = "in-progress";
  * Flipping before spawning is what makes re-dispatch and second instances safe:
  * the status itself is the lock, so by the time the next candidate is considered
  * this one is already off the `ready-for-agent` frontier.
+ *
+ * The flip is the spawn's precondition: if it fails — the file vanished from the
+ * watched root between preview and confirm, say — that candidate is skipped (no
+ * spawn) and the wave continues. One unwritable Issue never aborts the rest, and
+ * a never-flipped Issue is never handed to an agent.
  */
 export function runDispatch(
   frontier: readonly FrontierEntry[],
@@ -34,7 +39,11 @@ export function runDispatch(
 ): void {
   for (const { issue, classification } of frontier) {
     if (classification !== "spawn") continue;
-    deps.writeStatus(issue.path, IN_PROGRESS);
+    try {
+      deps.writeStatus(issue.path, IN_PROGRESS);
+    } catch {
+      continue; // flip failed ⇒ precondition unmet ⇒ do not spawn
+    }
     deps.spawn(issue);
   }
 }
