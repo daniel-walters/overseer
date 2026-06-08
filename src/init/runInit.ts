@@ -18,9 +18,12 @@ export interface RunInitOptions {
  *
  * Claude Code discovers skills under `$CLAUDE_CONFIG_DIR ?? <home>/.claude` →
  * `skills/`, so `init` installs there rather than a hardcoded `~/.claude`.
+ * An empty `$CLAUDE_CONFIG_DIR` (e.g. `export CLAUDE_CONFIG_DIR=`) is treated as
+ * unset — falling back to `~/.claude` — rather than as a cwd-relative path.
  */
 function skillsTarget(home: string): string {
-  const configDir = process.env.CLAUDE_CONFIG_DIR ?? join(home, ".claude");
+  const override = process.env.CLAUDE_CONFIG_DIR?.trim();
+  const configDir = override ? override : join(home, ".claude");
   return join(configDir, "skills");
 }
 
