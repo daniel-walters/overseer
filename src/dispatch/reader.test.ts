@@ -71,6 +71,16 @@ describe("readDispatchView", () => {
       "001-cart-totals.md",
       "002-payment-intent.md",
       "003-checkout-button.md",
+      "004-receipt-email.md",
     ]);
+  });
+
+  it("reads a scalar blocked_by as a single-entry list rather than dropping it", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    // A bare-string blocked_by is malformed but still names a dependency; the
+    // reader keeps it (fail-safe) instead of silently parsing it to [].
+    const receipt = issueById(view.issues, "004-receipt-email.md");
+    expect(receipt.blockedBy).toEqual(["002-payment-intent.md"]);
   });
 });

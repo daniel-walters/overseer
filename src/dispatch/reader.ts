@@ -78,10 +78,15 @@ function readIssue(path: string, fileName: string): DispatchIssue {
 /**
  * Parse the `blocked_by` frontmatter into a list of sibling filenames. Each
  * entry is a full filename used verbatim as the reference — the `NNN-` prefix
- * is part of the value, never split off. A missing or malformed value yields an
- * empty list.
+ * is part of the value, never split off.
+ *
+ * A bare string (a list written as a scalar by mistake) is read as a
+ * single-entry list rather than dropped: it still names a dependency, and
+ * silently parsing it to `[]` would let the frontier treat a typo as unblocked
+ * — the opposite of fail-safe. A missing value yields an empty list.
  */
 function parseBlockedBy(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is string => typeof entry === "string");
 }
