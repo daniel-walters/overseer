@@ -1,0 +1,34 @@
+{
+  "name": "overseer",
+  "version": "0.1.0",
+  "description": "A TUI that reads PRDs and Issues from disk and renders them as a live-updating kanban board.",
+  "type": "module",
+  "bin": {
+    "overseer": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/cli.tsx",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
+  },
+  "dependencies": {
+    "chokidar": "^4.0.3",
+    "gray-matter": "^4.0.3",
+    "ink": "^7.0.5",
+    "react": "^19.2.7",
+    "smol-toml": "^1.6.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.0",
+    "ink-testing-library": "^4.0.0",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}
