@@ -14,13 +14,21 @@ export interface NavState {
   readonly boardIndex: number;
   /** Selected Issue index while zoomed into a PRD. */
   readonly issueIndex: number;
+  /**
+   * True while the modal dispatch preview is open. A modal state, not a level:
+   * the underlying board selection is kept intact so the dispatch acts on it,
+   * but every normal navigation action is suppressed until the user confirms or
+   * cancels — the selection can't drift out from under the dispatch.
+   */
+  readonly confirming: boolean;
 }
 
-/** Fresh state: board level, first card selected. */
+/** Fresh state: board level, first card selected, no modal open. */
 export const initialNav: NavState = {
   level: "board",
   boardIndex: 0,
   issueIndex: 0,
+  confirming: false,
 };
 
 export type NavAction =
@@ -29,7 +37,13 @@ export type NavAction =
   /** Zoom into the selected PRD, which has `issueCount` Issues. */
   | { readonly type: "zoom"; readonly issueCount: number }
   /** Back out one level (Issues → board). A no-op at the board level. */
-  | { readonly type: "back" };
+  | { readonly type: "back" }
+  /** Open the modal dispatch preview. Board level only; ignored when zoomed. */
+  | { readonly type: "open-preview" }
+  /** Confirm the dispatch and close the preview. No-op unless confirming. */
+  | { readonly type: "confirm" }
+  /** Cancel the dispatch and close the preview. No-op unless confirming. */
+  | { readonly type: "cancel" };
 
 /** Clamp `n` into `[0, count - 1]`; an empty list pins the index at 0. */
 function clamp(n: number, count: number): number {
@@ -38,7 +52,22 @@ function clamp(n: number, count: number): number {
 }
 
 export function navReduce(state: NavState, action: NavAction): NavState {
+  // While the modal preview is open, normal navigation is suspended: only the
+  // preview's own confirm/cancel get through.
+  if (state.confirming && action.type !== "confirm" && action.type !== "cancel") {
+    return state;
+  }
+
   switch (action.type) {
+    case "open-preview": {
+      if (state.level !== "board") return state;
+      return { ...state, confirming: true };
+    }
+    case "confirm":
+    case "cancel": {
+      if (!state.confirming) return state;
+      return { ...state, confirming: false };
+    }
     case "move": {
       if (state.level === "board") {
         return { ...state, boardIndex: clamp(state.boardIndex + action.delta, action.count) };
