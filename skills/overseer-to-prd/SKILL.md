@@ -9,7 +9,7 @@ This skill takes the current conversation context and codebase understanding and
 
 A PRD is **a directory under the configured root containing a `prd.md` file**. Its Issues are sibling files inside that directory, created later by `/overseer-to-issues`. The root is **not a code repo** — it is the native home of PRD/Issue markdown, read live by the Overseer TUI. The code the PRD is about lives in separate repos (your session's working directories); only the PRD/Issue artifacts go to the root.
 
-See `CONTEXT.md` and `docs/adr/` in the Overseer repo for the full domain model.
+(If you are working in the Overseer source repo itself, `CONTEXT.md` and `docs/adr/` there hold the full domain model; otherwise the rules in this skill are self-contained.)
 
 ### Resolve the root
 
@@ -31,7 +31,7 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
 
 4. **Write the PRD file** to `<root>/<slug>/prd.md`.
 
-   Frontmatter is **`title` only** — a human-readable display title. Write **no `status` field**: a PRD has no stored status. Its board column is derived at read time from its Issues by Overseer ([ADR 0003](https://github.com/daniel-walters/overseer/blob/main/docs/adr/0003-prd-status-is-derived-not-stored.md)). A PRD with no Issues yet reads as `backlog` automatically.
+   Frontmatter is **`title` only** — a human-readable display title. Write **no `status` field**: a PRD has no stored status. Overseer derives its board column at read time from its Issues — `done` only when there is ≥1 Issue and all are `done`; `in-progress` when any Issue is `in-progress` or later; otherwise `backlog`. So a PRD with no Issues yet reads as `backlog` automatically.
 
    ```markdown
    ---
