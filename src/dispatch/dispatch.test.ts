@@ -270,6 +270,74 @@ describe("runDispatch", () => {
         { issueId: "001-bad.md", repo: "/repos/bad", error: "boom" },
       ]);
     });
+
+    it("does not let a throwing rollback escape or abort the wave", () => {
+      // The whole edge runs inside the Ink input handler (no try/catch around
+      // it). After a spawn fails, the rollback write can itself ENOENT — the
+      // Issue file was deleted in the race window after the flip. That must not
+      // crash the board or stop later candidates.
+      const spawned: string[] = [];
+      const d = deps({
+        writeStatus: (path, status) => {
+          // The rollback (→ ready-for-agent) of the first candidate throws.
+          if (path === "/root/prd/001-bad.md" && status === "ready-for-agent") {
+            throw new Error("ENOENT on rollback");
+          }
+          d.writes.push([path, status]);
+        },
+        spawn: (repo, prompt) => {
+          if (repo === "/repos/bad") throw new Error("boom");
+          spawned.push(prompt);
+        },
+      });
+
+      expect(() =>
+        runDispatch(
+          PRD_DIR,
+          [
+            entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
+            entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/ok" }),
+          ],
+          d,
+        ),
+      ).not.toThrow();
+
+      // The failure was still logged, and the next candidate still spawned.
+      expect(d.failures).toEqual([
+        { issueId: "001-bad.md", repo: "/repos/bad", error: "boom" },
+      ]);
+      expect(spawned).toEqual(["prompt-for-002-ok.md"]);
+    });
+
+    it("does not let a throwing failure-log escape or abort the wave", () => {
+      // The durable log can be unwritable (e.g. an unusable state dir). Losing
+      // one failure record must not crash the board or skip later candidates.
+      const spawned: string[] = [];
+      const d = deps({
+        spawn: (repo, prompt) => {
+          if (repo === "/repos/bad") throw new Error("boom");
+          spawned.push(prompt);
+        },
+        logFailure: () => {
+          throw new Error("EACCES on dispatch.log");
+        },
+      });
+
+      expect(() =>
+        runDispatch(
+          PRD_DIR,
+          [
+            entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
+            entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/ok" }),
+          ],
+          d,
+        ),
+      ).not.toThrow();
+
+      // The first candidate was still rolled back, and the next still spawned.
+      expect(d.writes).toContainEqual(["/root/prd/001-bad.md", "ready-for-agent"]);
+      expect(spawned).toEqual(["prompt-for-002-ok.md"]);
+    });
   });
 
   it("skips spawning a candidate whose flip throws, and continues with the rest", () => {

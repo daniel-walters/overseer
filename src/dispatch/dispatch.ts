@@ -87,6 +87,13 @@ export function runDispatch(
  * file vanished from the watched root) skips the spawn with no rollback or log —
  * nothing was started. A spawn failure *after* the flip rolls the status back
  * and records the failure.
+ *
+ * The rollback and the log append are themselves best-effort: this whole edge
+ * runs synchronously inside the Ink input handler, which has no try/catch around
+ * it, so a throw here would crash the board. The rollback write can ENOENT (the
+ * Issue file deleted in the race window after the flip) and the log append can
+ * fail on an unwritable state dir — neither is allowed to escape or to abort the
+ * rest of the wave.
  */
 function spawnOne(
   issue: DispatchIssue,
@@ -102,8 +109,33 @@ function spawnOne(
   try {
     deps.spawn(repo, deps.buildPrompt(issue));
   } catch (err) {
+    rollBack(issue, deps);
+    logFailure(issue, repo, err, deps);
+  }
+}
+
+/** Best-effort rollback of the flip; a failure here must not escape the wave. */
+function rollBack(issue: DispatchIssue, deps: DispatchDeps): void {
+  try {
     deps.writeStatus(issue.path, READY_FOR_AGENT);
+  } catch {
+    // The Issue file vanished from the watched root after the flip. Nothing left
+    // to roll back; the board will reconcile on the next scan.
+  }
+}
+
+/** Best-effort failure-log append; a failure here must not escape the wave. */
+function logFailure(
+  issue: DispatchIssue,
+  repo: string,
+  err: unknown,
+  deps: DispatchDeps,
+): void {
+  try {
     deps.logFailure({ issueId: issue.id, repo, error: errorMessage(err) });
+  } catch {
+    // The durable log is unwritable (e.g. an unusable state dir). Losing one
+    // failure record must not crash the board or stop later candidates.
   }
 }
 
