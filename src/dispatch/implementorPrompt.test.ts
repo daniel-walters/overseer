@@ -61,7 +61,27 @@ describe("buildImplementorPrompt", () => {
   });
 
   it("does NOT instruct the agent to set in-progress (the dispatcher already did)", () => {
-    expect(build()).not.toContain("in-progress");
+    // Assert over the static template only: the Issue/PRD bodies are
+    // caller-supplied and may legitimately mention "in-progress" (the dispatch
+    // PRD itself does), so banning the substring across the filled output would
+    // be a false failure. The property under test is that the template's own
+    // prose never tells the agent to set that status.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prd: { ...prd, body: "", title: "" },
+      ...context,
+    });
+    expect(prompt).not.toContain("in-progress");
+  });
+
+  it("embeds a body verbatim even when it mentions in-progress", () => {
+    const wordy: IssueRecord = {
+      ...issue,
+      body: "Flip each Issue to in-progress the moment it's dispatched.",
+    };
+    expect(buildImplementorPrompt({ issue: wordy, prd, ...context })).toContain(
+      wordy.body,
+    );
   });
 
   it("is deterministic: identical inputs produce identical output", () => {
