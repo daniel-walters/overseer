@@ -99,4 +99,25 @@ describe("runDispatch", () => {
     expect(writeStatus).not.toHaveBeenCalled();
     expect(spawn).not.toHaveBeenCalled();
   });
+
+  it("skips spawning a candidate whose flip throws, and continues with the rest", () => {
+    // The flip is the spawn's precondition: a candidate whose file vanished from
+    // the watched root (ENOENT on the flip) must not be spawned, and one bad
+    // candidate must not abort the whole wave.
+    const spawned: string[] = [];
+    runDispatch(
+      [
+        entry("spawn", { id: "001-gone.md", path: "/root/prd/001-gone.md" }),
+        entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md" }),
+      ],
+      {
+        writeStatus: (path) => {
+          if (path === "/root/prd/001-gone.md") throw new Error("ENOENT");
+        },
+        spawn: (issue) => spawned.push(issue.id),
+      },
+    );
+
+    expect(spawned).toEqual(["002-ok.md"]);
+  });
 });

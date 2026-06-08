@@ -258,4 +258,29 @@ describe("App dispatch", () => {
 
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
   });
+
+  it("keeps the modal up and labelled from the open-time capture if a re-scan removes its PRD", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame, rerender } = render(
+      <App board={board} dispatcher={dispatcher} />,
+    );
+
+    stdin.write("d"); // open the preview on AuthPRD (first card)
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatch AuthPRD");
+
+    // A live re-scan removes AuthPRD entirely from under the open modal.
+    const withoutAuth: Board = { prds: board.prds.filter((p) => p.id !== "auth") };
+    rerender(<App board={withoutAuth} dispatcher={dispatcher} />);
+    await tick();
+
+    // The modal is still up and still names AuthPRD (the frozen capture), not
+    // the now-selected billing PRD, and a confirm dispatches AuthPRD's frontier.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch AuthPRD");
+
+    stdin.write(ENTER);
+    await tick();
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(fakeFrontier("auth"));
+  });
 });

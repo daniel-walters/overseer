@@ -61,5 +61,34 @@ describe("createDispatcher", () => {
       );
       expect(skipped).toContain("status: done");
     });
+
+    it("does not flip or spawn a candidate whose file vanished after the preview", () => {
+      const spawned: DispatchIssue[] = [];
+      const dispatcher = createDispatcher(root, (issue) => spawned.push(issue));
+
+      const frontier = dispatcher.readFrontier("checkout-flow");
+      // The watched root changes under us: the spawn candidate is deleted between
+      // opening the preview and confirming.
+      rmSync(join(root, "checkout-flow", "002-payment-intent.md"));
+
+      // The flip's readFileSync would ENOENT; dispatch must swallow it, not throw.
+      expect(() => dispatcher.dispatch(frontier)).not.toThrow();
+      // With the flip failed, the agent is never spawned (the flip is its lock).
+      expect(spawned).toEqual([]);
+    });
+  });
+
+  describe("resilience to a changing watched root", () => {
+    it("returns an empty frontier instead of throwing when the PRD dir is gone", () => {
+      const root = mkdtempSync(join(tmpdir(), "overseer-dispatcher-"));
+      try {
+        const dispatcher = createDispatcher(root, vi.fn());
+        // No such PRD directory under root — a stale selection on a watched root.
+        expect(() => dispatcher.readFrontier("ghost-prd")).not.toThrow();
+        expect(dispatcher.readFrontier("ghost-prd")).toEqual([]);
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
   });
 });

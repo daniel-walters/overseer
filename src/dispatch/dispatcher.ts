@@ -15,6 +15,13 @@ import type { Dispatcher } from "../ui/App.js";
  * `spawn` is injected — this tracer-bullet slice passes a stub, so the whole
  * keypress → status-flip → live-board path is proven before the real spawn tip
  * (validate repo, ensure branch, `claude --bg`) exists.
+ *
+ * Both seams are total: the root is filesystem-watched and changes under the
+ * TUI by design, so `d` and confirm can race a deletion. `readFrontier` reports
+ * an unreadable PRD as an empty frontier (the preview renders that as "nothing
+ * to spawn"), and the flip-then-spawn loop skips any Issue whose flip fails —
+ * neither path is allowed to throw out of the Ink input handler and crash the
+ * board.
  */
 export function createDispatcher(
   root: string,
@@ -22,7 +29,11 @@ export function createDispatcher(
 ): Dispatcher {
   return {
     readFrontier(prdId: string): readonly FrontierEntry[] {
-      return computeFrontier(readDispatchView(join(root, prdId)));
+      try {
+        return computeFrontier(readDispatchView(join(root, prdId)));
+      } catch {
+        return []; // PRD dir/files vanished from the watched root ⇒ empty plan
+      }
     },
     dispatch(frontier: readonly FrontierEntry[]): void {
       runDispatch(frontier, { writeStatus, spawn });
