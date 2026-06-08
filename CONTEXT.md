@@ -40,7 +40,7 @@ Folder-per-PRD. Each PRD is a directory under the configured root; its issues ar
 **PRD file** — `prd.md` in the PRD directory.
 - Identity: the directory name (e.g. `auth-system`).
 - Display title: `title` frontmatter, falling back to the directory name.
-- Has its own authored `status` frontmatter field (same 5-value vocabulary as an Issue, including the `ready-for-*` substatus). It is **maintained by hand/agent on top of the issues**, decoupled from them — NOT derived. Overseer reads it directly.
+- Has **no `status` frontmatter field**. A PRD's status is **derived at read time** from its Issues, not stored — see [Issue status](#issue-status) and [ADR 0003](./docs/adr/0003-prd-status-is-derived-not-stored.md). `prd.md` carries `title` and the body only.
 
 **Issue file** — `NNN-slug.md`, e.g. `001-auth.md`, `002-password-reset.md`.
 - Identity: the filename.
@@ -66,9 +66,9 @@ Overseer watches the root with OS-level filesystem events and a **~150ms debounc
 
 ## Issue status
 
-The kanban columns, left to right. Status lives in each issue file's YAML frontmatter. A PRD has no status.
+The kanban columns, left to right. Status lives in each **Issue** file's YAML frontmatter. A **PRD has no stored status** — its column is derived from its Issues (see [PRD status](#prd-status-derived) below).
 
-The board has **5 columns**:
+The Issue-level board has **5 columns**:
 
 1. **backlog**
 2. **ready**
@@ -96,14 +96,24 @@ Canonical values: `backlog`, `ready-for-human`, `ready-for-agent`, `in-progress`
 - Human/agent is a routing signal that only matters while **ready**. Once an Issue moves to `in-progress` it is just `in-progress` — the human/agent distinction is not tracked further.
 - A missing or unrecognized status lands the Issue in a leftmost **Unsorted** column rather than being dropped.
 
+### PRD status (derived) {#prd-status-derived}
+
+A PRD has **no stored status** — `prd.md` carries no `status` field. The board **derives** a PRD's column at read time, during the same full re-scan it runs on every filesystem event ([ADR 0003](./docs/adr/0003-prd-status-is-derived-not-stored.md)):
+
+- there is **≥ 1 Issue and every Issue is `done`** → **done**
+- otherwise, **any Issue is `in-progress` or later** (`in-progress`, `in-review`, `done`) → **in-progress**
+- otherwise (all Issues `backlog`/`ready-*`, **or zero Issues**) → **backlog**
+
+A freshly created PRD with no Issues is **backlog** — `done` requires at least one Issue, all done. A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never Unsorted**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
+
 ## View
 
-Two kanban levels, each with the same 5 status columns (plus a leftmost **Unsorted** column for missing/unknown status):
+Two kanban levels with **different column sets**:
 
-- **Board level** — the cards are **PRDs**, each in the column matching its authored `status`. A PRD with missing/unknown `status` lands in **Unsorted**, same rule as Issues. This is the default/top view.
-- **PRD level (zoom)** — selecting a PRD zooms into a kanban whose cards are that PRD's **Issues**, in the same 5 columns.
+- **Board level** — the cards are **PRDs**. The board collapses to **3 columns — backlog / in-progress / done** — each PRD in its [derived](#prd-status-derived) column. A PRD is never Unsorted (no status field to be missing). This is the default/top view.
+- **PRD level (zoom)** — selecting a PRD zooms into a kanban whose cards are that PRD's **Issues**, across the full **5 columns** (plus a leftmost **Unsorted** column for Issues with missing/unknown status).
 
-The **ready** column shows a 🧑/🤖 badge per card for the `ready-for-human` / `ready-for-agent` substatus, at both levels. Within a column, cards order by the issue filename's `NNN-` prefix (incidental, not priority).
+The **ready** column and its 🧑/🤖 badge (`ready-for-human` / `ready-for-agent`) exist at **Issue level only** — the board level has no `ready` column. Within a column, cards order by the issue filename's `NNN-` prefix (incidental, not priority).
 
 Overseer is a **read-only viewer** — it never writes the PRD/Issue files; editing happens elsewhere and Overseer reflects the changes live.
 
@@ -127,4 +137,4 @@ Ink + TypeScript (React-for-the-terminal). See [ADR 0001](./docs/adr/0001-ink-ty
 ## Flagged ambiguities
 
 - "Feature" vs "PRD" — resolved: a PRD _is_ a feature. One concept, canonical term is **PRD**.
-- "PRD has no status" (early) vs "PRD gets a status" — resolved: a PRD **has its own authored `status`**, maintained on top of the issues, not derived. Drives its column on the board-level kanban.
+- PRD status — resolved (reversed): a PRD has **no stored status**. Its board column is **derived at read time** from its Issues, and the board level collapses to backlog/in-progress/done. See [ADR 0003](./docs/adr/0003-prd-status-is-derived-not-stored.md). (Earlier drafts gave a PRD an authored 5-value `status` maintained on top of the issues — that is superseded.)
