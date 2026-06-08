@@ -30,16 +30,11 @@ describe("createSpawnEdge", () => {
       spawn("/repos/api", "do the thing");
 
       expect(exec).toHaveBeenCalledTimes(1);
-      const [command, args, options] = exec.mock.calls[0];
-      expect(command).toBe("claude");
-      expect(args).toEqual([
-        "--bg",
-        "--permission-mode",
-        "auto",
-        "-p",
-        "do the thing",
-      ]);
-      expect(options).toEqual({ cwd: "/repos/api" });
+      expect(exec).toHaveBeenCalledWith(
+        "claude",
+        ["--bg", "--permission-mode", "auto", "-p", "do the thing"],
+        { cwd: "/repos/api" },
+      );
     });
 
     it("propagates a launch failure so the caller can roll back and log", () => {
