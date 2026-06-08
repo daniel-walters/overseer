@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render } from "ink-testing-library";
 import { App } from "./App.js";
 import type { Board } from "../model.js";
+import type { FrontierEntry } from "../dispatch/frontier.js";
+import type { DispatchIssue } from "../dispatch/reader.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -134,5 +136,168 @@ describe("App", () => {
     stdin.write(ARROW_DOWN);
     await tick();
     expect(frames.length).toBe(framesAfterQuit);
+  });
+});
+
+describe("App dispatch", () => {
+  function di(id: string): DispatchIssue {
+    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", body: "" };
+  }
+
+  /** A frontier with one spawn candidate and one skipped Issue. */
+  function fakeFrontier(prdId: string): readonly FrontierEntry[] {
+    return [
+      { issue: di("010-spawn.md"), classification: "spawn" },
+      { issue: di("020-skip.md"), classification: "skipped", reason: `(${prdId}) not ready` },
+    ];
+  }
+
+  /** A dispatcher whose two seams are spies, with a sensible default frontier. */
+  function spyDispatcher(
+    overrides: Partial<{ readFrontier: (id: string) => readonly FrontierEntry[] }> = {},
+  ) {
+    return {
+      readFrontier: vi.fn(overrides.readFrontier ?? fakeFrontier),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+    };
+  }
+
+  it("opens a modal preview on d at the board level", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch");
+    expect(frame).toContain("010-spawn.md");
+    // The frontier was read for the selected (first) PRD.
+    expect(dispatcher.readFrontier).toHaveBeenCalledWith("auth");
+  });
+
+  it("does nothing on d at the issue (zoomed) level", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("d");
+    await tick();
+
+    expect(dispatcher.readFrontier).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
+  });
+
+  it("suppresses navigation while the preview is open", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d"); // open preview on AuthPRD
+    await tick();
+    stdin.write(ARROW_DOWN); // would move selection if not suppressed
+    await tick();
+    // Still modal, still on AuthPRD's frontier.
+    expect(dispatcher.readFrontier).toHaveBeenCalledTimes(1);
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatch");
+
+    stdin.write(ESC);
+    await tick();
+    // The board selection never moved while the modal was up.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD");
+    expect(frame).not.toContain("Dispatch ");
+  });
+
+  it("runs the dispatch on Enter, then closes the modal", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(fakeFrontier("auth"));
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
+  });
+
+  it("runs the dispatch on y as well as Enter", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+    stdin.write("y");
+    await tick();
+
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels on Esc without dispatching, leaving the board untouched", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD");
+    expect(frame).not.toContain("Dispatch ");
+  });
+
+  it("quits on q from the modal without dispatching", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, frames } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d"); // open the preview
+    await tick();
+    stdin.write("q"); // q quits everywhere, including the modal
+    await tick();
+    const framesAfterQuit = frames.length;
+
+    // No dispatch happened, and the app unmounted: further input → no new frame.
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(frames.length).toBe(framesAfterQuit);
+  });
+
+  it("does nothing on d when no dispatcher is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("d");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
+  });
+
+  it("keeps the modal up and labelled from the open-time capture if a re-scan removes its PRD", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame, rerender } = render(
+      <App board={board} dispatcher={dispatcher} />,
+    );
+
+    stdin.write("d"); // open the preview on AuthPRD (first card)
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatch AuthPRD");
+
+    // A live re-scan removes AuthPRD entirely from under the open modal.
+    const withoutAuth: Board = { prds: board.prds.filter((p) => p.id !== "auth") };
+    rerender(<App board={withoutAuth} dispatcher={dispatcher} />);
+    await tick();
+
+    // The modal is still up and still names AuthPRD (the frozen capture), not
+    // the now-selected billing PRD, and a confirm dispatches AuthPRD's frontier.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch AuthPRD");
+
+    stdin.write(ENTER);
+    await tick();
+    expect(dispatcher.dispatch).toHaveBeenCalledWith(fakeFrontier("auth"));
   });
 });

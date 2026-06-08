@@ -1,23 +1,51 @@
-import React, { useReducer } from "react";
+import React, { useReducer, useState } from "react";
 import { useApp, useInput } from "ink";
 import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
+import { DispatchPreview } from "./DispatchPreview.js";
 import { navReduce, initialNav } from "./navigation.js";
 import type { Board } from "../model.js";
+import type { FrontierEntry } from "../dispatch/frontier.js";
+
+/**
+ * The dispatch seams the App drives, injected so the keypress → preview →
+ * confirm flow is testable without filesystem reads or real agents.
+ *
+ * - `readFrontier` reads the selected PRD's dispatch view and computes its
+ *   frontier for the preview (and, on confirm, the flip+spawn to act on).
+ * - `dispatch` runs the dispatch over that frontier (flip each spawn candidate
+ *   to in-progress, then spawn it).
+ */
+export interface Dispatcher {
+  readonly readFrontier: (prdId: string) => readonly FrontierEntry[];
+  readonly dispatch: (frontier: readonly FrontierEntry[]) => void;
+}
 
 interface AppProps {
   board: Board;
+  /** Wired in production; absent in tests that don't exercise dispatch. */
+  dispatcher?: Dispatcher;
 }
 
 /**
- * The root Ink component. It owns UI state (selection + zoom level) via the
- * navigation reducer, kept separate from `board` so a live re-scan never
- * clobbers the user's place. Keys drive the reducer; `q` quits, backing out of
- * a zoom first.
+ * The root Ink component. It owns UI state (selection + zoom level + the modal
+ * dispatch preview) via the navigation reducer, kept separate from `board` so a
+ * live re-scan never clobbers the user's place. Keys drive the reducer; `q`
+ * quits, backing out of a zoom first; `d` (board level) opens the dispatch
+ * preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board }: AppProps) {
+export function App({ board, dispatcher }: AppProps) {
   const { exit } = useApp();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
+  // The plan captured when the preview opened — the frontier a confirm
+  // dispatches and the PRD title it renders. Frozen at open time and held
+  // outside the reducer (it's data, not nav) so a live re-scan under the modal
+  // can never re-point the header or the dispatch at a different PRD, nor leave
+  // the modal stranded if its PRD's card disappears from the board.
+  const [preview, setPreview] = useState<{
+    readonly prdTitle: string;
+    readonly frontier: readonly FrontierEntry[];
+  }>({ prdTitle: "", frontier: [] });
 
   // Clamp the stored selection against the current board so a shrunk board
   // (after a live refresh) can never leave us pointing past the last card.
@@ -27,6 +55,33 @@ export function App({ board }: AppProps) {
   const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
 
   useInput((input, key) => {
+    // The modal preview owns input while it is open: confirm, cancel, or quit.
+    if (nav.confirming) {
+      if (key.return || input === "y") {
+        dispatcher?.dispatch(preview.frontier);
+        dispatch({ type: "confirm" });
+      } else if (key.escape) {
+        dispatch({ type: "cancel" });
+      } else if (input === "q") {
+        // `q` quits everywhere else; keep that escape hatch from the modal too —
+        // cancel the preview (leaving the board untouched), then exit.
+        dispatch({ type: "cancel" });
+        exit();
+      }
+      return;
+    }
+
+    if (input === "d") {
+      if (nav.level === "board" && dispatcher && selectedPrd) {
+        setPreview({
+          prdTitle: selectedPrd.title,
+          frontier: dispatcher.readFrontier(selectedPrd.id),
+        });
+        dispatch({ type: "open-preview" });
+      }
+      return;
+    }
+
     if (input === "q") {
       if (nav.level === "issues") dispatch({ type: "back" });
       else exit();
@@ -50,6 +105,11 @@ export function App({ board }: AppProps) {
     }
   });
 
+  // The modal renders from the frozen capture, not the live board, so it stays
+  // up and correctly labelled even if a re-scan removes its PRD's card.
+  if (nav.confirming) {
+    return <DispatchPreview prdTitle={preview.prdTitle} frontier={preview.frontier} />;
+  }
   if (nav.level === "issues" && selectedPrd) {
     return <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />;
   }
