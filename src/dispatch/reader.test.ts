@@ -25,4 +25,52 @@ describe("readDispatchView", () => {
     expect(payment.repo).toBe("/repos/backend");
     expect(payment.blockedBy).toEqual(["001-cart-totals.md"]);
   });
+
+  it("treats an absent repo as undefined and absent blocked_by as empty", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    const cartTotals = issueById(view.issues, "001-cart-totals.md");
+    expect(cartTotals.blockedBy).toEqual([]);
+
+    const button = issueById(view.issues, "003-checkout-button.md");
+    expect(button.repo).toBeUndefined();
+  });
+
+  it("keeps blocked_by entries as full sibling filenames, prefix and all", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    const button = issueById(view.issues, "003-checkout-button.md");
+    // Full filenames are the reference handle; the NNN- prefix is never split off.
+    expect(button.blockedBy).toEqual([
+      "001-cart-totals.md",
+      "002-payment-intent.md",
+    ]);
+  });
+
+  it("handles an Issue with no title frontmatter without crashing", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    const button = issueById(view.issues, "003-checkout-button.md");
+    expect(button.status).toBe("ready-for-agent");
+  });
+
+  it("captures the PRD body and each Issue's body and file path", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    expect(view.prdBody).toContain("Let a user pay for the items in their cart");
+
+    const cartTotals = issueById(view.issues, "001-cart-totals.md");
+    expect(cartTotals.body).toContain("Compute the cart total including tax");
+    expect(cartTotals.path).toContain("checkout-flow/001-cart-totals.md");
+  });
+
+  it("orders Issues by their NNN- filename prefix", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    expect(view.issues.map((i) => i.id)).toEqual([
+      "001-cart-totals.md",
+      "002-payment-intent.md",
+      "003-checkout-button.md",
+    ]);
+  });
 });
