@@ -3,11 +3,13 @@ import React from "react";
 import { render } from "ink";
 import { loadConfig, ConfigError } from "./config.js";
 import { scanBoard } from "./scanner.js";
-import { App } from "./ui/App.js";
+import { watchRoot } from "./watcher.js";
+import { LiveApp } from "./ui/LiveApp.js";
 
 /**
- * Thin wiring: load config → scan the root into a Board → render it with Ink.
- * Watching and live refresh arrive in a later slice.
+ * Thin wiring: load config → eager first `scanBoard` → render a {@link LiveApp}
+ * that re-scans and re-renders on every debounced filesystem change, tearing
+ * the watcher down when Ink unmounts.
  */
 function main(): void {
   let root: string;
@@ -21,8 +23,15 @@ function main(): void {
     throw err;
   }
 
-  const board = scanBoard(root);
-  render(<App board={board} />);
+  const initialBoard = scanBoard(root);
+  render(
+    <LiveApp
+      root={root}
+      initialBoard={initialBoard}
+      scan={scanBoard}
+      watch={watchRoot}
+    />,
+  );
 }
 
 main();
