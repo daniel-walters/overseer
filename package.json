@@ -6,6 +6,10 @@
   "bin": {
     "overseer": "./dist/cli.js"
   },
+  "files": [
+    "dist",
+    "skills"
+  ],
   "engines": {
     "node": ">=22"
   },
