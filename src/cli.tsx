@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import React from "react";
 import { render } from "ink";
+import meow from "meow";
 import { loadConfig, ConfigError } from "./config.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
@@ -8,13 +9,27 @@ import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
+import { runInit } from "./init/runInit.js";
+
+const cli = meow(
+  `
+  Usage
+    $ overseer            Render the live kanban board
+    $ overseer init       Install bundled skills into the global Claude skills dir
+
+  Options
+    --help                Show this help
+    --version             Show the installed version
+`,
+  { importMeta: import.meta },
+);
 
 /**
- * Thin wiring: load config → eager first `scanBoard` → render a {@link LiveApp}
- * that re-scans and re-renders on every debounced filesystem change, tearing
- * the watcher down when Ink unmounts.
+ * Load config → eager first `scanBoard` → render a {@link LiveApp} that re-scans
+ * and re-renders on every debounced filesystem change, tearing the watcher down
+ * when Ink unmounts.
  */
-function main(): void {
+function runBoard(): void {
   let root: string;
   try {
     root = loadConfig().root;
@@ -48,6 +63,18 @@ function main(): void {
       dispatcher={dispatcher}
     />,
   );
+}
+
+/**
+ * Thin wiring: branch on the subcommand *before* `loadConfig`, so `init` works
+ * with no config present. With no subcommand, render the board exactly as today.
+ */
+function main(): void {
+  if (cli.input[0] === "init") {
+    runInit({ entryUrl: import.meta.url });
+    return;
+  }
+  runBoard();
 }
 
 main();
