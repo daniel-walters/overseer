@@ -76,6 +76,28 @@ Body.
     expect(after).toContain("Body.");
   });
 
+  it("preserves an inline comment on the status line and the rest verbatim", () => {
+    const original = `---
+title: Spawnable   # human-facing label
+status: ready-for-agent  # waiting on the design sign-off
+repo: /repos/backend
+---
+
+Body stays byte-for-byte.
+`;
+    const path = file("issue.md", original);
+
+    writeStatus(path, "in-progress");
+
+    const after = readFileSync(path, "utf8");
+    // Only the status value changed; its trailing comment is kept.
+    expect(after).toContain("status: in-progress  # waiting on the design sign-off");
+    // Other lines' comments survive too (no full YAML re-dump).
+    expect(after).toContain("title: Spawnable   # human-facing label");
+    // The only difference from the original is the status value.
+    expect(after).toBe(original.replace("ready-for-agent", "in-progress"));
+  });
+
   it("round-trips a flip and a rollback to the same status string", () => {
     const path = file(
       "issue.md",

@@ -17,6 +17,7 @@ function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
     defaultBase: vi.fn(() => "origin/main"),
     branchExists: vi.fn(() => true),
     createBranch: vi.fn(),
+    checkoutBranch: vi.fn(),
     ...overrides,
   };
 }

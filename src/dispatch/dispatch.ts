@@ -1,7 +1,8 @@
-import { basename } from "node:path";
 import type { FrontierEntry } from "./frontier.js";
 import type { DispatchIssue } from "./reader.js";
 import { setUpRepos, type GitSeam } from "./gitSetup.js";
+import { Status } from "./status.js";
+import { errorMessage } from "../errorMessage.js";
 
 /** A spawn-failure record appended to the durable dispatch log. */
 export interface FailureRecord {
@@ -26,28 +27,32 @@ export interface DispatchDeps {
   readonly git: GitSeam;
   /** Rewrite an Issue file's `status` frontmatter, preserving the rest. */
   readonly writeStatus: (path: string, status: string) => void;
-  /** Build the implementor prompt for one spawn-candidate Issue. */
-  readonly buildPrompt: (issue: DispatchIssue) => string;
+  /** Build the implementor prompt for one spawn-candidate Issue in `repo`. */
+  readonly buildPrompt: (issue: DispatchIssue, repo: string) => string;
   /** Launch an implementor agent in `repo` with the built `prompt`. Throws on failure. */
   readonly spawn: (repo: string, prompt: string) => void;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
 }
 
-const READY_FOR_AGENT = "ready-for-agent";
-const IN_PROGRESS = "in-progress";
+/** A spawn candidate the frontier has guaranteed carries a usable repo. */
+interface SpawnCandidate {
+  readonly issue: DispatchIssue;
+  readonly repo: string;
+}
 
 /**
- * Run a dispatch over an already-computed frontier. The full spawn edge:
+ * Run a dispatch over an already-computed frontier, integrating against
+ * `featureBranch` (derived once by the caller). The full spawn edge:
  *
- * 1. Validate every distinct spawn-candidate `repo` and ensure the PRD feature
- *    branch in each — once per repo, before any agent spawns (so same-repo
- *    Issues don't race on branch creation).
+ * 1. Validate every distinct spawn-candidate `repo`, ensure the feature branch
+ *    in each, and check it out — once per repo, before any agent spawns (so
+ *    same-repo Issues don't race on branch setup).
  * 2. For each `spawn` candidate, in order: skip (never flip, never log) any
- *    whose repo is missing/invalid or whose branch-ensure failed — that is a
- *    pre-spawn skip surfaced by the modal preview, not a launch failure.
- *    Otherwise flip the Issue `ready-for-agent → in-progress` *before* spawning,
- *    build its prompt, and spawn `claude --bg` in its repo.
+ *    whose branch-setup failed — that is a pre-spawn skip surfaced by the modal
+ *    preview, not a launch failure. Otherwise flip the Issue
+ *    `ready-for-agent → in-progress` *before* spawning, build its prompt, and
+ *    spawn `claude --bg` in its repo.
  * 3. If a spawn throws *after* the flip, roll the Issue back to
  *    `ready-for-agent` (so the board never shows in-progress work with no agent)
  *    and append a record to the durable failure log.
@@ -58,27 +63,29 @@ const IN_PROGRESS = "in-progress";
  * candidate never aborts the wave.
  */
 export function runDispatch(
-  prdDir: string,
+  featureBranch: string,
   frontier: readonly FrontierEntry[],
   deps: DispatchDeps,
 ): void {
-  const candidates = frontier
+  // The frontier guarantees a `spawn` entry has a non-empty repo; narrow to that
+  // here so the rest of the edge never has to invent a default repo value.
+  const candidates: SpawnCandidate[] = frontier
     .filter((e) => e.classification === "spawn")
-    .map((e) => e.issue);
+    .map((e) => e.issue)
+    .filter((issue): issue is DispatchIssue & { repo: string } => !!issue.repo)
+    .map((issue) => ({ issue, repo: issue.repo }));
 
-  // A spawn candidate always carries a repo (the frontier skips missing/invalid
-  // ones), but guard defensively: an undefined repo is treated as a skip below.
-  const repos = candidates
-    .map((issue) => issue.repo)
-    .filter((repo): repo is string => repo !== undefined);
+  const setup = setUpRepos(
+    featureBranch,
+    candidates.map((c) => c.repo),
+    deps.git,
+  );
 
-  const setup = setUpRepos(basename(prdDir), repos, deps.git);
-
-  for (const issue of candidates) {
-    if (issue.repo === undefined || setup.get(issue.repo)?.ok !== true) {
-      continue; // missing/invalid repo or failed branch setup: skip-and-report
+  for (const { issue, repo } of candidates) {
+    if (setup.get(repo)?.ok !== true) {
+      continue; // invalid repo or failed branch setup: skip-and-report
     }
-    spawnOne(issue, issue.repo, deps);
+    spawnOne(issue, repo, deps);
   }
 }
 
@@ -101,13 +108,13 @@ function spawnOne(
   deps: DispatchDeps,
 ): void {
   try {
-    deps.writeStatus(issue.path, IN_PROGRESS);
+    deps.writeStatus(issue.path, Status.IN_PROGRESS);
   } catch {
     return; // flip failed: nothing was started, so nothing to roll back or log
   }
 
   try {
-    deps.spawn(repo, deps.buildPrompt(issue));
+    deps.spawn(repo, deps.buildPrompt(issue, repo));
   } catch (err) {
     rollBack(issue, deps);
     logFailure(issue, repo, err, deps);
@@ -117,7 +124,7 @@ function spawnOne(
 /** Best-effort rollback of the flip; a failure here must not escape the wave. */
 function rollBack(issue: DispatchIssue, deps: DispatchDeps): void {
   try {
-    deps.writeStatus(issue.path, READY_FOR_AGENT);
+    deps.writeStatus(issue.path, Status.READY_FOR_AGENT);
   } catch {
     // The Issue file vanished from the watched root after the flip. Nothing left
     // to roll back; the board will reconcile on the next scan.
@@ -137,8 +144,4 @@ function logFailure(
     // The durable log is unwritable (e.g. an unusable state dir). Losing one
     // failure record must not crash the board or stop later candidates.
   }
-}
-
-function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }

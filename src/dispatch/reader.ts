@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import matter from "gray-matter";
 
 /**
@@ -12,6 +12,8 @@ import matter from "gray-matter";
 export interface DispatchIssue {
   /** Identity: the Issue filename (e.g. `002-payment-intent.md`). */
   readonly id: string;
+  /** Display title: `title` frontmatter, falling back to the filename. */
+  readonly title: string;
   /** Absolute path to the Issue file. */
   readonly path: string;
   /** The raw authored `status` string, or undefined if absent. */
@@ -33,6 +35,8 @@ export interface DispatchIssue {
  * per Issue. Produced by {@link readDispatchView} from a PRD directory path.
  */
 export interface DispatchView {
+  /** The PRD's display title: `title` frontmatter, falling back to the dir name. */
+  readonly prdTitle: string;
   /** The PRD's markdown body (frontmatter stripped). */
   readonly prdBody: string;
   /** Every Issue in the PRD, ordered by `NNN-` filename prefix. */
@@ -48,9 +52,11 @@ export interface DispatchView {
  * lean {@link Issue}.
  */
 export function readDispatchView(prdDir: string): DispatchView {
-  const { content: prdBody } = matter(
+  const { data: prdData, content: prdBody } = matter(
     readFileSync(join(prdDir, "prd.md"), "utf8"),
   );
+  const prdTitle =
+    typeof prdData.title === "string" ? prdData.title : basename(prdDir);
 
   const files = readdirSync(prdDir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith(".md") && e.name !== "prd.md")
@@ -59,7 +65,7 @@ export function readDispatchView(prdDir: string): DispatchView {
 
   const issues = files.map((name) => readIssue(join(prdDir, name), name));
 
-  return { prdBody, issues };
+  return { prdTitle, prdBody, issues };
 }
 
 function readIssue(path: string, fileName: string): DispatchIssue {
@@ -67,6 +73,7 @@ function readIssue(path: string, fileName: string): DispatchIssue {
 
   return {
     id: fileName,
+    title: typeof data.title === "string" ? data.title : fileName,
     path,
     status: typeof data.status === "string" ? data.status : undefined,
     blockedBy: parseBlockedBy(data.blocked_by),

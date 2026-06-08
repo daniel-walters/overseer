@@ -2,6 +2,7 @@ import { readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parse } from "smol-toml";
+import { errorMessage } from "./errorMessage.js";
 
 /** The resolved configuration: one board, one root. */
 export interface Config {
@@ -50,9 +51,8 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   try {
     parsed = parse(raw) as Record<string, unknown>;
   } catch (err) {
-    const detail = err instanceof Error ? err.message : String(err);
     throw new ConfigError(
-      `Config at ${configPath} is not valid TOML: ${detail}`,
+      `Config at ${configPath} is not valid TOML: ${errorMessage(err)}`,
     );
   }
 

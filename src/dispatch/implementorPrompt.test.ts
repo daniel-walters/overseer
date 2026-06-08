@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { buildImplementorPrompt } from "./implementorPrompt.js";
-import type { IssueRecord, PrdRecord } from "./records.js";
+import type { DispatchIssue } from "./reader.js";
 
-const issue: IssueRecord = {
+const issue: DispatchIssue = {
   id: "001-password-hashing.md",
   title: "Password hashing",
   status: "in-progress",
@@ -12,16 +12,18 @@ const issue: IssueRecord = {
   path: "/root/auth-system/001-password-hashing.md",
 };
 
-const prd: PrdRecord = {
-  id: "auth-system",
-  title: "Authentication System",
-  body: "## Problem\nUsers cannot sign in.\n\n## Solution\nBuild auth.",
+const prdTitle = "Authentication System";
+const prdBody = "## Problem\nUsers cannot sign in.\n\n## Solution\nBuild auth.";
+
+const context = {
+  prdTitle,
+  prdBody,
+  repo: "/Users/daniel/code/backend",
+  featureBranch: "auth-system",
 };
 
-const context = { repo: "/Users/daniel/code/backend", featureBranch: "auth-system" };
-
 function build(): string {
-  return buildImplementorPrompt({ issue, prd, ...context });
+  return buildImplementorPrompt({ issue, ...context });
 }
 
 describe("buildImplementorPrompt", () => {
@@ -30,7 +32,7 @@ describe("buildImplementorPrompt", () => {
   });
 
   it("embeds the full parent PRD body verbatim", () => {
-    expect(build()).toContain(prd.body);
+    expect(build()).toContain(prdBody);
   });
 
   it("names the target repo", () => {
@@ -68,18 +70,20 @@ describe("buildImplementorPrompt", () => {
     // prose never tells the agent to set that status.
     const prompt = buildImplementorPrompt({
       issue: { ...issue, body: "", title: "" },
-      prd: { ...prd, body: "", title: "" },
-      ...context,
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
     });
     expect(prompt).not.toContain("in-progress");
   });
 
   it("embeds a body verbatim even when it mentions in-progress", () => {
-    const wordy: IssueRecord = {
+    const wordy: DispatchIssue = {
       ...issue,
       body: "Flip each Issue to in-progress the moment it's dispatched.",
     };
-    expect(buildImplementorPrompt({ issue: wordy, prd, ...context })).toContain(
+    expect(buildImplementorPrompt({ issue: wordy, ...context })).toContain(
       wordy.body,
     );
   });
@@ -91,6 +95,6 @@ describe("buildImplementorPrompt", () => {
   it("includes the Issue and PRD titles for orientation", () => {
     const prompt = build();
     expect(prompt).toContain(issue.title);
-    expect(prompt).toContain(prd.title);
+    expect(prompt).toContain(prdTitle);
   });
 });

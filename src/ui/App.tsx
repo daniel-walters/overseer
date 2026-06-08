@@ -55,13 +55,18 @@ export function App({ board, dispatcher }: AppProps) {
   const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
 
   useInput((input, key) => {
-    // The modal preview owns input while it is open: only confirm/cancel apply.
+    // The modal preview owns input while it is open: confirm, cancel, or quit.
     if (nav.confirming) {
       if (key.return || input === "y") {
         dispatcher?.dispatch(preview.frontier);
         dispatch({ type: "confirm" });
       } else if (key.escape) {
         dispatch({ type: "cancel" });
+      } else if (input === "q") {
+        // `q` quits everywhere else; keep that escape hatch from the modal too —
+        // cancel the preview (leaving the board untouched), then exit.
+        dispatch({ type: "cancel" });
+        exit();
       }
       return;
     }

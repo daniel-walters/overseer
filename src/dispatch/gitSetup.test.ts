@@ -39,6 +39,13 @@ class FakeGit implements GitSeam {
     }
     set.add(branch);
   });
+  /** Repos whose `checkoutBranch` should throw, simulating a git failure. */
+  readonly failCheckout = new Set<string>();
+  readonly checkoutBranch = vi.fn((repo: string) => {
+    if (this.failCheckout.has(repo)) {
+      throw new Error(`git checkout failed in ${repo}`);
+    }
+  });
 
   /** Register a repo as a valid git repo with the given existing branches. */
   addRepo(repo: string, branches: string[] = []): void {
@@ -60,6 +67,20 @@ describe("featureBranchName", () => {
     expect(featureBranchName("  Payment   Intent / v2  ")).toBe(
       "payment-intent-v2",
     );
+  });
+
+  it("falls back to a stable hashed slug for a name with no ASCII to slug", () => {
+    // An all-non-ASCII name slugs to "" with the naive rule, and `git branch ""`
+    // is rejected — so it must fall back to a valid, non-empty, stable name.
+    const branch = featureBranchName("決済システム");
+    expect(branch).not.toBe("");
+    expect(branch).toMatch(/^prd-[0-9a-f]+$/);
+    // Stable: the same name always yields the same branch.
+    expect(featureBranchName("決済システム")).toBe(branch);
+  });
+
+  it("gives distinct fallback slugs to distinct un-sluggable names", () => {
+    expect(featureBranchName("決済")).not.toBe(featureBranchName("認証"));
   });
 });
 
@@ -130,6 +151,45 @@ describe("setUpRepos", () => {
     expect(git.isGitRepo).toHaveBeenCalledTimes(1);
     expect(git.branchExists).toHaveBeenCalledTimes(1);
     expect(git.createBranch).toHaveBeenCalledTimes(1);
+  });
+
+  it("de-duplicates repos that differ only by path spelling (trailing slash)", () => {
+    const git = new FakeGit();
+    git.addRepo("/repos/api");
+
+    // The same repo written two ways must be set up once, not raced twice.
+    const result = setUpRepos(PRD, ["/repos/api", "/repos/api/"], git);
+
+    expect(git.createBranch).toHaveBeenCalledTimes(1);
+    // Both spellings resolve to the same (successful) result.
+    expect(result.get("/repos/api")).toEqual({ ok: true });
+    expect(result.get("/repos/api/")).toEqual({ ok: true });
+  });
+
+  it("checks out the feature branch so the agent's worktree branches from it", () => {
+    const git = new FakeGit();
+    git.addRepo("/repos/api", [BRANCH]); // branch already exists
+
+    const result = setUpRepos(PRD, ["/repos/api"], git);
+
+    expect(result.get("/repos/api")).toEqual({ ok: true });
+    // Even when creation is skipped (branch present), checkout still runs so the
+    // repo's HEAD is the feature branch before the agent spawns.
+    expect(git.checkoutBranch).toHaveBeenCalledWith("/repos/api", BRANCH);
+  });
+
+  it("surfaces a checkout failure as a failed result for that repo", () => {
+    const git = new FakeGit();
+    git.addRepo("/repos/api");
+    git.failCheckout.add("/repos/api");
+
+    const result = setUpRepos(PRD, ["/repos/api"], git);
+
+    const api = result.get("/repos/api");
+    expect(api?.ok).toBe(false);
+    if (api && !api.ok) {
+      expect(api.error).toMatch(/checkout failed/i);
+    }
   });
 
   it("does not attempt branch-ensure on a repo that fails validation", () => {

@@ -1,4 +1,5 @@
 import type { DispatchIssue, DispatchView } from "./reader.js";
+import { Status } from "./status.js";
 
 /**
  * How the frontier classifies a single Issue for dispatch.
@@ -20,8 +21,6 @@ export interface FrontierEntry {
   readonly reason?: string;
 }
 
-const READY_FOR_AGENT = "ready-for-agent";
-const DONE = "done";
 
 /**
  * Classify every Issue in a PRD's dispatch view into spawn / queued / blocked /
@@ -54,7 +53,7 @@ function findCyclicIssues(
 
     for (const next of byId.get(id)?.blockedBy ?? []) {
       const blocker = byId.get(next);
-      if (!blocker || blocker.status === DONE) continue; // dangling or cleared
+      if (!blocker || blocker.status === Status.DONE) continue; // dangling or cleared
 
       if (state.get(next) === VISITING) {
         // Found a back-edge: everything from `next` to the top of the stack
@@ -81,11 +80,11 @@ function classify(
   byId: ReadonlyMap<string, DispatchIssue>,
   onCycle: ReadonlySet<string>,
 ): FrontierEntry {
-  if (issue.status !== READY_FOR_AGENT) {
+  if (issue.status !== Status.READY_FOR_AGENT) {
     return {
       issue,
       classification: "skipped",
-      reason: `status is "${issue.status ?? "(none)"}", not ${READY_FOR_AGENT}`,
+      reason: `status is "${issue.status ?? "(none)"}", not ${Status.READY_FOR_AGENT}`,
     };
   }
 
@@ -114,7 +113,7 @@ function classify(
     };
   }
 
-  const pending = issue.blockedBy.filter((id) => byId.get(id)?.status !== DONE);
+  const pending = issue.blockedBy.filter((id) => byId.get(id)?.status !== Status.DONE);
   if (pending.length > 0) {
     return {
       issue,

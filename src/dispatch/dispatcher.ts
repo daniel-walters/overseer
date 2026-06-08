@@ -1,11 +1,10 @@
 import { basename, join } from "node:path";
 import { computeFrontier, type FrontierEntry } from "./frontier.js";
-import { readDispatchView, type DispatchIssue, type DispatchView } from "./reader.js";
+import { readDispatchView, type DispatchView } from "./reader.js";
 import { writeStatus } from "./statusWriter.js";
 import { runDispatch, type FailureRecord } from "./dispatch.js";
 import { featureBranchName, type GitSeam } from "./gitSetup.js";
 import { buildImplementorPrompt } from "./implementorPrompt.js";
-import type { IssueRecord, PrdRecord } from "./records.js";
 import type { Dispatcher } from "../ui/App.js";
 
 /**
@@ -66,46 +65,24 @@ export function createDispatcher(
     dispatch(frontier: readonly FrontierEntry[]): void {
       if (lastRead === undefined) return; // nothing was read ⇒ nothing to dispatch
       const { prdDir, view } = lastRead;
+      // Derive the feature branch once and thread it through both the branch
+      // setup (in runDispatch) and the prompt, so they can never disagree.
       const featureBranch = featureBranchName(basename(prdDir));
-      const prd = toPrdRecord(prdDir, view);
 
-      runDispatch(prdDir, frontier, {
+      runDispatch(featureBranch, frontier, {
         git: deps.git,
         writeStatus,
-        buildPrompt: (issue) =>
+        buildPrompt: (issue, repo) =>
           buildImplementorPrompt({
-            issue: toIssueRecord(issue),
-            prd,
-            // A spawn candidate always has a repo; fall back defensively.
-            repo: issue.repo ?? "",
+            issue,
+            prdTitle: view.prdTitle,
+            prdBody: view.prdBody,
+            repo,
             featureBranch,
           }),
         spawn: deps.spawn,
         logFailure: deps.logFailure,
       });
     },
-  };
-}
-
-/** Map the dispatch view's PRD into the prompt-builder's {@link PrdRecord}. */
-function toPrdRecord(prdDir: string, view: DispatchView): PrdRecord {
-  const id = basename(prdDir);
-  return { id, title: id, body: view.prdBody };
-}
-
-/**
- * Map a {@link DispatchIssue} into the prompt-builder's {@link IssueRecord}. The
- * dispatch view carries no display title (the board model does); the filename id
- * stands in, matching the record contract's documented filename-slug fallback.
- */
-function toIssueRecord(issue: DispatchIssue): IssueRecord {
-  return {
-    id: issue.id,
-    title: issue.id,
-    status: issue.status ?? "",
-    blockedBy: issue.blockedBy,
-    repo: issue.repo,
-    body: issue.body,
-    path: issue.path,
   };
 }

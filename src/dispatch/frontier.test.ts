@@ -16,9 +16,11 @@ const mixedPrd = fileURLToPath(
  */
 function view(issues: readonly Partial<DispatchIssue>[]): DispatchView {
   return {
+    prdTitle: "",
     prdBody: "",
     issues: issues.map((i, n) => ({
       id: i.id ?? `${String(n).padStart(3, "0")}-issue.md`,
+      title: i.title ?? i.id ?? "issue.md",
       path: i.path ?? `/root/prd/${i.id ?? "issue.md"}`,
       status: i.status,
       blockedBy: i.blockedBy ?? [],

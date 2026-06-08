@@ -1,13 +1,21 @@
-import type { IssueRecord, PrdRecord } from "./records.js";
+import type { DispatchIssue } from "./reader.js";
 
 /**
- * The inputs to a single implementor-prompt build: the Issue to implement, its
- * parent PRD, and the dispatch context (the target repo and the per-repo
- * feature branch the agent's worktree branches from).
+ * The inputs to a single implementor-prompt build: the Issue to implement (as
+ * the dispatch reader produced it), its parent PRD's display title and body, and
+ * the dispatch context (the target repo and the per-repo feature branch the
+ * agent's worktree branches from).
+ *
+ * `repo` is a required non-empty string: only spawn candidates reach prompt
+ * building, and the frontier has already skipped any Issue without a valid repo,
+ * so there is nothing to default here.
  */
 export interface ImplementorPromptInput {
-  readonly issue: IssueRecord;
-  readonly prd: PrdRecord;
+  readonly issue: DispatchIssue;
+  /** The parent PRD's display title. */
+  readonly prdTitle: string;
+  /** The parent PRD's markdown body. */
+  readonly prdBody: string;
   /** The code repository the agent works in (path or git URL). */
   readonly repo: string;
   /** The PRD feature branch the agent's worktree branches off. */
@@ -15,8 +23,8 @@ export interface ImplementorPromptInput {
 }
 
 /**
- * Slot-fill the single static implementor-prompt template from an Issue + PRD
- * record and dispatch context.
+ * Slot-fill the single static implementor-prompt template from a dispatch Issue,
+ * its parent PRD, and dispatch context.
  *
  * Deliberately a pure, deterministic function with no per-dispatch LLM
  * authoring: the same inputs always produce the same prompt, so an
@@ -26,7 +34,7 @@ export interface ImplementorPromptInput {
  * when finished.
  */
 export function buildImplementorPrompt(input: ImplementorPromptInput): string {
-  const { issue, prd, repo, featureBranch } = input;
+  const { issue, prdTitle, prdBody, repo, featureBranch } = input;
 
   return `You are an autonomous implementor agent dispatched by Overseer.
 
@@ -38,9 +46,9 @@ the review state as described below.
 
 ${issue.body}
 
-## Parent PRD: ${prd.title}
+## Parent PRD: ${prdTitle}
 
-${prd.body}
+${prdBody}
 
 ## Where the work happens
 

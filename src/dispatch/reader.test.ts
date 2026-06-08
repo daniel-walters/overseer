@@ -47,11 +47,21 @@ describe("readDispatchView", () => {
     ]);
   });
 
-  it("handles an Issue with no title frontmatter without crashing", () => {
+  it("reads the Issue title from frontmatter, falling back to the filename", () => {
     const view = readDispatchView(checkoutFlow);
 
-    const button = issueById(view.issues, "003-checkout-button.md");
-    expect(button.status).toBe("ready-for-agent");
+    expect(issueById(view.issues, "002-payment-intent.md").title).toBe(
+      "Payment intent",
+    );
+    // 003 has no title frontmatter ⇒ the filename stands in (no crash).
+    expect(issueById(view.issues, "003-checkout-button.md").title).toBe(
+      "003-checkout-button.md",
+    );
+  });
+
+  it("reads the PRD title from frontmatter", () => {
+    const view = readDispatchView(checkoutFlow);
+    expect(view.prdTitle).toBe("Checkout Flow");
   });
 
   it("captures the PRD body and each Issue's body and file path", () => {

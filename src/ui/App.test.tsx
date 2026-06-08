@@ -141,7 +141,7 @@ describe("App", () => {
 
 describe("App dispatch", () => {
   function di(id: string): DispatchIssue {
-    return { id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", body: "" };
+    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", body: "" };
   }
 
   /** A frontier with one spawn candidate and one skipped Issue. */
@@ -248,6 +248,23 @@ describe("App dispatch", () => {
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("AuthPRD");
     expect(frame).not.toContain("Dispatch ");
+  });
+
+  it("quits on q from the modal without dispatching", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, frames } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d"); // open the preview
+    await tick();
+    stdin.write("q"); // q quits everywhere, including the modal
+    await tick();
+    const framesAfterQuit = frames.length;
+
+    // No dispatch happened, and the app unmounted: further input → no new frame.
+    expect(dispatcher.dispatch).not.toHaveBeenCalled();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(frames.length).toBe(framesAfterQuit);
   });
 
   it("does nothing on d when no dispatcher is wired", async () => {

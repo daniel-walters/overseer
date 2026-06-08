@@ -8,6 +8,7 @@ import type { GitSeam } from "./gitSetup.js";
 function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
   return {
     id: overrides.id ?? "001-a.md",
+    title: overrides.title ?? (overrides.id ?? "001-a.md"),
     path: overrides.path ?? `/root/prd/${overrides.id ?? "001-a.md"}`,
     status: overrides.status ?? "ready-for-agent",
     blockedBy: overrides.blockedBy ?? [],
@@ -34,6 +35,7 @@ function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
     defaultBase: vi.fn(() => "origin/main"),
     branchExists: vi.fn(() => true),
     createBranch: vi.fn(),
+    checkoutBranch: vi.fn(),
     ...overrides,
   };
 }
@@ -62,13 +64,11 @@ function deps(
   };
 }
 
-const PRD_DIR = "/root/prd";
-
 describe("runDispatch", () => {
   it("flips each spawn candidate to in-progress, then spawns it with its built prompt and repo", () => {
     const d = deps();
     runDispatch(
-      PRD_DIR,
+      "prd",
       [
         entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" }),
         entry("spawn", { id: "002-b.md", path: "/root/prd/002-b.md", repo: "/repos/web" }),
@@ -89,7 +89,7 @@ describe("runDispatch", () => {
   it("flips a candidate's status before spawning it", () => {
     const order: string[] = [];
     runDispatch(
-      PRD_DIR,
+      "prd",
       [entry("spawn", { id: "001-a.md" })],
       deps({
         writeStatus: (_path, status) => order.push(`write:${status}`),
@@ -103,7 +103,7 @@ describe("runDispatch", () => {
   it("ensures each distinct repo's feature branch before spawning, once per repo", () => {
     const git = fakeGit({ branchExists: vi.fn(() => false) });
     runDispatch(
-      PRD_DIR,
+      "prd",
       [
         entry("spawn", { id: "001-a.md", repo: "/repos/api" }),
         entry("spawn", { id: "002-b.md", repo: "/repos/api" }),
@@ -121,7 +121,7 @@ describe("runDispatch", () => {
   it("ignores queued, blocked, and skipped entries entirely", () => {
     const d = deps();
     runDispatch(
-      PRD_DIR,
+      "prd",
       [
         entry("queued", { id: "001-q.md" }),
         entry("blocked", { id: "002-x.md" }),
@@ -138,7 +138,7 @@ describe("runDispatch", () => {
   it("acts only on the spawn candidates within a mixed frontier", () => {
     const d = deps();
     runDispatch(
-      PRD_DIR,
+      "prd",
       [
         entry("skipped", { id: "001-s.md" }),
         entry("spawn", { id: "002-go.md", path: "/root/prd/002-go.md", repo: "/repos/api" }),
@@ -153,7 +153,7 @@ describe("runDispatch", () => {
 
   it("does nothing for an empty frontier", () => {
     const d = deps();
-    runDispatch(PRD_DIR, [], d);
+    runDispatch("prd", [], d);
     expect(d.writes).toEqual([]);
     expect(d.spawns).toEqual([]);
     expect(d.failures).toEqual([]);
@@ -166,7 +166,7 @@ describe("runDispatch", () => {
       });
       const d = deps({ git });
       runDispatch(
-        PRD_DIR,
+        "prd",
         [
           entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
           entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/ok" }),
@@ -184,7 +184,7 @@ describe("runDispatch", () => {
     it("skips a spawn candidate with no repo at all without flipping it", () => {
       const d = deps();
       runDispatch(
-        PRD_DIR,
+        "prd",
         [entry("spawn", { id: "001-norepo.md", path: "/root/prd/001-norepo.md", repo: undefined })],
         d,
       );
@@ -202,7 +202,7 @@ describe("runDispatch", () => {
       });
       const d = deps({ git });
       runDispatch(
-        PRD_DIR,
+        "prd",
         [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
         d,
       );
@@ -220,7 +220,7 @@ describe("runDispatch", () => {
         },
       });
       runDispatch(
-        PRD_DIR,
+        "prd",
         [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
         d,
       );
@@ -239,7 +239,7 @@ describe("runDispatch", () => {
         },
       });
       runDispatch(
-        PRD_DIR,
+        "prd",
         [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
         d,
       );
@@ -257,7 +257,7 @@ describe("runDispatch", () => {
         },
       });
       runDispatch(
-        PRD_DIR,
+        "prd",
         [
           entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
           entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/ok" }),
@@ -293,7 +293,7 @@ describe("runDispatch", () => {
 
       expect(() =>
         runDispatch(
-          PRD_DIR,
+          "prd",
           [
             entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
             entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/ok" }),
@@ -325,7 +325,7 @@ describe("runDispatch", () => {
 
       expect(() =>
         runDispatch(
-          PRD_DIR,
+          "prd",
           [
             entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
             entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/ok" }),
@@ -351,7 +351,7 @@ describe("runDispatch", () => {
       },
     });
     runDispatch(
-      PRD_DIR,
+      "prd",
       [
         entry("spawn", { id: "001-gone.md", path: "/root/prd/001-gone.md", repo: "/repos/api" }),
         entry("spawn", { id: "002-ok.md", path: "/root/prd/002-ok.md", repo: "/repos/api" }),
