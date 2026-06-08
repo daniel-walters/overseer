@@ -6,7 +6,8 @@ import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
-import { spawnStub } from "./dispatch/spawnStub.js";
+import { realGitSeam } from "./dispatch/gitSetup.js";
+import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 
 /**
  * Thin wiring: load config → eager first `scanBoard` → render a {@link LiveApp}
@@ -26,9 +27,18 @@ function main(): void {
   }
 
   const initialBoard = scanBoard(root);
-  // The spawn tip is stubbed this iteration: dispatch flips Issues to
-  // in-progress (driving the live board) but launches no real agents yet.
-  const dispatcher = createDispatcher(root, spawnStub);
+  // The real spawn edge: confirming a dispatch validates each repo, ensures the
+  // PRD feature branch, flips Issues to in-progress (driving the live board),
+  // and launches a background `claude --bg` agent per spawn candidate.
+  const { spawn, logFailure } = createSpawnEdge({
+    exec: realExec,
+    logPath: defaultLogPath(),
+  });
+  const dispatcher = createDispatcher(root, {
+    git: realGitSeam,
+    spawn,
+    logFailure,
+  });
   render(
     <LiveApp
       root={root}

@@ -1,49 +1,144 @@
+import { basename } from "node:path";
 import type { FrontierEntry } from "./frontier.js";
 import type { DispatchIssue } from "./reader.js";
+import { setUpRepos, type GitSeam } from "./gitSetup.js";
+
+/** A spawn-failure record appended to the durable dispatch log. */
+export interface FailureRecord {
+  /** The Issue filename whose agent failed to launch. */
+  readonly issueId: string;
+  /** The target repo the agent would have worked in. */
+  readonly repo: string;
+  /** The error message from the failed spawn. */
+  readonly error: string;
+}
 
 /**
  * The I/O seams a dispatch run depends on, injected so the orchestration can be
- * tested without touching the filesystem or spawning real agents.
+ * tested without touching the filesystem, git, or spawning real agents.
  *
- * In production `writeStatus` is the status-writer and `spawn` is the real
- * spawn tip (validate repo, ensure branch, shell out to `claude --bg`). In this
- * tracer-bullet slice `spawn` is a stub injected from the UI — the keypress →
- * status-flip → live-board path is proven before any real agent runs.
+ * In production these are the real status-writer, git seam, prompt builder, the
+ * `claude --bg` spawn tip, and the failure-log appender. In tests they are
+ * recording fakes (mirroring the watcher's `createWatcher` seam).
  */
 export interface DispatchDeps {
+  /** Validate repos and ensure the per-repo PRD feature branch. */
+  readonly git: GitSeam;
   /** Rewrite an Issue file's `status` frontmatter, preserving the rest. */
   readonly writeStatus: (path: string, status: string) => void;
-  /** Start an implementor for one spawn-candidate Issue. */
-  readonly spawn: (issue: DispatchIssue) => void;
+  /** Build the implementor prompt for one spawn-candidate Issue. */
+  readonly buildPrompt: (issue: DispatchIssue) => string;
+  /** Launch an implementor agent in `repo` with the built `prompt`. Throws on failure. */
+  readonly spawn: (repo: string, prompt: string) => void;
+  /** Append a spawn-failure record to the durable dispatch log. */
+  readonly logFailure: (record: FailureRecord) => void;
 }
 
+const READY_FOR_AGENT = "ready-for-agent";
 const IN_PROGRESS = "in-progress";
 
 /**
- * Run a dispatch over an already-computed frontier: for each `spawn` candidate,
- * in order, flip the Issue `ready-for-agent → in-progress` *before* spawning it,
- * then spawn it. Non-spawn entries (queued/blocked/skipped) are left untouched.
+ * Run a dispatch over an already-computed frontier. The full spawn edge:
+ *
+ * 1. Validate every distinct spawn-candidate `repo` and ensure the PRD feature
+ *    branch in each — once per repo, before any agent spawns (so same-repo
+ *    Issues don't race on branch creation).
+ * 2. For each `spawn` candidate, in order: skip (never flip, never log) any
+ *    whose repo is missing/invalid or whose branch-ensure failed — that is a
+ *    pre-spawn skip surfaced by the modal preview, not a launch failure.
+ *    Otherwise flip the Issue `ready-for-agent → in-progress` *before* spawning,
+ *    build its prompt, and spawn `claude --bg` in its repo.
+ * 3. If a spawn throws *after* the flip, roll the Issue back to
+ *    `ready-for-agent` (so the board never shows in-progress work with no agent)
+ *    and append a record to the durable failure log.
  *
  * Flipping before spawning is what makes re-dispatch and second instances safe:
  * the status itself is the lock, so by the time the next candidate is considered
- * this one is already off the `ready-for-agent` frontier.
- *
- * The flip is the spawn's precondition: if it fails — the file vanished from the
- * watched root between preview and confirm, say — that candidate is skipped (no
- * spawn) and the wave continues. One unwritable Issue never aborts the rest, and
- * a never-flipped Issue is never handed to an agent.
+ * this one is already off the `ready-for-agent` frontier. A single failed
+ * candidate never aborts the wave.
  */
 export function runDispatch(
+  prdDir: string,
   frontier: readonly FrontierEntry[],
   deps: DispatchDeps,
 ): void {
-  for (const { issue, classification } of frontier) {
-    if (classification !== "spawn") continue;
-    try {
-      deps.writeStatus(issue.path, IN_PROGRESS);
-    } catch {
-      continue; // flip failed ⇒ precondition unmet ⇒ do not spawn
+  const candidates = frontier
+    .filter((e) => e.classification === "spawn")
+    .map((e) => e.issue);
+
+  // A spawn candidate always carries a repo (the frontier skips missing/invalid
+  // ones), but guard defensively: an undefined repo is treated as a skip below.
+  const repos = candidates
+    .map((issue) => issue.repo)
+    .filter((repo): repo is string => repo !== undefined);
+
+  const setup = setUpRepos(basename(prdDir), repos, deps.git);
+
+  for (const issue of candidates) {
+    if (issue.repo === undefined || setup.get(issue.repo)?.ok !== true) {
+      continue; // missing/invalid repo or failed branch setup: skip-and-report
     }
-    deps.spawn(issue);
+    spawnOne(issue, issue.repo, deps);
   }
+}
+
+/**
+ * Flip one candidate to `in-progress` and spawn its agent. A flip failure (the
+ * file vanished from the watched root) skips the spawn with no rollback or log —
+ * nothing was started. A spawn failure *after* the flip rolls the status back
+ * and records the failure.
+ *
+ * The rollback and the log append are themselves best-effort: this whole edge
+ * runs synchronously inside the Ink input handler, which has no try/catch around
+ * it, so a throw here would crash the board. The rollback write can ENOENT (the
+ * Issue file deleted in the race window after the flip) and the log append can
+ * fail on an unwritable state dir — neither is allowed to escape or to abort the
+ * rest of the wave.
+ */
+function spawnOne(
+  issue: DispatchIssue,
+  repo: string,
+  deps: DispatchDeps,
+): void {
+  try {
+    deps.writeStatus(issue.path, IN_PROGRESS);
+  } catch {
+    return; // flip failed: nothing was started, so nothing to roll back or log
+  }
+
+  try {
+    deps.spawn(repo, deps.buildPrompt(issue));
+  } catch (err) {
+    rollBack(issue, deps);
+    logFailure(issue, repo, err, deps);
+  }
+}
+
+/** Best-effort rollback of the flip; a failure here must not escape the wave. */
+function rollBack(issue: DispatchIssue, deps: DispatchDeps): void {
+  try {
+    deps.writeStatus(issue.path, READY_FOR_AGENT);
+  } catch {
+    // The Issue file vanished from the watched root after the flip. Nothing left
+    // to roll back; the board will reconcile on the next scan.
+  }
+}
+
+/** Best-effort failure-log append; a failure here must not escape the wave. */
+function logFailure(
+  issue: DispatchIssue,
+  repo: string,
+  err: unknown,
+  deps: DispatchDeps,
+): void {
+  try {
+    deps.logFailure({ issueId: issue.id, repo, error: errorMessage(err) });
+  } catch {
+    // The durable log is unwritable (e.g. an unusable state dir). Losing one
+    // failure record must not crash the board or stop later candidates.
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
