@@ -13,7 +13,7 @@ import { existsSync } from "node:fs";
  * tested without invoking real git. The default seam shells out to `git`.
  */
 
-/** The branch base every PRD feature branch is created from. */
+/** The base ref used when a repo's default branch can't be resolved. */
 const ORIGIN_MAIN = "origin/main";
 
 /**
@@ -25,6 +25,13 @@ const ORIGIN_MAIN = "origin/main";
 export interface GitSeam {
   /** Whether `repo` exists on disk and is a real git repository. */
   isGitRepo(repo: string): boolean;
+  /**
+   * The ref a new feature branch should be created from in `repo` — the repo's
+   * own default branch (e.g. `origin/master`), falling back to `origin/main`.
+   * Resolved per repo rather than assumed so a repo on `master` or with a
+   * non-standard default is still dispatchable.
+   */
+  defaultBase(repo: string): string;
   /** Whether a local branch named `branch` already exists in `repo`. */
   branchExists(repo: string, branch: string): boolean;
   /** Create `branch` in `repo` from `base` (e.g. `origin/main`). */
@@ -52,8 +59,8 @@ export function featureBranchName(prdDir: string): string {
 /**
  * Validate and prepare every distinct repo touched by a dispatch. For each
  * unique `repo` (in first-seen order), validate it is a local git repo and, if
- * so, ensure the PRD feature branch exists — creating it from `origin/main`
- * when absent, skipping creation when already present (idempotent).
+ * so, ensure the PRD feature branch exists — creating it from the repo's
+ * default base when absent, skipping creation when already present (idempotent).
  *
  * De-duplicates by repo so branch-ensure runs once per repo even when several
  * frontier Issues share it: the returned map is keyed by repo, and the caller
@@ -87,7 +94,7 @@ function setUpRepo(
 
   try {
     if (!git.branchExists(repo, branch)) {
-      git.createBranch(repo, branch, ORIGIN_MAIN);
+      git.createBranch(repo, branch, git.defaultBase(repo));
     }
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
@@ -116,6 +123,23 @@ export const realGitSeam: GitSeam = {
     } catch {
       return false;
     }
+  },
+
+  defaultBase(repo: string): string {
+    // `origin/HEAD` points at the remote's default branch, e.g.
+    // `refs/remotes/origin/master`. Strip the prefix to get `origin/master`.
+    try {
+      const ref = execFileSync(
+        "git",
+        ["-C", repo, "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"],
+        { encoding: "utf8" },
+      ).trim();
+      const base = ref.replace(/^refs\/remotes\//, "");
+      if (base) return base;
+    } catch {
+      // origin/HEAD not set (no remote, or never fetched) — fall through.
+    }
+    return ORIGIN_MAIN;
   },
 
   branchExists(repo: string, branch: string): boolean {

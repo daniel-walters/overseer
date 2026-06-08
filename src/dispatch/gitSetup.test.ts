@@ -17,8 +17,13 @@ class FakeGit implements GitSeam {
   readonly branches = new Map<string, Set<string>>();
   /** Repos whose `createBranch` should throw, simulating a git failure. */
   readonly failCreate = new Set<string>();
+  /** `repo` → its resolved default base ref; absent ⇒ falls back to origin/main. */
+  readonly bases = new Map<string, string>();
 
   readonly isGitRepo = vi.fn((repo: string) => this.validRepos.has(repo));
+  readonly defaultBase = vi.fn(
+    (repo: string) => this.bases.get(repo) ?? "origin/main",
+  );
   readonly branchExists = vi.fn(
     (repo: string, branch: string) =>
       this.branches.get(repo)?.has(branch) ?? false,
@@ -77,9 +82,9 @@ describe("setUpRepos", () => {
     }
   });
 
-  it("creates the feature branch from origin/main when it is absent", () => {
+  it("creates the feature branch from the repo's default base when absent", () => {
     const git = new FakeGit();
-    git.addRepo("/repos/api"); // valid repo, no branches yet
+    git.addRepo("/repos/api"); // valid repo, no branches yet; default base ⇒ origin/main
 
     const result = setUpRepos(PRD, ["/repos/api"], git);
 
@@ -88,6 +93,21 @@ describe("setUpRepos", () => {
       "/repos/api",
       BRANCH,
       "origin/main",
+    );
+  });
+
+  it("creates from a non-main default base (e.g. a repo on master)", () => {
+    const git = new FakeGit();
+    git.addRepo("/repos/legacy");
+    git.bases.set("/repos/legacy", "origin/master");
+
+    const result = setUpRepos(PRD, ["/repos/legacy"], git);
+
+    expect(result.get("/repos/legacy")).toEqual({ ok: true });
+    expect(git.createBranch).toHaveBeenCalledWith(
+      "/repos/legacy",
+      BRANCH,
+      "origin/master",
     );
   });
 
