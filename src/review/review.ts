@@ -1,9 +1,5 @@
-import type { DispatchIssue } from "../dispatch/reader.js";
-import {
-  rollBackStatus,
-  recordSpawnFailure,
-  type FailureRecord,
-} from "../dispatch/failureLog.js";
+import { hasValue, type DispatchIssue } from "../dispatch/reader.js";
+import { spawnWithFlip, type FailureRecord } from "../dispatch/failureLog.js";
 import { Status } from "../dispatch/status.js";
 
 /**
@@ -49,21 +45,17 @@ export interface ReviewDeps {
  */
 export function runReview(issue: DispatchIssue, deps: ReviewDeps): void {
   const repo = issue.repo;
-  if (repo === undefined || repo.trim() === "") return;
+  if (!hasValue(repo)) return;
 
-  try {
-    deps.writeStatus(issue.path, Status.IN_REVIEW);
-  } catch {
-    return; // flip failed: nothing was started, so nothing to roll back or log
-  }
-
-  try {
-    deps.spawn(repo, deps.buildPrompt(issue));
-  } catch (err) {
-    // Roll the flip back so the board never shows an in-review Issue with no
-    // reviewer, and record the failure — both best-effort, sharing the dispatch
-    // edge's helpers so the rollback contract and log schema can't drift.
-    rollBackStatus(deps.writeStatus, issue.path, Status.READY_FOR_REVIEW);
-    recordSpawnFailure(deps.logFailure, "reviewer", issue.id, repo, err);
-  }
+  spawnWithFlip({
+    edge: "reviewer",
+    issue,
+    repo,
+    awaiting: Status.READY_FOR_REVIEW,
+    active: Status.IN_REVIEW,
+    writeStatus: deps.writeStatus,
+    buildPrompt: () => deps.buildPrompt(issue),
+    spawn: deps.spawn,
+    logFailure: deps.logFailure,
+  });
 }

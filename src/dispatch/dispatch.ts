@@ -2,11 +2,7 @@ import type { FrontierEntry } from "./frontier.js";
 import type { DispatchIssue } from "./reader.js";
 import { setUpRepos, type GitSeam } from "./gitSetup.js";
 import { Status } from "./status.js";
-import {
-  rollBackStatus,
-  recordSpawnFailure,
-  type FailureRecord,
-} from "./failureLog.js";
+import { spawnWithFlip, type FailureRecord } from "./failureLog.js";
 
 // Re-exported so existing importers (spawn.ts, dispatcher.ts, the review edge)
 // keep their `from "./dispatch.js"` import; the type now lives with the shared
@@ -89,36 +85,26 @@ export function runDispatch(
 }
 
 /**
- * Flip one candidate to `in-progress` and spawn its agent. A flip failure (the
- * file vanished from the watched root) skips the spawn with no rollback or log —
- * nothing was started. A spawn failure *after* the flip rolls the status back
- * and records the failure.
- *
- * The rollback and the log append are themselves best-effort: this whole edge
- * runs synchronously inside the Ink input handler, which has no try/catch around
- * it, so a throw here would crash the board. The rollback write can ENOENT (the
- * Issue file deleted in the race window after the flip) and the log append can
- * fail on an unwritable state dir — neither is allowed to escape or to abort the
- * rest of the wave.
+ * Flip one candidate `ready-for-agent → in-progress` and spawn its implementor,
+ * via the shared {@link spawnWithFlip} orchestration (flip-before-spawn with
+ * rollback + log on a post-flip failure). The implementor and reviewer edges
+ * share that structure so the lock-and-rollback contract can't drift between
+ * them.
  */
 function spawnOne(
   issue: DispatchIssue,
   repo: string,
   deps: DispatchDeps,
 ): void {
-  try {
-    deps.writeStatus(issue.path, Status.IN_PROGRESS);
-  } catch {
-    return; // flip failed: nothing was started, so nothing to roll back or log
-  }
-
-  try {
-    deps.spawn(repo, deps.buildPrompt(issue, repo));
-  } catch (err) {
-    // Roll the flip back so the board never shows in-progress work with no
-    // agent, and record the failure — both best-effort, neither may escape the
-    // wave (this runs inside the Ink input handler with no try/catch around it).
-    rollBackStatus(deps.writeStatus, issue.path, Status.READY_FOR_AGENT);
-    recordSpawnFailure(deps.logFailure, "implementor", issue.id, repo, err);
-  }
+  spawnWithFlip({
+    edge: "implementor",
+    issue,
+    repo,
+    awaiting: Status.READY_FOR_AGENT,
+    active: Status.IN_PROGRESS,
+    writeStatus: deps.writeStatus,
+    buildPrompt: () => deps.buildPrompt(issue, repo),
+    spawn: deps.spawn,
+    logFailure: deps.logFailure,
+  });
 }

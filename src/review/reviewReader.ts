@@ -1,4 +1,8 @@
-import { readDispatchView, type DispatchIssue } from "../dispatch/reader.js";
+import {
+  readDispatchIssue,
+  readPrdMeta,
+  type DispatchIssue,
+} from "../dispatch/reader.js";
 import type { ReviewEligibility } from "./eligibility.js";
 
 /**
@@ -47,7 +51,10 @@ export interface ReviewTarget {
 /**
  * Resolve one Issue in a PRD directory into a {@link ReviewTarget}, reusing the
  * dispatch reader so the review and dispatch edges parse Issue frontmatter
- * identically (status, repo, worktree, branch, deviation, bodies).
+ * identically (status, repo, worktree, branch, deviation, bodies). Review acts
+ * on one selected Issue, so this reads only that Issue file plus the PRD's
+ * `prd.md` — not the whole directory — avoiding an N+1 parse of every sibling on
+ * each `r` press.
  *
  * Total, like the dispatcher's `readFrontier`: the root is filesystem-watched
  * and changes under the TUI, so a `r` press can race a deletion. A vanished PRD
@@ -58,15 +65,12 @@ export function readReviewTarget(
   prdDir: string,
   issueId: string,
 ): ReviewTarget | undefined {
-  let view;
   try {
-    view = readDispatchView(prdDir);
+    const { prdTitle, prdBody } = readPrdMeta(prdDir);
+    const issue = readDispatchIssue(prdDir, issueId);
+    return { issue, prdTitle, prdBody };
   } catch {
-    return undefined; // PRD dir/files vanished from the watched root
+    // The PRD dir, its prd.md, or the Issue file vanished from the watched root.
+    return undefined;
   }
-
-  const issue = view.issues.find((i) => i.id === issueId);
-  if (!issue) return undefined;
-
-  return { issue, prdTitle: view.prdTitle, prdBody: view.prdBody };
 }

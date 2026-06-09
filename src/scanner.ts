@@ -1,13 +1,14 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import matter from "gray-matter";
-import type {
-  Board,
-  PRD,
-  Issue,
-  Lane,
-  ReadyFor,
-  HumanReviewReason,
+import {
+  HUMAN_REVIEW_REASONS,
+  type Board,
+  type PRD,
+  type Issue,
+  type Lane,
+  type ReadyFor,
+  type HumanReviewReason,
 } from "./model.js";
 
 /**
@@ -45,7 +46,7 @@ function scanPrd(dir: string, dirName: string): PRD | null {
     return null; // no prd.md ⇒ not a PRD
   }
 
-  const { data } = matter(raw);
+  const { data } = safeMatter(raw);
   const title = typeof data.title === "string" ? data.title : dirName;
   const { lane, readyFor } = placeStatus(data.status);
   const issues = scanIssues(dir);
@@ -71,7 +72,7 @@ function scanIssues(dir: string): Issue[] {
 
 /** Parse one Issue file. Identity is the filename; title falls back to the slug. */
 function scanIssue(path: string, fileName: string): Issue {
-  const { data } = matter(readFileSync(path, "utf8"));
+  const { data } = safeMatter(readFileSync(path, "utf8"));
   const title =
     typeof data.title === "string" ? data.title : slugFromFileName(fileName);
   const { lane, readyFor } = placeStatus(data.status);
@@ -97,13 +98,22 @@ function scanIssue(path: string, fileName: string): Issue {
  * no reason, the same fail-safe the lane mapping uses for an unknown status.
  */
 function parseHumanReviewReason(value: unknown): HumanReviewReason | undefined {
-  switch (value) {
-    case "deviation":
-    case "non-convergence":
-    case "conflict":
-      return value;
-    default:
-      return undefined;
+  return HUMAN_REVIEW_REASONS.includes(value as HumanReviewReason)
+    ? (value as HumanReviewReason)
+    : undefined;
+}
+
+/**
+ * Parse frontmatter, treating an unparseable file as having none — a single
+ * malformed Issue or PRD (e.g. an agent-written `deviation:` whose value
+ * contains an unquoted `": "`) degrades to the Unsorted lane instead of throwing
+ * out of {@link scanBoard} and crashing the live board on the next watch event.
+ */
+function safeMatter(raw: string): { data: { [key: string]: unknown } } {
+  try {
+    return { data: matter(raw).data };
+  } catch {
+    return { data: {} };
   }
 }
 

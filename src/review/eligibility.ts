@@ -1,4 +1,4 @@
-import type { DispatchIssue } from "../dispatch/reader.js";
+import { hasValue, type DispatchIssue } from "../dispatch/reader.js";
 import { Status } from "../dispatch/status.js";
 
 /**
@@ -44,15 +44,15 @@ export function classifyReviewability(issue: DispatchIssue): ReviewEligibility {
     };
   }
 
-  if (issue.worktree === undefined || issue.worktree.trim() === "") {
+  if (!hasValue(issue.worktree)) {
     return { reviewable: false, reason: "no worktree recorded on the Issue" };
   }
 
-  if (issue.branch === undefined || issue.branch.trim() === "") {
+  if (!hasValue(issue.branch)) {
     return { reviewable: false, reason: "no branch recorded on the Issue" };
   }
 
-  if (issue.repo === undefined || issue.repo.trim() === "") {
+  if (!hasValue(issue.repo)) {
     return { reviewable: false, reason: "no repo recorded on the Issue" };
   }
 

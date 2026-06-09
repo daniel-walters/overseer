@@ -80,6 +80,8 @@ worktree so that other agents touching the same repo do not collide with you.
    - Record a \`deviation:\` field with a short reason ONLY IF you strayed from
      the Issue's planned approach to get the work done. If you followed the
      plan, omit the field entirely — its mere presence forces a human review.
+     Quote the value (\`deviation: "..."\`) so a colon or other punctuation in
+     your reason can't corrupt the Issue's frontmatter.
 
 Leave the Issue at \`ready-for-review\`; a later reviewer step takes it from
 there.`;

@@ -73,6 +73,16 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toMatch(/never .*main|not .*main|never merge .*main/);
   });
 
+  it("names the repo and runs the merge there with git -C, not from the worktree", () => {
+    const prompt = build();
+    expect(prompt).toContain(issue.repo!);
+    // The merge must be anchored to the repo (git -C <repo>), not run from
+    // inside the worktree, so its direction is unambiguous.
+    expect(prompt).toContain(`git -C ${issue.repo} checkout ${context.featureBranch}`);
+    expect(prompt).toContain(`git -C ${issue.repo} merge --no-ff ${issue.branch}`);
+    expect(prompt).toContain(`git -C ${issue.repo} merge --abort`);
+  });
+
   it("routes a clean converged pass with no deviation to merge then done", () => {
     const prompt = build();
     expect(prompt).toContain("done");

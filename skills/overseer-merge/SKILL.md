@@ -29,7 +29,15 @@ If `worktree` or `branch` is missing, stop and tell the user — there is nothin
 
 ### Derive the PRD feature branch
 
-The merge target is the **PRD feature branch** (never `main`). Overseer derives it deterministically from the **PRD directory's basename** (the folder the Issue lives in): lowercase it, replace every run of non-`[a-z0-9]` characters with a single `-`, and trim leading/trailing `-`. For example a PRD folder `Review Flow` → `review-flow`. Use exactly this name — it is the same branch the implementor's worktree was created from and the same one the auto path merges into.
+The merge target is the **PRD feature branch** (never `main`). Overseer derives it deterministically from the **PRD directory's basename** (the folder the Issue lives in): lowercase it, replace every run of non-`[a-z0-9]` characters with a single `-`, and trim leading/trailing `-`. For example a PRD folder `Review Flow` → `review-flow`.
+
+If that slug comes out **empty** — an all-punctuation or all-non-ASCII folder name, e.g. a CJK feature name — Overseer falls back to `prd-<hex>`, where `<hex>` is a short stable hash of the original name. You **must** apply the same fallback, or you'll target a different (empty/invalid) branch than the one the implementor's worktree was created from and the auto path merges into. Derive the name with this exact rule (it mirrors Overseer's `featureBranchName`):
+
+```bash
+node -e 'const n=process.argv[1]; const s=n.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,""); let h=0; for(const c of n) h=(h*31+c.codePointAt(0))>>>0; console.log(s||("prd-"+h.toString(16)))' "<PRD-folder-basename>"
+```
+
+Use exactly the name it prints — it is the same branch the implementor's worktree was created from and the same one the auto path merges into.
 
 ## Steps
 

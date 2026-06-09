@@ -1,4 +1,20 @@
 import type { DispatchIssue } from "../dispatch/reader.js";
+import {
+  HUMAN_REVIEW_REASONS,
+  type HumanReviewReason,
+} from "../model.js";
+
+/**
+ * One-line guidance per escalation reason, keyed by the single-sourced
+ * {@link HumanReviewReason} vocabulary so the prompt's reason tokens can never
+ * drift from what the scanner accepts. A new reason is a compile error here
+ * until it is given guidance.
+ */
+const REASON_GUIDANCE: Record<HumanReviewReason, string> = {
+  deviation: "a deviation was recorded",
+  "non-convergence": "the loop did not converge in 3 passes",
+  conflict: "the merge hit a conflict",
+};
 
 /**
  * The inputs to a single reviewer-prompt build: the Issue to review (as the
@@ -45,6 +61,10 @@ export interface ReviewerPromptInput {
 export function buildReviewerPrompt(input: ReviewerPromptInput): string {
   const { issue, prdTitle, prdBody, featureBranch } = input;
 
+  const reasonBullets = HUMAN_REVIEW_REASONS.map(
+    (reason) => `  - \`human_review_reason: ${reason}\` — ${REASON_GUIDANCE[reason]}`,
+  ).join("\n");
+
   const deviationNote =
     issue.deviation === undefined
       ? `No deviation was recorded by the implementor, so the clean auto-merge path below is available if the review converges cleanly.`
@@ -75,6 +95,7 @@ ${prdBody}
 The implementor recorded its handoff on the Issue. Check out and review exactly
 these — never guess or rederive them:
 
+- Repository (run every git command here, with \`git -C ${issue.repo}\`): ${issue.repo}
 - Worktree to review: ${issue.worktree}
 - Branch to merge:    ${issue.branch}
 - PRD feature branch: ${featureBranch}
@@ -104,16 +125,21 @@ Take exactly one of two exits:
 - CLEAN EXIT — the loop converged (a pass reported zero findings) AND no
   deviation was recorded. Merge the worktree branch (${issue.branch}) into the
   PRD feature branch (${featureBranch}), then set \`status: done\` on the Issue.
+  Run the merge in the repository itself, NOT from inside the worktree (whose
+  HEAD is ${issue.branch}), so the merge direction is unambiguous:
+
+      git -C ${issue.repo} checkout ${featureBranch}
+      git -C ${issue.repo} merge --no-ff ${issue.branch}
+
   Merge ONLY into the feature branch; never merge into \`main\`. If the merge
-  hits a conflict, do NOT resolve it — abort the merge and take the human-review
-  exit instead (a sibling worktree moved the branch; a human reconciles it).
+  hits a conflict, do NOT resolve it — run \`git -C ${issue.repo} merge --abort\`
+  and take the human-review exit instead (a sibling worktree moved the branch; a
+  human reconciles it).
 
 - HUMAN-REVIEW EXIT — any of: a deviation was recorded, the loop did not
   converge within 3 passes, or the merge hit a conflict. Do NOT merge. Set
   \`status: human-review\` on the Issue AND record \`human_review_reason\` so a
   human knows what attention it needs before opening it. Use exactly one of:
-  - \`human_review_reason: deviation\`       — a deviation was recorded
-  - \`human_review_reason: non-convergence\` — the loop did not converge in 3 passes
-  - \`human_review_reason: conflict\`         — the merge hit a conflict
+${reasonBullets}
   Then stop; a human takes it from there.`;
 }
