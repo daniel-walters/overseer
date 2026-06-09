@@ -115,6 +115,22 @@ describe("scanBoard Issues", () => {
     expect(agent.readyFor).toBe("agent");
   });
 
+  it("maps a ready-for-review Issue to its own lane, never folding it into ready", () => {
+    const issue = issueById(authIssues(), "008-review-ready.md");
+
+    expect(issue.lane).toBe("ready-for-review");
+    // The shared `ready-for-` prefix must NOT fold it into the ready column.
+    expect(issue.lane).not.toBe("ready");
+    expect(issue.readyFor).toBeUndefined();
+  });
+
+  it("maps a human-review Issue to its own lane", () => {
+    const issue = issueById(authIssues(), "009-needs-human.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.readyFor).toBeUndefined();
+  });
+
   it("falls an Issue with an unrecognized status to the unsorted lane", () => {
     const issue = issueById(authIssues(), "005-mystery.md");
 

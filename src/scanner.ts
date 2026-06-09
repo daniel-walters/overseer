@@ -91,7 +91,9 @@ function placeStatus(status: unknown): { lane: Lane; readyFor?: ReadyFor } {
   switch (status) {
     case "backlog":
     case "in-progress":
+    case "ready-for-review":
     case "in-review":
+    case "human-review":
     case "done":
       return { lane: status };
     case "ready-for-human":

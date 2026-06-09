@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { render } from "ink-testing-library";
+import { renderForTest as render } from "./renderForTest.js";
 import { App } from "./App.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render } from "ink-testing-library";
+import { renderForTest as render } from "./renderForTest.js";
 import { IssueBoard } from "./IssueBoard.js";
 import type { PRD } from "../model.js";
 
@@ -12,7 +12,9 @@ const HEADINGS = [
   "Backlog",
   "Ready",
   "In Progress",
+  "Ready for Review",
   "In Review",
+  "Human Review",
   "Done",
 ];
 

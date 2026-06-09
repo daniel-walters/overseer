@@ -4,25 +4,35 @@
  * scanner from a filesystem path; consumed by the UI.
  *
  * Domain vocabulary follows CONTEXT.md: a PRD is a feature, an Issue is a unit
- * of work belonging to one PRD, and the five statuses drive the kanban columns.
+ * of work belonging to one PRD, and the authored statuses drive the kanban
+ * columns.
  */
 
-/** The five canonical columns, left to right, that an authored status maps to. */
-export type Column = "backlog" | "ready" | "in-progress" | "in-review" | "done";
+/** The canonical columns, left to right, that an authored status maps to. */
+export type Column =
+  | "backlog"
+  | "ready"
+  | "in-progress"
+  | "ready-for-review"
+  | "in-review"
+  | "human-review"
+  | "done";
 
 /** Where a card lands. Missing/unknown authored status falls to "unsorted". */
 export type Lane = Column | "unsorted";
 
 /**
  * The lanes in render order, left to right: Unsorted first (so missing/unknown
- * status is never lost), then the five fixed columns.
+ * status is never lost), then the seven fixed columns.
  */
 export const LANES: readonly Lane[] = [
   "unsorted",
   "backlog",
   "ready",
   "in-progress",
+  "ready-for-review",
   "in-review",
+  "human-review",
   "done",
 ] as const;
 
@@ -32,7 +42,9 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   backlog: "Backlog",
   ready: "Ready",
   "in-progress": "In Progress",
+  "ready-for-review": "Ready for Review",
   "in-review": "In Review",
+  "human-review": "Human Review",
   done: "Done",
 };
 

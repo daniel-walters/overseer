@@ -12,7 +12,7 @@ interface IssueBoardProps {
   selectedIndex: number;
 }
 
-/** The Issue-level kanban: one PRD's Issues across Unsorted + the five columns. */
+/** The Issue-level kanban: one PRD's Issues across Unsorted + the seven columns. */
 export function IssueBoard({ prd, selectedIndex }: IssueBoardProps) {
   const byLane = groupByLane(prd.issues);
   const selectedId = prd.issues[selectedIndex]?.id;
