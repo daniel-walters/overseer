@@ -9,6 +9,9 @@ export interface LiveAppProps extends UseLiveBoardOptions {
   readonly reviewer?: Reviewer;
 }
 
+// `reactor` rides in via UseLiveBoardOptions, consumed by useLiveBoard rather
+// than App, so it is not re-declared here.
+
 /**
  * The live root: feed {@link App} a board that re-scans on every debounced
  * filesystem change. App owns UI state (selection, zoom, the dispatch/review

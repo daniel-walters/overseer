@@ -10,6 +10,7 @@ import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
+import { createReactor } from "./reactor/reactor.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 import { runInit } from "./init/runInit.js";
@@ -63,6 +64,11 @@ function runBoard(): void {
   // just another background agent — flipping ready-for-review → in-review and
   // launching the reviewer in the Issue's repo.
   const reviewer = createReviewer(root, { spawn, logFailure });
+  // The Reactor reuses the very same validated git/spawn/log machinery, so its
+  // automated dispatches behave identically to a manual `d`. The live loop
+  // reconciles it after each board rebuild, closing the re-dispatch loop: a
+  // completed Issue unblocks its siblings and they spawn with no second keypress.
+  const reactor = createReactor(root, { git: realGitSeam, spawn, logFailure });
   render(
     <LiveApp
       root={root}
@@ -71,6 +77,7 @@ function runBoard(): void {
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}
+      reactor={reactor}
     />,
   );
 }

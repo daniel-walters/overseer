@@ -26,7 +26,7 @@ describe("enumeratePrdDirs", () => {
     dir("alpha", true);
     dir("beta", true);
 
-    expect(enumeratePrdDirs(root).sort()).toEqual([
+    expect([...enumeratePrdDirs(root)].sort()).toEqual([
       join(root, "alpha"),
       join(root, "beta"),
     ]);

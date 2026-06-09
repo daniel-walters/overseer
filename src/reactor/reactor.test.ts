@@ -176,22 +176,24 @@ describe("createReactor", () => {
       "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
     });
 
-    const deps = recordingDeps();
-    const reactor = createReactor(root, deps);
-
+    const spawns: { repo: string; prompt: string }[] = [];
+    let reactor: ReturnType<typeof createReactor>;
     let reentrantSpawns = -1;
-    // Re-enter reconcile from inside a spawn; the inner call must be a no-op.
-    deps.spawn = (repo, prompt) => {
-      deps.spawns.push({ repo, prompt });
-      reactor.reconcile(); // re-entrant
-      reentrantSpawns = deps.spawns.length;
-    };
+    const deps = recordingDeps({
+      // Re-enter reconcile from inside a spawn; the inner call must be a no-op.
+      spawn: (repo, prompt) => {
+        spawns.push({ repo, prompt });
+        reactor.reconcile(); // re-entrant
+        reentrantSpawns = spawns.length;
+      },
+    });
+    reactor = createReactor(root, deps);
 
     reactor.reconcile();
 
     // The inner reconcile spawned nothing extra (guard held).
     expect(reentrantSpawns).toBe(1);
-    expect(deps.spawns).toHaveLength(1);
+    expect(spawns).toHaveLength(1);
   });
 
   it("releases the re-entrancy guard so a later reconcile runs normally", () => {
