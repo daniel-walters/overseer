@@ -365,4 +365,229 @@ describe("createReactor", () => {
     expect(prompt).toContain("Body of alpha."); // PRD body
     expect(prompt).toContain("001-go.md"); // the Issue file
   });
+
+  // A ready-for-review Issue, as the implementor leaves it: repo to launch the
+  // reviewer in, plus the recorded worktree/branch the reviewer reads.
+  const reviewable = (repo = "/repos/alpha"): string =>
+    fm({
+      status: "ready-for-review",
+      repo,
+      worktree: "/wt/issue",
+      branch: "issue-branch",
+    });
+
+  it("flips and spawns a reviewer for a ready-for-review Issue with no `r` press", () => {
+    writePrd(root, "alpha", { "001-review.md": reviewable() });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    // A reviewer spawned in the Issue's repo, and the file flipped to in-review.
+    expect(deps.spawns).toHaveLength(1);
+    expect(deps.spawns[0]?.repo).toBe("/repos/alpha");
+    expect(readFileSync(join(root, "alpha", "001-review.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("spawns reviewers for exactly the eligible Issues across PRDs", () => {
+    writePrd(root, "alpha", {
+      // eligible
+      "001-rev.md": reviewable("/repos/alpha"),
+      // not ready-for-review ⇒ no reviewer
+      "002-mid.md": fm({ status: "in-review", repo: "/repos/alpha" }),
+    });
+    writePrd(root, "beta", {
+      // eligible
+      "001-rev.md": reviewable("/repos/beta"),
+      // ready-for-review but no repo ⇒ excluded by the sweep
+      "002-norepo.md": fm({ status: "ready-for-review" }),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.spawns.map((s) => s.repo).sort()).toEqual([
+      "/repos/alpha",
+      "/repos/beta",
+    ]);
+    // The no-repo Issue was left untouched.
+    expect(readFileSync(join(root, "beta", "002-norepo.md"), "utf8")).toContain(
+      "status: ready-for-review",
+    );
+  });
+
+  it("drives both edges in one reconcile: an implementor and a reviewer", () => {
+    writePrd(root, "alpha", {
+      "001-impl.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+      "002-rev.md": reviewable("/repos/alpha"),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.spawns).toHaveLength(2);
+    expect(readFileSync(join(root, "alpha", "001-impl.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+    expect(readFileSync(join(root, "alpha", "002-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("rolls a failed reviewer spawn back to ready-for-review and logs it", () => {
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    createReactor(root, deps).reconcile();
+
+    expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
+      "status: ready-for-review",
+    );
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-rev.md",
+        repo: "/repos/alpha",
+        error: "claude: command not found",
+        edge: "reviewer",
+      },
+    ]);
+  });
+
+  it("does not double-spawn a reviewer across overlapping passes (flip is the lock)", () => {
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    // First pass flips it to in-review and spawns once.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+
+    // A later pass sees it already in-review ⇒ off the frontier ⇒ no re-spawn.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+  });
+
+  it("builds a reviewer prompt carrying the worktree and branch to merge", () => {
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    const prompt = deps.spawns[0]?.prompt ?? "";
+    expect(prompt).toContain("/wt/issue"); // recorded worktree
+    expect(prompt).toContain("issue-branch"); // recorded branch
+    expect(prompt).toContain("alpha"); // PRD feature branch
+    expect(prompt).toContain("reviewer"); // reviewer brief, not implementor
+  });
+
+  it("cascades both edges: review reaching done re-dispatches the unblocked sibling", () => {
+    // 002 is blocked by 001. 001 sits in review; once it merges to done, the
+    // Reactor must re-dispatch 002 — with no `r` and no second `d`.
+    writePrd(root, "alpha", {
+      "001-base.md": reviewable("/repos/alpha"),
+      "002-next.md": fm({
+        status: "ready-for-agent",
+        repo: "/repos/alpha",
+        blocked_by: "[001-base.md]",
+      }),
+    });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+    const pass001 = join(root, "alpha", "001-base.md");
+    const pass002 = join(root, "alpha", "002-next.md");
+
+    // Pass 1: 001 gets a reviewer; 002 stays put (its blocker isn't done).
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+    expect(readFileSync(pass001, "utf8")).toContain("status: in-review");
+    expect(readFileSync(pass002, "utf8")).toContain("status: ready-for-agent");
+
+    // The reviewer converges and merges: 001 → done (simulated on disk).
+    writeFileSync(pass001, fm({ status: "done", repo: "/repos/alpha" }));
+
+    // Pass 2: 001's done unblocks 002, so an implementor is dispatched for it.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(2);
+    expect(readFileSync(pass002, "utf8")).toContain("status: in-progress");
+  });
+
+  it("does not re-spawn a reviewer whose spawn just failed, on the next reconcile", () => {
+    // The failed-set covers the reviewer edge too: a reviewer launch that fails
+    // rolls back to ready-for-review and is recorded, so the next level-triggered
+    // pass — which still sees ready-for-review on disk — does not retry forever.
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    const reactor = createReactor(root, deps);
+    const file = join(root, "alpha", "001-rev.md");
+
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0); // the throwing spawn launched nothing
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-rev.md",
+        repo: "/repos/alpha",
+        error: "claude: command not found",
+        edge: "reviewer",
+      },
+    ]);
+    expect(readFileSync(file, "utf8")).toContain("status: ready-for-review");
+
+    // Still ready-for-review on disk, so the sweep re-selects it — but the
+    // reviewer-edge failed-set suppresses it: no new attempt, no new failure.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+  });
+
+  it("a failed implementor edge does not suppress the reviewer edge for the same Issue", () => {
+    // The failed-set is keyed by (issue, edge), so a recorded implementor failure
+    // must not mask a later reviewer spawn on that same Issue — they are
+    // independent edges (PRD User Story 10).
+    writePrd(root, "alpha", {
+      "001.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    let mode: "impl" | "review" = "impl";
+    const deps = recordingDeps({
+      spawn: (repo, prompt) => {
+        if (mode === "impl") throw new Error("impl launch failed");
+        deps.spawns.push({ repo, prompt });
+      },
+    });
+    const reactor = createReactor(root, deps);
+    const file = join(root, "alpha", "001.md");
+
+    // Implementor spawn fails ⇒ rolled back to ready-for-agent, (001, implementor) recorded.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+
+    // The Issue advances to ready-for-review (the implementor eventually ran, or
+    // a human moved it). The reviewer edge is a *different* key, so it spawns.
+    mode = "review";
+    writeFileSync(
+      file,
+      fm({
+        status: "ready-for-review",
+        repo: "/repos/alpha",
+        worktree: "/wt/x",
+        branch: "b",
+      }),
+    );
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1); // reviewer not suppressed by the impl failure
+    expect(readFileSync(file, "utf8")).toContain("status: in-review");
+  });
 });
