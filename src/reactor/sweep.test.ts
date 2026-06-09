@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { sweepImplementorFrontier, type SweptPrd } from "./sweep.js";
+import { sweepFrontier, type SweptPrd } from "./sweep.js";
 import type { DispatchView, DispatchIssue } from "../dispatch/reader.js";
 
 /** A DispatchIssue with sensible defaults, overridable per field. */
@@ -32,9 +32,14 @@ function eligibleIds(swept: readonly SweptPrd[]): string[] {
   );
 }
 
-describe("sweepImplementorFrontier", () => {
+/** The ids the sweep classified as reviewer-eligible, flattened across PRDs. */
+function reviewerIds(swept: readonly SweptPrd[]): string[] {
+  return swept.flatMap((p) => p.reviewers.map((i) => i.id));
+}
+
+describe("sweepFrontier — implementor edge", () => {
   it("returns a ready-for-agent Issue with all blockers done as spawn-eligible", () => {
-    const swept = sweepImplementorFrontier([
+    const swept = sweepFrontier([
       {
         prdDir: "/root/p",
         view: view([
@@ -48,7 +53,7 @@ describe("sweepImplementorFrontier", () => {
   });
 
   it("excludes a ready-for-agent Issue whose blocker is not yet done", () => {
-    const swept = sweepImplementorFrontier([
+    const swept = sweepFrontier([
       {
         prdDir: "/root/p",
         view: view([
@@ -62,7 +67,7 @@ describe("sweepImplementorFrontier", () => {
   });
 
   it("excludes ready-for-human, ready-for-review, missing-repo, and cyclic Issues", () => {
-    const swept = sweepImplementorFrontier([
+    const swept = sweepFrontier([
       {
         prdDir: "/root/p",
         view: view([
@@ -80,7 +85,7 @@ describe("sweepImplementorFrontier", () => {
   });
 
   it("computes eligibility independently per PRD across the whole root", () => {
-    const swept = sweepImplementorFrontier([
+    const swept = sweepFrontier([
       {
         prdDir: "/root/p1",
         view: view([
@@ -106,8 +111,93 @@ describe("sweepImplementorFrontier", () => {
 
   it("carries each PRD's view through so the orchestrator can build prompts", () => {
     const v = view([issue({ id: "002.md", status: "ready-for-agent" })]);
-    const swept = sweepImplementorFrontier([{ prdDir: "/root/p", view: v }]);
+    const swept = sweepFrontier([{ prdDir: "/root/p", view: v }]);
 
     expect(swept[0]?.view).toBe(v);
+  });
+});
+
+describe("sweepFrontier — reviewer edge", () => {
+  it("returns a ready-for-review Issue with a recorded repo as reviewer-eligible", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "001.md", status: "ready-for-review", repo: "/repos/app" }),
+        ]),
+      },
+    ]);
+
+    expect(reviewerIds(swept)).toEqual(["001.md"]);
+  });
+
+  it("excludes a ready-for-review Issue missing a repo", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "norepo.md", status: "ready-for-review", repo: undefined }),
+          // a blank repo is also "missing" — nothing to launch the reviewer in
+          issue({ id: "blank.md", status: "ready-for-review", repo: "  " }),
+        ]),
+      },
+    ]);
+
+    expect(reviewerIds(swept)).toEqual([]);
+  });
+
+  it("excludes Issues that are not ready-for-review", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "agent.md", status: "ready-for-agent" }),
+          issue({ id: "progress.md", status: "in-progress" }),
+          issue({ id: "inreview.md", status: "in-review" }),
+          issue({ id: "human.md", status: "ready-for-human" }),
+          issue({ id: "done.md", status: "done" }),
+          issue({ id: "none.md", status: undefined }),
+        ]),
+      },
+    ]);
+
+    expect(reviewerIds(swept)).toEqual([]);
+  });
+
+  it("computes reviewer candidates independently per PRD across the whole root", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p1",
+        view: view([
+          issue({ id: "a.md", status: "ready-for-review", repo: "/repos/p1" }),
+          issue({ id: "b.md", status: "in-review", repo: "/repos/p1" }),
+        ]),
+      },
+      {
+        prdDir: "/root/p2",
+        view: view([
+          issue({ id: "c.md", status: "ready-for-review", repo: "/repos/p2" }),
+          issue({ id: "d.md", status: "done", repo: "/repos/p2" }),
+        ]),
+      },
+    ]);
+
+    expect(reviewerIds(swept)).toEqual(["a.md", "c.md"]);
+    expect(swept.map((p) => p.prdDir)).toEqual(["/root/p1", "/root/p2"]);
+  });
+
+  it("yields both edges from one sweep over the same PRD", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "impl.md", status: "ready-for-agent", repo: "/repos/app" }),
+          issue({ id: "rev.md", status: "ready-for-review", repo: "/repos/app" }),
+        ]),
+      },
+    ]);
+
+    expect(eligibleIds(swept)).toEqual(["impl.md"]);
+    expect(reviewerIds(swept)).toEqual(["rev.md"]);
   });
 });
