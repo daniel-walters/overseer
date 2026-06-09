@@ -113,6 +113,7 @@ describe("createReviewer", () => {
           issueId: "004-receipt-email.md",
           repo: "/repos/backend",
           error: "claude: command not found",
+          edge: "reviewer",
         },
       ]);
     });

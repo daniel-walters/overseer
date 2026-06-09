@@ -24,12 +24,14 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
   };
 }
 
+const prdContext = { prdTitle: "Checkout", prdBody: "ctx", featureBranch: "checkout" };
+
 function reviewable(overrides: Partial<DispatchIssue> = {}): ReviewPreviewData {
-  return { issue: issue(overrides), eligibility: { reviewable: true } };
+  return { issue: issue(overrides), eligibility: { reviewable: true }, ...prdContext };
 }
 
 function skipped(reason: string, overrides: Partial<DispatchIssue> = {}): ReviewPreviewData {
-  return { issue: issue(overrides), eligibility: { reviewable: false, reason } };
+  return { issue: issue(overrides), eligibility: { reviewable: false, reason }, ...prdContext };
 }
 
 describe("ReviewPreview", () => {

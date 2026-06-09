@@ -320,12 +320,18 @@ describe("App review", () => {
     };
   }
 
+  const prdContext = { prdTitle: "AuthPRD", prdBody: "auth", featureBranch: "auth" };
+
   function reviewable(id: string): ReviewPreviewData {
-    return { issue: di(id), eligibility: { reviewable: true } };
+    return { issue: di(id), eligibility: { reviewable: true }, ...prdContext };
   }
 
   function ineligible(id: string, reason: string): ReviewPreviewData {
-    return { issue: di(id, { status: "in-progress" }), eligibility: { reviewable: false, reason } };
+    return {
+      issue: di(id, { status: "in-progress" }),
+      eligibility: { reviewable: false, reason },
+      ...prdContext,
+    };
   }
 
   function spyReviewer(

@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 import { writeStatus } from "../dispatch/statusWriter.js";
 import { featureBranchName } from "../dispatch/gitSetup.js";
 import type { FailureRecord } from "../dispatch/dispatch.js";
-import { readReviewTarget, type ReviewPreview, type ReviewTarget } from "./reviewReader.js";
+import { readReviewTarget, type ReviewPreview } from "./reviewReader.js";
 import { classifyReviewability } from "./eligibility.js";
 import { buildReviewerPrompt } from "./reviewerPrompt.js";
 import { runReview } from "./review.js";
@@ -31,47 +31,45 @@ export interface ReviewerDeps {
  * `claude --bg` in the Issue's repo — rolling back and logging any post-flip
  * failure.
  *
- * `readReview` caches the {@link ReviewTarget} it read so `review` can build the
- * prompt (which needs the PRD body and feature branch) without re-reading the
- * root — the App always confirms the very Issue it just previewed.
+ * The whole capture — Issue, eligibility, and the PRD context the prompt needs
+ * — travels on the {@link ReviewPreview} the App freezes, so `review` builds the
+ * prompt straight from its argument with no reader-side state to drift: the
+ * Issue acted on and the PRD context in its prompt always come from one read.
  *
  * Both entry points are total: the root is filesystem-watched and changes under
  * the TUI by design, so `r` and confirm can race a deletion. `readReview`
  * reports a vanished PRD/Issue as `undefined` (the preview renders nothing), and
- * `review` no-ops when nothing was cached, when the previewed Issue is
- * ineligible, or when the flip fails — none of which may throw out of the Ink
- * input handler and crash the board.
+ * `review` no-ops when the previewed Issue is ineligible or when the flip fails
+ * — neither may throw out of the Ink input handler and crash the board.
  */
 export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
-  /** The PRD dir + target behind the last review read, for prompt building. */
-  let lastRead: { prdDir: string; target: ReviewTarget } | undefined;
-
   return {
     readReview(prdId: string, issueId: string): ReviewPreview | undefined {
       const prdDir = join(root, prdId);
       const target = readReviewTarget(prdDir, issueId);
-      if (!target) {
-        lastRead = undefined;
-        return undefined;
-      }
-      lastRead = { prdDir, target };
-      return { issue: target.issue, eligibility: classifyReviewability(target.issue) };
+      if (!target) return undefined;
+      return {
+        issue: target.issue,
+        eligibility: classifyReviewability(target.issue),
+        prdTitle: target.prdTitle,
+        prdBody: target.prdBody,
+        // basename(prdDir) === prdId; derived the same way the dispatcher does
+        // so the review-merge target and the dispatch worktree base agree.
+        featureBranch: featureBranchName(basename(prdDir)),
+      };
     },
 
     review(preview: ReviewPreview): void {
-      if (lastRead === undefined) return; // nothing was read ⇒ nothing to review
       if (!preview.eligibility.reviewable) return; // skip-and-report happens in the UI
-      const { prdDir, target } = lastRead;
-      const featureBranch = featureBranchName(basename(prdDir));
 
       runReview(preview.issue, {
         writeStatus,
         buildPrompt: (issue) =>
           buildReviewerPrompt({
             issue,
-            prdTitle: target.prdTitle,
-            prdBody: target.prdBody,
-            featureBranch,
+            prdTitle: preview.prdTitle,
+            prdBody: preview.prdBody,
+            featureBranch: preview.featureBranch,
           }),
         spawn: deps.spawn,
         logFailure: deps.logFailure,

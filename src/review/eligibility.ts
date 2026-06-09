@@ -16,11 +16,18 @@ export type ReviewEligibility =
 
 /**
  * Classify whether the selected Issue is eligible for review. An Issue is
- * reviewable exactly when it is `ready-for-review` *and* carries both the
+ * reviewable exactly when it is `ready-for-review`, carries both the
  * implementor's recorded worktree and branch — the two handoff fields the
- * reviewer reads to check out the code and merge it (ADR 0006). Without them the
- * reviewer has nothing to check out or merge, so the Issue is skipped with a
- * reason rather than spawning a reviewer that can only fail.
+ * reviewer reads to check out the code and merge it (ADR 0006) — *and* names the
+ * `repo` the reviewer is launched in. Without any of these the reviewer has
+ * nothing to check out, merge, or run in, so the Issue is skipped with a reason
+ * rather than spawning (or, for a missing repo, silently failing to spawn) a
+ * reviewer that can only fail.
+ *
+ * Repo is checked here, not just in the spawn runner, so a missing repo surfaces
+ * as a visible skip reason in the preview — mirroring how the dispatch frontier
+ * surfaces an invalid/missing repo rather than letting the runner no-op
+ * silently after the user has confirmed.
  *
  * A recorded deviation does NOT make an Issue ineligible: the AI review loop
  * runs first regardless of a deviation (CONTEXT.md, "Review outcome"). The
@@ -43,6 +50,10 @@ export function classifyReviewability(issue: DispatchIssue): ReviewEligibility {
 
   if (issue.branch === undefined || issue.branch.trim() === "") {
     return { reviewable: false, reason: "no branch recorded on the Issue" };
+  }
+
+  if (issue.repo === undefined || issue.repo.trim() === "") {
+    return { reviewable: false, reason: "no repo recorded on the Issue" };
   }
 
   return { reviewable: true };

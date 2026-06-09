@@ -1,7 +1,10 @@
 import type { DispatchIssue } from "../dispatch/reader.js";
-import type { FailureRecord } from "../dispatch/dispatch.js";
+import {
+  rollBackStatus,
+  recordSpawnFailure,
+  type FailureRecord,
+} from "../dispatch/failureLog.js";
 import { Status } from "../dispatch/status.js";
-import { errorMessage } from "../errorMessage.js";
 
 /**
  * The I/O seams a single review depends on, injected so the flip-then-spawn edge
@@ -57,32 +60,10 @@ export function runReview(issue: DispatchIssue, deps: ReviewDeps): void {
   try {
     deps.spawn(repo, deps.buildPrompt(issue));
   } catch (err) {
-    rollBack(issue, deps);
-    logFailure(issue, repo, err, deps);
-  }
-}
-
-/** Best-effort rollback of the flip; a failure here must not escape. */
-function rollBack(issue: DispatchIssue, deps: ReviewDeps): void {
-  try {
-    deps.writeStatus(issue.path, Status.READY_FOR_REVIEW);
-  } catch {
-    // The Issue file vanished from the watched root after the flip. Nothing left
-    // to roll back; the board will reconcile on the next scan.
-  }
-}
-
-/** Best-effort failure-log append; a failure here must not escape. */
-function logFailure(
-  issue: DispatchIssue,
-  repo: string,
-  err: unknown,
-  deps: ReviewDeps,
-): void {
-  try {
-    deps.logFailure({ issueId: issue.id, repo, error: errorMessage(err) });
-  } catch {
-    // The durable log is unwritable (e.g. an unusable state dir). Losing one
-    // failure record must not crash the board.
+    // Roll the flip back so the board never shows an in-review Issue with no
+    // reviewer, and record the failure — both best-effort, sharing the dispatch
+    // edge's helpers so the rollback contract and log schema can't drift.
+    rollBackStatus(deps.writeStatus, issue.path, Status.READY_FOR_REVIEW);
+    recordSpawnFailure(deps.logFailure, "reviewer", issue.id, repo, err);
   }
 }

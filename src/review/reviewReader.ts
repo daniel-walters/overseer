@@ -14,6 +14,16 @@ export interface ReviewPreview {
   readonly issue: DispatchIssue;
   /** Whether a reviewer can be spawned for it, with a reason when it can't. */
   readonly eligibility: ReviewEligibility;
+  /**
+   * The PRD context the reviewer prompt needs, frozen alongside the Issue. Held
+   * on the preview itself — not in a mutable reader cache — so the Issue acted
+   * on and the PRD context built into its prompt can never come from different
+   * reads (a hazard once the ADR 0005 reactor previews more than one Issue).
+   */
+  readonly prdTitle: string;
+  readonly prdBody: string;
+  /** The PRD feature branch the clean review path merges into. */
+  readonly featureBranch: string;
 }
 
 /**

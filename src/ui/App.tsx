@@ -64,10 +64,13 @@ export function App({ board, dispatcher, reviewer }: AppProps) {
   const { exit } = useApp();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
   // The plan captured when a preview opened — the dispatch frontier / review
-  // target a confirm acts on, and what the modal renders. Frozen at open time
+  // preview a confirm acts on, and what the modal renders. Frozen at open time
   // and held outside the reducer (it's data, not nav) so a live re-scan under
   // the modal can never re-point the header or the action at a different
-  // PRD/Issue, nor leave the modal stranded if its card disappears.
+  // PRD/Issue, nor leave the modal stranded if its card disappears. Set when a
+  // preview opens and cleared (`undefined`) when it closes, so `modal?.kind`
+  // alone drives the render — `nav.confirming` only owns input/navigation
+  // suppression, the two are never read together.
   const [modal, setModal] = useState<ActiveModal | undefined>(undefined);
 
   // Clamp the stored selection against the current board so a shrunk board
@@ -83,12 +86,15 @@ export function App({ board, dispatcher, reviewer }: AppProps) {
     if (nav.confirming) {
       if (key.return || input === "y") {
         confirmModal();
+        setModal(undefined);
         dispatch({ type: "confirm" });
       } else if (key.escape) {
+        setModal(undefined);
         dispatch({ type: "cancel" });
       } else if (input === "q") {
         // `q` quits everywhere else; keep that escape hatch from the modal too —
         // cancel the preview (leaving the board untouched), then exit.
+        setModal(undefined);
         dispatch({ type: "cancel" });
         exit();
       }
@@ -155,10 +161,12 @@ export function App({ board, dispatcher, reviewer }: AppProps) {
 
   // The modal renders from the frozen capture, not the live board, so it stays
   // up and correctly labelled even if a re-scan removes its PRD/Issue card.
-  if (nav.confirming && modal?.kind === "dispatch") {
+  // `modal` is set only while a preview is open and cleared on close, so its
+  // kind alone selects the modal — no need to also consult `nav.confirming`.
+  if (modal?.kind === "dispatch") {
     return <DispatchPreview prdTitle={modal.prdTitle} frontier={modal.frontier} />;
   }
-  if (nav.confirming && modal?.kind === "review") {
+  if (modal?.kind === "review") {
     return <ReviewPreview preview={modal.preview} />;
   }
   if (nav.level === "issues" && selectedPrd) {

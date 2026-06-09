@@ -2,17 +2,16 @@ import type { FrontierEntry } from "./frontier.js";
 import type { DispatchIssue } from "./reader.js";
 import { setUpRepos, type GitSeam } from "./gitSetup.js";
 import { Status } from "./status.js";
-import { errorMessage } from "../errorMessage.js";
+import {
+  rollBackStatus,
+  recordSpawnFailure,
+  type FailureRecord,
+} from "./failureLog.js";
 
-/** A spawn-failure record appended to the durable dispatch log. */
-export interface FailureRecord {
-  /** The Issue filename whose agent failed to launch. */
-  readonly issueId: string;
-  /** The target repo the agent would have worked in. */
-  readonly repo: string;
-  /** The error message from the failed spawn. */
-  readonly error: string;
-}
+// Re-exported so existing importers (spawn.ts, dispatcher.ts, the review edge)
+// keep their `from "./dispatch.js"` import; the type now lives with the shared
+// failure-log helpers it travels with.
+export type { FailureRecord, SpawnEdgeKind } from "./failureLog.js";
 
 /**
  * The I/O seams a dispatch run depends on, injected so the orchestration can be
@@ -116,32 +115,10 @@ function spawnOne(
   try {
     deps.spawn(repo, deps.buildPrompt(issue, repo));
   } catch (err) {
-    rollBack(issue, deps);
-    logFailure(issue, repo, err, deps);
-  }
-}
-
-/** Best-effort rollback of the flip; a failure here must not escape the wave. */
-function rollBack(issue: DispatchIssue, deps: DispatchDeps): void {
-  try {
-    deps.writeStatus(issue.path, Status.READY_FOR_AGENT);
-  } catch {
-    // The Issue file vanished from the watched root after the flip. Nothing left
-    // to roll back; the board will reconcile on the next scan.
-  }
-}
-
-/** Best-effort failure-log append; a failure here must not escape the wave. */
-function logFailure(
-  issue: DispatchIssue,
-  repo: string,
-  err: unknown,
-  deps: DispatchDeps,
-): void {
-  try {
-    deps.logFailure({ issueId: issue.id, repo, error: errorMessage(err) });
-  } catch {
-    // The durable log is unwritable (e.g. an unusable state dir). Losing one
-    // failure record must not crash the board or stop later candidates.
+    // Roll the flip back so the board never shows in-progress work with no
+    // agent, and record the failure — both best-effort, neither may escape the
+    // wave (this runs inside the Ink input handler with no try/catch around it).
+    rollBackStatus(deps.writeStatus, issue.path, Status.READY_FOR_AGENT);
+    recordSpawnFailure(deps.logFailure, "implementor", issue.id, repo, err);
   }
 }

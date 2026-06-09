@@ -72,4 +72,19 @@ describe("classifyReviewability", () => {
     expect(result.reviewable).toBe(false);
     if (!result.reviewable) expect(result.reason).toMatch(/branch/);
   });
+
+  it("skips a ready-for-review Issue with no repo to spawn the reviewer in", () => {
+    // The reviewer is launched in the Issue's repo; without it the spawn runner
+    // would silently no-op after the user confirmed, so eligibility surfaces it
+    // as a visible skip reason instead.
+    const result = classifyReviewability(issue({ repo: undefined }));
+    expect(result.reviewable).toBe(false);
+    if (!result.reviewable) expect(result.reason).toMatch(/repo/);
+  });
+
+  it("skips a ready-for-review Issue with a blank repo", () => {
+    const result = classifyReviewability(issue({ repo: "   " }));
+    expect(result.reviewable).toBe(false);
+    if (!result.reviewable) expect(result.reason).toMatch(/repo/);
+  });
 });
