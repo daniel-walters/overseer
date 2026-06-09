@@ -58,11 +58,37 @@ describe("buildImplementorPrompt", () => {
     expect(prompt).toMatch(/no pull request|no pr|do not open a (pull request|pr)/);
   });
 
-  it("instructs the agent to flip the Issue to in-review on completion", () => {
+  it("instructs the agent to park the Issue at ready-for-review on completion", () => {
     const prompt = build();
-    expect(prompt).toContain("in-review");
+    expect(prompt).toContain("ready-for-review");
     // and to write that status into the Issue file in the Overseer root.
     expect(prompt).toContain(issue.path);
+  });
+
+  it("does NOT instruct the agent to write in-review (that's the reviewer's flip)", () => {
+    // The implementor now stops one step earlier: it parks at ready-for-review,
+    // and the review trigger flips ready-for-review → in-review. Assert over the
+    // static template only, since caller-supplied bodies may mention in-review.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
+    });
+    expect(prompt).not.toContain("in-review");
+  });
+
+  it("instructs recording the worktree path and branch in the Issue frontmatter", () => {
+    const prompt = build().toLowerCase();
+    expect(prompt).toContain("worktree");
+    expect(prompt).toContain("branch");
+  });
+
+  it("instructs recording a deviation field only if it strayed from the plan", () => {
+    const prompt = build().toLowerCase();
+    expect(prompt).toContain("deviation");
+    expect(prompt).toMatch(/only if|iff|when you stray|if you stray/);
   });
 
   it("does NOT instruct the agent to set in-progress (the dispatcher already did)", () => {
