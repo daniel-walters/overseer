@@ -517,4 +517,77 @@ describe("createReactor", () => {
     expect(deps.spawns).toHaveLength(2);
     expect(readFileSync(pass002, "utf8")).toContain("status: in-progress");
   });
+
+  it("does not re-spawn a reviewer whose spawn just failed, on the next reconcile", () => {
+    // The failed-set covers the reviewer edge too: a reviewer launch that fails
+    // rolls back to ready-for-review and is recorded, so the next level-triggered
+    // pass — which still sees ready-for-review on disk — does not retry forever.
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    const reactor = createReactor(root, deps);
+    const file = join(root, "alpha", "001-rev.md");
+
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0); // the throwing spawn launched nothing
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-rev.md",
+        repo: "/repos/alpha",
+        error: "claude: command not found",
+        edge: "reviewer",
+      },
+    ]);
+    expect(readFileSync(file, "utf8")).toContain("status: ready-for-review");
+
+    // Still ready-for-review on disk, so the sweep re-selects it — but the
+    // reviewer-edge failed-set suppresses it: no new attempt, no new failure.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+  });
+
+  it("a failed implementor edge does not suppress the reviewer edge for the same Issue", () => {
+    // The failed-set is keyed by (issue, edge), so a recorded implementor failure
+    // must not mask a later reviewer spawn on that same Issue — they are
+    // independent edges (PRD User Story 10).
+    writePrd(root, "alpha", {
+      "001.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    let mode: "impl" | "review" = "impl";
+    const deps = recordingDeps({
+      spawn: (repo, prompt) => {
+        if (mode === "impl") throw new Error("impl launch failed");
+        deps.spawns.push({ repo, prompt });
+      },
+    });
+    const reactor = createReactor(root, deps);
+    const file = join(root, "alpha", "001.md");
+
+    // Implementor spawn fails ⇒ rolled back to ready-for-agent, (001, implementor) recorded.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+
+    // The Issue advances to ready-for-review (the implementor eventually ran, or
+    // a human moved it). The reviewer edge is a *different* key, so it spawns.
+    mode = "review";
+    writeFileSync(
+      file,
+      fm({
+        status: "ready-for-review",
+        repo: "/repos/alpha",
+        worktree: "/wt/x",
+        branch: "b",
+      }),
+    );
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1); // reviewer not suppressed by the impl failure
+    expect(readFileSync(file, "utf8")).toContain("status: in-review");
+  });
 });
