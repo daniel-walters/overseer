@@ -26,6 +26,20 @@ export interface DispatchIssue {
   readonly blockedBy: readonly string[];
   /** The target repo (path or git URL) the work happens in, or undefined. */
   readonly repo: string | undefined;
+  /**
+   * The implementor's recorded worktree path, or undefined before completion.
+   * Recorded — never derived — because `claude --bg` worktree/branch names are
+   * random (ADR 0006). The reviewer checks this out to review.
+   */
+  readonly worktree: string | undefined;
+  /** The implementor's recorded branch to merge, or undefined. See {@link worktree}. */
+  readonly branch: string | undefined;
+  /**
+   * The implementor's deviation note, present only if it strayed from the
+   * Issue's planned approach. Its mere presence (not any value) forces a human
+   * review; undefined when the implementor followed the plan.
+   */
+  readonly deviation: string | undefined;
   /** The Issue's markdown body (frontmatter stripped). */
   readonly body: string;
 }
@@ -78,6 +92,9 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     status: typeof data.status === "string" ? data.status : undefined,
     blockedBy: parseBlockedBy(data.blocked_by),
     repo: typeof data.repo === "string" ? data.repo : undefined,
+    worktree: typeof data.worktree === "string" ? data.worktree : undefined,
+    branch: typeof data.branch === "string" ? data.branch : undefined,
+    deviation: typeof data.deviation === "string" ? data.deviation : undefined,
     body: content,
   };
 }

@@ -141,7 +141,7 @@ describe("App", () => {
 
 describe("App dispatch", () => {
   function di(id: string): DispatchIssue {
-    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", body: "" };
+    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, body: "" };
   }
 
   /** A frontier with one spawn candidate and one skipped Issue. */

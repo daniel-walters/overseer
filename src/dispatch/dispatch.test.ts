@@ -13,6 +13,9 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     status: overrides.status ?? "ready-for-agent",
     blockedBy: overrides.blockedBy ?? [],
     repo: "repo" in overrides ? overrides.repo : "/repos/backend",
+    worktree: overrides.worktree,
+    branch: overrides.branch,
+    deviation: overrides.deviation,
     body: overrides.body ?? "",
   };
 }
