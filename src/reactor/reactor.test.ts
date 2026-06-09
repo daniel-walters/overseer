@@ -365,4 +365,124 @@ describe("createReactor", () => {
     expect(prompt).toContain("Body of alpha."); // PRD body
     expect(prompt).toContain("001-go.md"); // the Issue file
   });
+
+  // A ready-for-review Issue, as the implementor leaves it: repo to launch the
+  // reviewer in, plus the recorded worktree/branch the reviewer reads.
+  const reviewable = (repo = "/repos/alpha"): string =>
+    fm({
+      status: "ready-for-review",
+      repo,
+      worktree: "/wt/issue",
+      branch: "issue-branch",
+    });
+
+  it("flips and spawns a reviewer for a ready-for-review Issue with no `r` press", () => {
+    writePrd(root, "alpha", { "001-review.md": reviewable() });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    // A reviewer spawned in the Issue's repo, and the file flipped to in-review.
+    expect(deps.spawns).toHaveLength(1);
+    expect(deps.spawns[0]?.repo).toBe("/repos/alpha");
+    expect(readFileSync(join(root, "alpha", "001-review.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("spawns reviewers for exactly the eligible Issues across PRDs", () => {
+    writePrd(root, "alpha", {
+      // eligible
+      "001-rev.md": reviewable("/repos/alpha"),
+      // not ready-for-review ⇒ no reviewer
+      "002-mid.md": fm({ status: "in-review", repo: "/repos/alpha" }),
+    });
+    writePrd(root, "beta", {
+      // eligible
+      "001-rev.md": reviewable("/repos/beta"),
+      // ready-for-review but no repo ⇒ excluded by the sweep
+      "002-norepo.md": fm({ status: "ready-for-review" }),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.spawns.map((s) => s.repo).sort()).toEqual([
+      "/repos/alpha",
+      "/repos/beta",
+    ]);
+    // The no-repo Issue was left untouched.
+    expect(readFileSync(join(root, "beta", "002-norepo.md"), "utf8")).toContain(
+      "status: ready-for-review",
+    );
+  });
+
+  it("drives both edges in one reconcile: an implementor and a reviewer", () => {
+    writePrd(root, "alpha", {
+      "001-impl.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+      "002-rev.md": reviewable("/repos/alpha"),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.spawns).toHaveLength(2);
+    expect(readFileSync(join(root, "alpha", "001-impl.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+    expect(readFileSync(join(root, "alpha", "002-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("rolls a failed reviewer spawn back to ready-for-review and logs it", () => {
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    createReactor(root, deps).reconcile();
+
+    expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
+      "status: ready-for-review",
+    );
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-rev.md",
+        repo: "/repos/alpha",
+        error: "claude: command not found",
+        edge: "reviewer",
+      },
+    ]);
+  });
+
+  it("does not double-spawn a reviewer across overlapping passes (flip is the lock)", () => {
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    // First pass flips it to in-review and spawns once.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+
+    // A later pass sees it already in-review ⇒ off the frontier ⇒ no re-spawn.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+  });
+
+  it("builds a reviewer prompt carrying the worktree and branch to merge", () => {
+    writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    const prompt = deps.spawns[0]?.prompt ?? "";
+    expect(prompt).toContain("/wt/issue"); // recorded worktree
+    expect(prompt).toContain("issue-branch"); // recorded branch
+    expect(prompt).toContain("alpha"); // PRD feature branch
+    expect(prompt).toContain("reviewer"); // reviewer brief, not implementor
+  });
 });
