@@ -12,6 +12,10 @@ _Avoid_: Feature (as a distinct entity), spec, epic
 A unit of work that belongs to exactly one PRD. Rendered as a card on the kanban board.
 _Avoid_: Ticket, task, card (card is the visual rendering of an Issue, not the Issue itself)
 
+**Deviation**:
+A record an implementor agent writes on its Issue — a `deviation` frontmatter field carrying the reason — when it strays from the Issue's planned approach to get the work done. The field's *presence* (not any boolean value) is the gate: a recorded Deviation forces a human review rather than an AI-only one. The implementor writes it in the same edit that flips the Issue to `ready-for-review`. See [Review outcome](#review-outcome).
+_Avoid_: drift, divergence
+
 ## Relationships
 
 - A **PRD** has many **Issues**
@@ -68,13 +72,19 @@ Overseer watches the root with OS-level filesystem events and a **~150ms debounc
 
 The kanban columns, left to right. Status lives in each **Issue** file's YAML frontmatter. A **PRD has no stored status** — its column is derived from its Issues (see [PRD status](#prd-status-derived) below).
 
-The Issue-level board has **5 columns**:
+The Issue-level board has **7 columns**:
 
 1. **backlog**
 2. **ready**
 3. **in-progress**
-4. **in-review**
-5. **done**
+4. **ready-for-review**
+5. **in-review**
+6. **human-review**
+7. **done**
+
+**ready-for-review** and **in-review** are distinct: `ready-for-review` is "the implementor is done, but no reviewer has picked it up yet"; `in-review` is "a reviewer agent is actively reviewing it." The split mirrors the implementation handoff — see [Status lifecycle](#status-lifecycle).
+
+**human-review** is the one column in the whole pipeline that requires a human's attention — an Issue lands here only when an AI review alone is not enough (see [Review outcome](#review-outcome)). Nothing auto-spawns on it; it is a queue a human works.
 
 **ready** carries a substatus shown as a badge _on the card_, not as its own column:
 - **ready-for-human**
@@ -90,18 +100,51 @@ Status is a single compound string field. The `ready` substatus is encoded as a 
 status: ready-for-agent   # or ready-for-human
 ```
 
-Canonical values: `backlog`, `ready-for-human`, `ready-for-agent`, `in-progress`, `in-review`, `done`.
+Canonical values: `backlog`, `ready-for-human`, `ready-for-agent`, `in-progress`, `ready-for-review`, `in-review`, `human-review`, `done`.
 
-- The board groups `ready-for-*` into the single **ready** column; the suffix drives the card badge.
+- The board groups **exactly** `ready-for-human` and `ready-for-agent` into the single **ready** column; the suffix drives the card badge. ⚠️ This is an exact-value match, **not** a `ready-for-` prefix match — `ready-for-review` shares the prefix but is its *own* column, never folded into **ready**.
 - Human/agent is a routing signal that only matters while **ready**. Once an Issue moves to `in-progress` it is just `in-progress` — the human/agent distinction is not tracked further.
 - A missing or unrecognized status lands the Issue in a leftmost **Unsorted** column rather than being dropped.
+
+### Status lifecycle {#status-lifecycle}
+
+An Issue advances through two structurally identical **awaiting → active** handoffs, each owned by a trigger (a keybind today; optionally the reactor later) that flips the awaiting status to the active one *before* spawning an agent — the flip is the idempotency lock (see [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)):
+
+| Phase | Awaiting (frontier) | Active | Agent |
+| --- | --- | --- | --- |
+| Implementation | `ready-for-agent` | `in-progress` | implementor |
+| Review | `ready-for-review` | `in-review` | reviewer |
+
+The implementor agent stops at **`ready-for-review`** (it does *not* write `in-review` — that refines [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md), which predates the column split). In the *same* edit that flips to `ready-for-review`, the implementor records its **worktree path and branch** on the Issue frontmatter (and a [Deviation](#deviation), if it strayed) — the review trigger flips `ready-for-review → in-review`, and the reviewer reads the worktree to check out and review, and the branch to merge. These are recorded, never derived: `claude --bg` worktree/branch names are random and uncontrollable (see [ADR 0006](./docs/adr/0006-issues-carry-their-worktree-and-branch.md)).
+
+### Review outcome {#review-outcome}
+
+Everything is **AI-reviewable by default**. A **human review** is required when *either*:
+
+1. The implementor recorded a [Deviation](#deviation) — it strayed from the Issue's plan to complete the work.
+2. The AI review could not converge — the reviewer loops `/code-review` at **medium** effort (fixing as it goes), where one iteration is a single `/code-review` pass plus its fixes and convergence is a pass that reports **zero** findings. After a hardcoded cap of **3** passes still finding issues, it escalates to a human. (The cap and effort are deliberately hardcoded for v1; making them configurable is in `docs/ideas.md`.)
+
+Every Issue entering `in-review` gets the AI review loop **first**, regardless — a Deviation never skips it. The cleaned-up diff then takes one of two exits:
+
+- **Clean AI pass, no Deviation** → the reviewer **attempts to merge the Issue's worktree into the PRD feature branch**. A clean merge sets `done`, fully unattended. A **merge conflict** escalates to `human-review` (the feature branch moved under a sibling worktree — expected to be *common* in parallel work, so never auto-resolved by an agent).
+- **Deviation recorded, or AI couldn't converge** → `human-review` directly. No automatic merge.
+
+So `human-review` is reached three ways: a recorded Deviation, AI non-convergence, or a merge conflict. In every case a human resolves it, then **approves by running a bundled merge skill** that merges the worktree into the PRD feature branch and sets `done` — the *same* merge the clean-AI path runs automatically, just human-invoked. (This adds a fourth bundled skill alongside `grill-with-docs` / `to-prd` / `to-issues`, and a new status writer the read-only board reflects — consistent with [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)'s contract that any writer must respect the transitions.)
+
+So a human only ever sees *better* code (AI cleaned it first), and the riskiest action — integration — is unattended only on the path an AI has certified clean. Merge targets the **PRD feature branch only**; merging that branch to `main` is out of scope for this flow.
+
+"Awaiting human review" is its own **`human-review`** column (not a badge) — the single human-attention queue in the pipeline.
+
+**The review flow is also what unblocks the dependency graph.** Blockers clear only on `done` (see [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)), and `done` was previously unreachable — which is why dispatch was "single-wave today." With review→merge→`done` in place, completing one Issue can unblock its siblings. The *re-dispatch* of those newly-unblocked Issues is still manual (`d`) until the reactor lands.
+
+`human-review` has a **single exit: `done`**. There is no rework status and no bounce-back-to-agent path in v1 — the human resolves whatever sent the Issue here *in place* (fixing by hand as needed within the worktree), then runs the merge skill. A rejected agent attempt is never re-dispatched; the human finishes it. (A "rework → `ready-for-agent`" path is a possible fast-follow once the manual version's friction is felt.)
 
 ### PRD status (derived) {#prd-status-derived}
 
 A PRD has **no stored status** — `prd.md` carries no `status` field. The board **derives** a PRD's column at read time, during the same full re-scan it runs on every filesystem event ([ADR 0003](./docs/adr/0003-prd-status-is-derived-not-stored.md)):
 
 - there is **≥ 1 Issue and every Issue is `done`** → **done**
-- otherwise, **any Issue is `in-progress` or later** (`in-progress`, `in-review`, `done`) → **in-progress**
+- otherwise, **any Issue is `in-progress` or later** (`in-progress`, `ready-for-review`, `in-review`, `human-review`, `done`) → **in-progress**
 - otherwise (all Issues `backlog`/`ready-*`, **or zero Issues**) → **backlog**
 
 A freshly created PRD with no Issues is **backlog** — `done` requires at least one Issue, all done. A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never Unsorted**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
@@ -111,7 +154,7 @@ A freshly created PRD with no Issues is **backlog** — `done` requires at least
 Two kanban levels with **different column sets**:
 
 - **Board level** — the cards are **PRDs**. The board collapses to **3 columns — backlog / in-progress / done** — each PRD in its [derived](#prd-status-derived) column. A PRD is never Unsorted (no status field to be missing). This is the default/top view.
-- **PRD level (zoom)** — selecting a PRD zooms into a kanban whose cards are that PRD's **Issues**, across the full **5 columns** (plus a leftmost **Unsorted** column for Issues with missing/unknown status).
+- **PRD level (zoom)** — selecting a PRD zooms into a kanban whose cards are that PRD's **Issues**, across the full **7 columns** (plus a leftmost **Unsorted** column for Issues with missing/unknown status).
 
 The **ready** column and its 🧑/🤖 badge (`ready-for-human` / `ready-for-agent`) exist at **Issue level only** — the board level has no `ready` column. Within a column, cards order by the issue filename's `NNN-` prefix (incidental, not priority).
 
@@ -123,6 +166,8 @@ Overseer is a **read-only viewer** — it never writes the PRD/Issue files; edit
 - `Enter` — zoom from a selected PRD into its Issue-level kanban.
 - `Esc` — back out from PRD level to board level.
 - `q` — quit (backs out to board level first if zoomed).
+- `d` — **dispatch**, at *board level*: spawns an implementor for every eligible Issue in the selected PRD (a whole wave at once).
+- `r` — **review**, at *Issue level* (zoom): spawns a reviewer for the single selected `ready-for-review` Issue. Deliberately per-Issue, not per-PRD like `d` — dispatch fires a wave, but review is a deliberate act on one Issue's own worktree.
 - **No issue detail/body view in v1** — cards show title + status badge only. Reading an Issue's markdown body is a fast-follow.
 
 ## Stack
