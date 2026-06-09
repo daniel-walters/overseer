@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import { expandHome } from "../config.js";
 
 /** Options for {@link ensureConfig}; mirrors {@link import("../config.js").LoadConfigOptions}. */
 export interface EnsureConfigOptions {
@@ -18,8 +19,6 @@ export interface EnsureConfigResult {
   readonly created: boolean;
   /** The config path that was checked. */
   readonly configPath: string;
-  /** The default root path (unexpanded, as written into the config). */
-  readonly defaultRoot: string;
 }
 
 /**
@@ -43,7 +42,7 @@ export function ensureConfig(
   const defaultRoot = options.defaultRoot ?? "~/overseer";
 
   if (existsSync(configPath)) {
-    return { created: false, configPath, defaultRoot };
+    return { created: false, configPath };
   }
 
   // The root must exist before the config is validated: loadConfig hard-fails
@@ -53,12 +52,5 @@ export function ensureConfig(
   mkdirSync(dirname(configPath), { recursive: true });
   writeFileSync(configPath, `root = "${defaultRoot}"\n`);
 
-  return { created: true, configPath, defaultRoot };
-}
-
-/** Expand a leading `~` (or `~/`) to the home directory. */
-function expandHome(path: string, home: string): string {
-  if (path === "~") return home;
-  if (path.startsWith("~/")) return join(home, path.slice(2));
-  return path;
+  return { created: true, configPath };
 }
