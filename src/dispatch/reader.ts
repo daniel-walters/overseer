@@ -1,6 +1,18 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import matter from "gray-matter";
+import {
+  FIELD,
+  readPresentString,
+  readString,
+  safeMatter,
+} from "../issueFile.js";
+
+/**
+ * Re-exported from the shared {@link import("../issueFile.js")} access layer:
+ * dispatch and review code that already imports the reader keeps a single import
+ * site for "is this handoff field recorded?".
+ */
+export { hasValue } from "../issueFile.js";
 
 /**
  * One Issue as the dispatcher needs to see it — a richer record than the lean
@@ -57,34 +69,6 @@ export interface DispatchView {
   readonly issues: readonly DispatchIssue[];
 }
 
-/**
- * A recorded handoff field (worktree/branch/repo) counts as present only when it
- * is a non-blank string. Shared by the review eligibility classifier and the
- * review runner so the UI preview and the spawn edge can never disagree on what
- * "recorded" means.
- */
-export function hasValue(value: string | undefined): value is string {
-  return value !== undefined && value.trim() !== "";
-}
-
-/**
- * Parse frontmatter, treating an unparseable file as having none. A single Issue
- * (or PRD) with malformed YAML — e.g. an agent-written `deviation:` whose value
- * contains an unquoted `": "` — must not throw out of the reader and take down a
- * whole dispatch/review read; the field is simply read as absent.
- */
-function safeMatter(raw: string): {
-  data: { [key: string]: unknown };
-  content: string;
-} {
-  try {
-    const { data, content } = matter(raw);
-    return { data, content };
-  } catch {
-    return { data: {}, content: raw };
-  }
-}
-
 /** Read a PRD directory's `prd.md` into its display title and body. */
 export function readPrdMeta(prdDir: string): {
   prdTitle: string;
@@ -94,7 +78,7 @@ export function readPrdMeta(prdDir: string): {
     readFileSync(join(prdDir, "prd.md"), "utf8"),
   );
   return {
-    prdTitle: typeof data.title === "string" ? data.title : basename(prdDir),
+    prdTitle: readString(data, FIELD.title) ?? basename(prdDir),
     prdBody: content,
   };
 }
@@ -133,21 +117,17 @@ function readIssue(path: string, fileName: string): DispatchIssue {
 
   return {
     id: fileName,
-    title: typeof data.title === "string" ? data.title : fileName,
+    title: readString(data, FIELD.title) ?? fileName,
     path,
-    status: typeof data.status === "string" ? data.status : undefined,
-    blockedBy: parseBlockedBy(data.blocked_by),
-    repo: typeof data.repo === "string" ? data.repo : undefined,
-    worktree: typeof data.worktree === "string" ? data.worktree : undefined,
-    branch: typeof data.branch === "string" ? data.branch : undefined,
+    status: readString(data, FIELD.status),
+    blockedBy: parseBlockedBy(data[FIELD.blockedBy]),
+    repo: readString(data, FIELD.repo),
+    worktree: readString(data, FIELD.worktree),
+    branch: readString(data, FIELD.branch),
     // A blank `deviation:` is treated as absent: only a real, non-empty note
     // forecloses the clean auto-merge path (its mere presence forces a human
     // review), so an empty-string field must not silently escalate.
-    deviation: hasValue(
-      typeof data.deviation === "string" ? data.deviation : undefined,
-    )
-      ? (data.deviation as string)
-      : undefined,
+    deviation: readPresentString(data, FIELD.deviation),
     body: content,
   };
 }
