@@ -4,6 +4,7 @@ import { App } from "./App.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
+import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -299,5 +300,138 @@ describe("App dispatch", () => {
     stdin.write(ENTER);
     await tick();
     expect(dispatcher.dispatch).toHaveBeenCalledWith(fakeFrontier("auth"));
+  });
+});
+
+describe("App review", () => {
+  function di(id: string, overrides: Partial<DispatchIssue> = {}): DispatchIssue {
+    return {
+      id,
+      title: id,
+      path: `/root/auth/${id}`,
+      status: "ready-for-review",
+      blockedBy: [],
+      repo: "/r",
+      worktree: "/wt/blue-cat-fox",
+      branch: "blue-cat-fox",
+      deviation: undefined,
+      body: "",
+      ...overrides,
+    };
+  }
+
+  const prdContext = { prdTitle: "AuthPRD", prdBody: "auth", featureBranch: "auth" };
+
+  function reviewable(id: string): ReviewPreviewData {
+    return { issue: di(id), eligibility: { reviewable: true }, ...prdContext };
+  }
+
+  function ineligible(id: string, reason: string): ReviewPreviewData {
+    return {
+      issue: di(id, { status: "in-progress" }),
+      eligibility: { reviewable: false, reason },
+      ...prdContext,
+    };
+  }
+
+  function spyReviewer(
+    readReview: (prdId: string, issueId: string) => ReviewPreviewData | undefined = (
+      _p,
+      id,
+    ) => reviewable(id),
+  ) {
+    return {
+      readReview: vi.fn(readReview),
+      review: vi.fn<(p: ReviewPreviewData) => void>(),
+    };
+  }
+
+  it("opens a review preview on r at the Issue level for the selected Issue", async () => {
+    const reviewer = spyReviewer();
+    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("r");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Review 010-login");
+    // The worktree path only appears inside the review modal.
+    expect(frame).toContain("/wt/blue-cat-fox");
+    // The selected (first) Issue of AuthPRD was read.
+    expect(reviewer.readReview).toHaveBeenCalledWith("auth", "010-login");
+  });
+
+  it("does nothing on r at the board level (review is Issue-level only)", async () => {
+    const reviewer = spyReviewer();
+    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+
+    stdin.write("r");
+    await tick();
+
+    expect(reviewer.readReview).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+
+  it("shows a skip reason and spawns nothing for an ineligible Issue", async () => {
+    const reviewer = spyReviewer((_p, id) => ineligible(id, "status is \"in-progress\", not ready-for-review"));
+    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("r");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("in-progress");
+
+    // Confirming an ineligible preview spawns nothing.
+    stdin.write(ENTER);
+    await tick();
+    expect(reviewer.review).not.toHaveBeenCalled();
+  });
+
+  it("runs the review on Enter for an eligible Issue, then closes the modal", async () => {
+    const reviewer = spyReviewer();
+    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("r"); // open review preview
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(reviewer.review).toHaveBeenCalledTimes(1);
+    expect(reviewer.review).toHaveBeenCalledWith(reviewable("010-login"));
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+
+  it("cancels the review on Esc without spawning", async () => {
+    const reviewer = spyReviewer();
+    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("r");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(reviewer.review).not.toHaveBeenCalled();
+    // Back at the Issue level, modal closed.
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+
+  it("does nothing on r when no reviewer is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("r");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
   });
 });

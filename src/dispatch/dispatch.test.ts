@@ -49,11 +49,11 @@ function deps(
 ): DispatchDeps & {
   writes: [string, string][];
   spawns: { repo: string; prompt: string }[];
-  failures: { issueId: string; repo: string; error: string }[];
+  failures: { issueId: string; repo: string; error: string; edge: string }[];
 } {
   const writes: [string, string][] = [];
   const spawns: { repo: string; prompt: string }[] = [];
-  const failures: { issueId: string; repo: string; error: string }[] = [];
+  const failures: { issueId: string; repo: string; error: string; edge: string }[] = [];
   return {
     writes,
     spawns,
@@ -248,7 +248,7 @@ describe("runDispatch", () => {
       );
 
       expect(d.failures).toEqual([
-        { issueId: "001-a.md", repo: "/repos/api", error: "claude not found" },
+        { issueId: "001-a.md", repo: "/repos/api", error: "claude not found", edge: "implementor" },
       ]);
     });
 
@@ -270,7 +270,7 @@ describe("runDispatch", () => {
 
       expect(d.spawns).toEqual([{ repo: "/repos/ok", prompt: "prompt-for-002-ok.md" }]);
       expect(d.failures).toEqual([
-        { issueId: "001-bad.md", repo: "/repos/bad", error: "boom" },
+        { issueId: "001-bad.md", repo: "/repos/bad", error: "boom", edge: "implementor" },
       ]);
     });
 
@@ -307,7 +307,7 @@ describe("runDispatch", () => {
 
       // The failure was still logged, and the next candidate still spawned.
       expect(d.failures).toEqual([
-        { issueId: "001-bad.md", repo: "/repos/bad", error: "boom" },
+        { issueId: "001-bad.md", repo: "/repos/bad", error: "boom", edge: "implementor" },
       ]);
       expect(spawned).toEqual(["prompt-for-002-ok.md"]);
     });

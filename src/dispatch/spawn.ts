@@ -62,7 +62,7 @@ export function createSpawnEdge(deps: SpawnEdgeDeps): SpawnEdge {
 
     logFailure(record: FailureRecord): void {
       mkdirSync(dirname(deps.logPath), { recursive: true });
-      const line = `${new Date().toISOString()}\t${record.issueId}\t${record.repo}\t${record.error}\n`;
+      const line = `${new Date().toISOString()}\t${record.edge}\t${record.issueId}\t${record.repo}\t${record.error}\n`;
       appendFileSync(deps.logPath, line);
     },
   };

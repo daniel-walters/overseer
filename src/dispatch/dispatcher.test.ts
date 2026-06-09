@@ -141,6 +141,7 @@ describe("createDispatcher", () => {
           issueId: "002-payment-intent.md",
           repo: "/repos/backend",
           error: "claude: command not found",
+          edge: "implementor",
         },
       ]);
     });
