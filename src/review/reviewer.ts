@@ -1,5 +1,5 @@
 import { basename, join } from "node:path";
-import { writeStatus } from "../dispatch/statusWriter.js";
+import { writeStatus } from "../issueFile.js";
 import { featureBranchName } from "../dispatch/gitSetup.js";
 import type { FailureRecord } from "../dispatch/dispatch.js";
 import { readReviewTarget, type ReviewPreview } from "./reviewReader.js";

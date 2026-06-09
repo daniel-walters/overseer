@@ -56,6 +56,58 @@ describe("useLiveBoard", () => {
     expect(lastFrame()).toContain("Updated");
   });
 
+  it("reconciles the reactor after the board rebuild on each change", async () => {
+    let onChange = () => {};
+    const order: string[] = [];
+    const scan = vi.fn(() => {
+      order.push("scan");
+      return board("Updated");
+    });
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+    const reactor = { reconcile: vi.fn(() => order.push("reconcile")) };
+
+    render(
+      <Probe
+        root="/root"
+        initialBoard={board("First")}
+        scan={scan}
+        watch={watch}
+        reactor={reactor}
+      />,
+    );
+
+    onChange();
+    await tick();
+
+    // The reactor reconciles, and only after the board has been re-scanned.
+    expect(reactor.reconcile).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["scan", "reconcile"]);
+  });
+
+  it("works with no reactor wired (board-only tests)", async () => {
+    let onChange = () => {};
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+
+    expect(() => {
+      render(
+        <Probe
+          root="/root"
+          initialBoard={board("First")}
+          scan={() => board("Updated")}
+          watch={watch}
+        />,
+      );
+      onChange();
+    }).not.toThrow();
+    await tick();
+  });
+
   it("tears down the watcher on unmount", () => {
     const teardown = vi.fn();
     const watch = () => teardown;

@@ -8,15 +8,49 @@
  * columns.
  */
 
+/**
+ * The routing badge carried by a card while it is in the "ready" column,
+ * derived from the compound `ready-for-*` authored status.
+ */
+export type ReadyFor = "human" | "agent";
+
+/**
+ * The single source of truth for the authored-status vocabulary: every `status`
+ * string a card file may carry, mapped to the lane its card lands in and, for
+ * the two `ready-for-*` values, the routing badge.
+ *
+ * Everything downstream is derived from this map so the vocabulary lives in one
+ * place: the {@link Column}/{@link Lane} types, the render-order {@link LANES}
+ * array, the {@link placeStatus} placement the scanner uses, and (by referencing
+ * its keys) the dispatch state machine's write-vocabulary in
+ * {@link import("./dispatch/status.js").Status}. A status added here flows to all
+ * of them; a typo can't silently diverge one copy from another and strand a card
+ * in Unsorted.
+ *
+ * Note the fold the map encodes: `ready-for-human` and `ready-for-agent` both
+ * land in the single `ready` lane (distinguished only by the badge), so the
+ * eight authored statuses collapse to seven columns.
+ */
+const STATUS_PLACEMENT = {
+  backlog: { lane: "backlog" },
+  "ready-for-human": { lane: "ready", readyFor: "human" },
+  "ready-for-agent": { lane: "ready", readyFor: "agent" },
+  "in-progress": { lane: "in-progress" },
+  "ready-for-review": { lane: "ready-for-review" },
+  "in-review": { lane: "in-review" },
+  "human-review": { lane: "human-review" },
+  done: { lane: "done" },
+} as const satisfies Record<string, { lane: string; readyFor?: ReadyFor }>;
+
+/**
+ * Every authored `status` string a card file may carry. The dispatch state
+ * machine ({@link import("./dispatch/status.js").Status}) names the subset it
+ * transitions through; this is the full set the scanner recognises.
+ */
+export type AuthoredStatus = keyof typeof STATUS_PLACEMENT;
+
 /** The canonical columns, left to right, that an authored status maps to. */
-export type Column =
-  | "backlog"
-  | "ready"
-  | "in-progress"
-  | "ready-for-review"
-  | "in-review"
-  | "human-review"
-  | "done";
+export type Column = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
 
 /** Where a card lands. Missing/unknown authored status falls to "unsorted". */
 export type Lane = Column | "unsorted";
@@ -36,6 +70,26 @@ export const LANES: readonly Lane[] = [
   "done",
 ] as const;
 
+/**
+ * Map an authored status string to its lane and, while ready, its routing badge,
+ * or `undefined` when the status is missing or not a recognised authored value.
+ * The scanner maps that `undefined` to the `unsorted` lane — its fail-safe so a
+ * card is never dropped. Derived from {@link STATUS_PLACEMENT} so the lane rules
+ * are never restated as a parallel switch.
+ */
+export function placeStatus(
+  status: unknown,
+): { readonly lane: Lane; readonly readyFor?: ReadyFor } | undefined {
+  if (typeof status !== "string") return undefined;
+  // Own-property check, not a bare index: a `status` that names an
+  // `Object.prototype` member (`toString`, `constructor`, `__proto__`, …) would
+  // otherwise read the inherited function off the literal and return it as a
+  // bogus placement — bypassing the unsorted fail-safe and crashing the lane
+  // grouping with a `lane: undefined` card.
+  if (!Object.hasOwn(STATUS_PLACEMENT, status)) return undefined;
+  return STATUS_PLACEMENT[status as AuthoredStatus];
+}
+
 /** Human-readable column headings, keyed by lane. */
 export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   unsorted: "Unsorted",
@@ -47,12 +101,6 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   "human-review": "Human Review",
   done: "Done",
 };
-
-/**
- * The routing badge carried by a card while it is in the "ready" column,
- * derived from the compound `ready-for-*` authored status.
- */
-export type ReadyFor = "human" | "agent";
 
 /**
  * The vocabulary of human-review escalation reasons, in one place. The reviewer

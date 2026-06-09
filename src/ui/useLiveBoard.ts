@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Board } from "../model.js";
+import type { Reactor } from "../reactor/reactor.js";
 
 export interface UseLiveBoardOptions {
   /** The configured root being watched. */
@@ -10,6 +11,12 @@ export interface UseLiveBoardOptions {
   readonly scan: (root: string) => Board;
   /** Watch the root, calling back on each debounced change; returns teardown. */
   readonly watch: (root: string, onChange: () => void) => () => void;
+  /**
+   * The Reactor, reconciled after each board rebuild so completing one Issue
+   * cascades to its newly-unblocked siblings with no keypress. Absent in
+   * board-only tests; when absent the loop is a plain re-scan.
+   */
+  readonly reactor?: Reactor;
 }
 
 /**
@@ -24,13 +31,22 @@ export function useLiveBoard({
   initialBoard,
   scan,
   watch,
+  reactor,
 }: UseLiveBoardOptions): Board {
   const [board, setBoard] = useState(initialBoard);
 
   useEffect(() => {
-    const teardown = watch(root, () => setBoard(scan(root)));
+    const teardown = watch(root, () => {
+      // Rebuild the board first, then let the Reactor act on the same on-disk
+      // state it reflects: level-triggered, the spawn it drives writes status to
+      // disk, which fires another debounced change → another reconcile, so one
+      // `d` cascades through the dependency graph (ADR 0005). reconcile() holds
+      // its own re-entrancy guard, so overlapping passes are a clean no-op.
+      setBoard(scan(root));
+      reactor?.reconcile();
+    });
     return teardown;
-  }, [root, scan, watch]);
+  }, [root, scan, watch, reactor]);
 
   return board;
 }

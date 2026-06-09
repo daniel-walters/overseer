@@ -2,12 +2,73 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { writeStatus } from "./statusWriter.js";
+import {
+  FIELD,
+  hasValue,
+  readPresentString,
+  readString,
+  safeMatter,
+  writeStatus,
+} from "./issueFile.js";
+
+describe("safeMatter", () => {
+  it("parses frontmatter and strips it from the body", () => {
+    const { data, content } = safeMatter("---\ntitle: Hi\nstatus: backlog\n---\n\nBody.\n");
+    expect(data.title).toBe("Hi");
+    expect(data.status).toBe("backlog");
+    expect(content.trim()).toBe("Body.");
+  });
+
+  it("treats malformed YAML as no frontmatter, keeping the raw text as body", () => {
+    // An unquoted value containing ": " is the agent-written failure mode the
+    // defensive parse exists for — it must not throw.
+    const raw = "---\ndeviation: had to do this: because reasons\n---\n\nBody.\n";
+    const { data, content } = safeMatter(raw);
+    expect(data).toEqual({});
+    expect(content).toBe(raw);
+  });
+});
+
+describe("readString", () => {
+  it("returns a string value, and undefined for missing or non-string fields", () => {
+    const data = { title: "Hi", count: 3, blank: "" };
+    expect(readString(data, "title")).toBe("Hi");
+    expect(readString(data, "count")).toBeUndefined();
+    expect(readString(data, "absent")).toBeUndefined();
+  });
+
+  it("keeps a blank string verbatim (does not collapse it)", () => {
+    expect(readString({ status: "" }, "status")).toBe("");
+  });
+});
+
+describe("hasValue / readPresentString", () => {
+  it("hasValue is false for undefined, blank, and whitespace-only", () => {
+    expect(hasValue(undefined)).toBe(false);
+    expect(hasValue("")).toBe(false);
+    expect(hasValue("   ")).toBe(false);
+    expect(hasValue("x")).toBe(true);
+  });
+
+  it("readPresentString collapses a blank field to undefined", () => {
+    expect(readPresentString({ deviation: "" }, "deviation")).toBeUndefined();
+    expect(readPresentString({ deviation: "  " }, "deviation")).toBeUndefined();
+    expect(readPresentString({ deviation: "strayed" }, "deviation")).toBe("strayed");
+    expect(readPresentString({}, "deviation")).toBeUndefined();
+  });
+});
+
+describe("FIELD", () => {
+  it("uses the on-disk snake_case spelling for multi-word fields", () => {
+    expect(FIELD.blockedBy).toBe("blocked_by");
+    expect(FIELD.humanReviewReason).toBe("human_review_reason");
+  });
+});
 
 /**
- * The status-writer is the dispatcher's one allowed mutation of an Issue file:
- * it rewrites just the `status` frontmatter and leaves everything else — the
- * other frontmatter keys, key order where practical, and the entire body — as
+ * `writeStatus` is the dispatcher's one allowed mutation of an Issue file: it
+ * rewrites just the `status` frontmatter and leaves everything else — the other
+ * frontmatter keys, key order where practical, and the entire body — as
  * authored. These tests assert that external behaviour over a real temp file.
  */
 describe("writeStatus", () => {

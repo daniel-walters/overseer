@@ -1,3 +1,5 @@
+import type { AuthoredStatus } from "../model.js";
+
 /**
  * The on-disk Issue `status` values the dispatch state machine reads and writes.
  * This is the single source of truth for the dispatch vocabulary so the
@@ -6,9 +8,13 @@
  * — a typo in one copy would land a card in Unsorted and silently strand the
  * Issue.
  *
- * Distinct from the board-lane vocabulary in {@link import("../model.js")}: those
- * are render columns; these are the authored statuses dispatch transitions an
- * Issue through.
+ * A *named subset* of the full authored vocabulary in {@link import("../model.js")}:
+ * those values are the render columns and the complete set of statuses a card may
+ * carry; these are the ones dispatch actively transitions an Issue *through*
+ * (`ready-for-human` and plain `backlog` are authored but never written by
+ * dispatch). The `satisfies AuthoredStatus` constraint makes that subset
+ * relationship load-bearing: a value here that is not a real authored status is a
+ * compile error, so the two vocabularies cannot drift apart.
  */
 export const Status = {
   /** A spawn candidate: dispatch's frontier acts only on this status. */
@@ -23,6 +29,6 @@ export const Status = {
   HUMAN_REVIEW: "human-review",
   /** A blocker only clears once the blocking Issue reaches this status. */
   DONE: "done",
-} as const;
+} as const satisfies Record<string, AuthoredStatus>;
 
 export type Status = (typeof Status)[keyof typeof Status];
