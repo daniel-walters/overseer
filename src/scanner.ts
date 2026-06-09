@@ -1,7 +1,14 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import matter from "gray-matter";
-import type { Board, PRD, Issue, Lane, ReadyFor } from "./model.js";
+import type {
+  Board,
+  PRD,
+  Issue,
+  Lane,
+  ReadyFor,
+  HumanReviewReason,
+} from "./model.js";
 
 /**
  * Scan the root directory into an immutable {@link Board}.
@@ -69,9 +76,35 @@ function scanIssue(path: string, fileName: string): Issue {
     typeof data.title === "string" ? data.title : slugFromFileName(fileName);
   const { lane, readyFor } = placeStatus(data.status);
 
-  return readyFor === undefined
-    ? { id: fileName, title, lane }
-    : { id: fileName, title, lane, readyFor };
+  const issue: Issue = { id: fileName, title, lane };
+  // A routing badge belongs only on a ready card; an escalation reason only on a
+  // human-review card. Each rides its own lane so a stale value can't leak onto
+  // a card that has moved on.
+  const withReadyFor: Issue =
+    readyFor === undefined ? issue : { ...issue, readyFor };
+
+  if (lane !== "human-review") return withReadyFor;
+  const humanReviewReason = parseHumanReviewReason(data.human_review_reason);
+  return humanReviewReason === undefined
+    ? withReadyFor
+    : { ...withReadyFor, humanReviewReason };
+}
+
+/**
+ * Read the `human_review_reason` frontmatter into a {@link HumanReviewReason},
+ * or `undefined` when absent or not one of the known reasons. An unrecognized
+ * value is dropped rather than surfaced as a junk marker — the card simply shows
+ * no reason, the same fail-safe the lane mapping uses for an unknown status.
+ */
+function parseHumanReviewReason(value: unknown): HumanReviewReason | undefined {
+  switch (value) {
+    case "deviation":
+    case "non-convergence":
+    case "conflict":
+      return value;
+    default:
+      return undefined;
+  }
 }
 
 /**
