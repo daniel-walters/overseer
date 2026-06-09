@@ -50,7 +50,7 @@ describe("createDispatcher", () => {
 
     // 002 is ready-for-agent with its only blocker (001) done → spawn.
     expect(byId.get("002-payment-intent.md")).toBe("spawn");
-    // 003 has no repo → skipped; 001 is done, 004 backlog → skipped.
+    // 003 has no repo → skipped; 001 is done, 004 ready-for-review → skipped.
     expect(byId.get("003-checkout-button.md")).toBe("skipped");
     expect(byId.get("001-cart-totals.md")).toBe("skipped");
   });
