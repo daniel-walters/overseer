@@ -54,6 +54,15 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
  */
 export type ReadyFor = "human" | "agent";
 
+/**
+ * Why an Issue was escalated to `human-review`, recorded by the reviewer when it
+ * takes the human-review exit (see reviewerPrompt). The three exits the reviewer
+ * can take map one-to-one onto these: a recorded implementor deviation, a review
+ * loop that did not converge within its cap, or a merge conflict. Surfaced as a
+ * marker on the card so a human knows what attention it needs before opening it.
+ */
+export type HumanReviewReason = "deviation" | "non-convergence" | "conflict";
+
 export interface Issue {
   /** Identity: the Issue filename (e.g. `001-auth.md`). */
   readonly id: string;
@@ -63,6 +72,8 @@ export interface Issue {
   readonly lane: Lane;
   /** Set only when `lane === "ready"`; drives the human/agent badge. */
   readonly readyFor?: ReadyFor;
+  /** Set only when `lane === "human-review"`; drives the escalation marker. */
+  readonly humanReviewReason?: HumanReviewReason;
 }
 
 export interface PRD {

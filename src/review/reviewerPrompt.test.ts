@@ -101,6 +101,18 @@ describe("buildReviewerPrompt", () => {
     expect(prompt.toLowerCase()).toContain("human-review");
   });
 
+  it("instructs recording the human-review reason alongside the status", () => {
+    const prompt = build();
+    expect(prompt).toContain("human_review_reason");
+  });
+
+  it("names each of the three escalation reasons the marker distinguishes", () => {
+    const prompt = build();
+    expect(prompt).toContain("deviation");
+    expect(prompt).toContain("non-convergence");
+    expect(prompt).toContain("conflict");
+  });
+
   it("does NOT instruct the reviewer to set in-review (the trigger already did)", () => {
     // The review trigger flips ready-for-review → in-review before spawning, so
     // the reviewer inherits in-review and must never set it. Assert over the

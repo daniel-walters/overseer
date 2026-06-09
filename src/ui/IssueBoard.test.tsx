@@ -47,6 +47,12 @@ const prd: PRD = {
     { id: "020-oauth", title: "OAuth", lane: "ready", readyFor: "agent" },
     { id: "030-review", title: "Review", lane: "ready", readyFor: "human" },
     { id: "005-mystery", title: "Mystery", lane: "unsorted" },
+    {
+      id: "040-escalated",
+      title: "Escalated",
+      lane: "human-review",
+      humanReviewReason: "deviation",
+    },
   ],
 };
 
@@ -64,6 +70,13 @@ describe("IssueBoard", () => {
 
     expect(frame).toContain("🤖");
     expect(frame).toContain("🧑");
+  });
+
+  it("surfaces the escalation reason on a human-review Issue card", () => {
+    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+
+    expect(columnOf(frame, "Escalated")).toBe("Human Review");
+    expect(stripAnsi(frame)).toContain("deviation");
   });
 
   it("marks the selected Issue with a pointer and no other", () => {

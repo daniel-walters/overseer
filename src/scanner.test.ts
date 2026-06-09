@@ -131,6 +131,26 @@ describe("scanBoard Issues", () => {
     expect(issue.readyFor).toBeUndefined();
   });
 
+  it("records the escalation reason on a human-review Issue", () => {
+    const issue = issueById(authIssues(), "009-needs-human.md");
+
+    expect(issue.humanReviewReason).toBe("deviation");
+  });
+
+  it("omits an unrecognized escalation reason rather than carrying junk", () => {
+    const issue = issueById(authIssues(), "010-bad-reason.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.humanReviewReason).toBeUndefined();
+  });
+
+  it("ignores an escalation reason on an Issue that is not in human-review", () => {
+    const issue = issueById(authIssues(), "011-reason-without-review.md");
+
+    expect(issue.lane).toBe("backlog");
+    expect(issue.humanReviewReason).toBeUndefined();
+  });
+
   it("falls an Issue with an unrecognized status to the unsorted lane", () => {
     const issue = issueById(authIssues(), "005-mystery.md");
 
