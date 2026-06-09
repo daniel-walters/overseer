@@ -34,8 +34,9 @@ export interface ReviewerPromptInput {
  * that reports zero findings; on a converged clean pass with no recorded
  * deviation, merge the worktree branch into the PRD feature branch and set
  * `done`; on a recorded deviation, non-convergence after the cap, or a merge
- * conflict, set `human-review`. The merge targets the feature branch only,
- * never `main`.
+ * conflict, set `human-review` and record `human_review_reason` (deviation /
+ * non-convergence / conflict) so the card can surface why. The merge targets the
+ * feature branch only, never `main`.
  *
  * Whether a deviation was recorded is baked into the prose so the reviewer knows
  * up-front which exit is even available: a recorded deviation forecloses the
@@ -109,5 +110,10 @@ Take exactly one of two exits:
 
 - HUMAN-REVIEW EXIT — any of: a deviation was recorded, the loop did not
   converge within 3 passes, or the merge hit a conflict. Do NOT merge. Set
-  \`status: human-review\` on the Issue and stop; a human takes it from there.`;
+  \`status: human-review\` on the Issue AND record \`human_review_reason\` so a
+  human knows what attention it needs before opening it. Use exactly one of:
+  - \`human_review_reason: deviation\`       — a deviation was recorded
+  - \`human_review_reason: non-convergence\` — the loop did not converge in 3 passes
+  - \`human_review_reason: conflict\`         — the merge hit a conflict
+  Then stop; a human takes it from there.`;
 }
