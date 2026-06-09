@@ -171,6 +171,114 @@ describe("createReactor", () => {
     ]);
   });
 
+  it("does not re-spawn an Issue whose spawn just failed, on the next reconcile", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    // First spawn fails ⇒ rolled back to ready-for-agent and recorded.
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0); // the throwing spawn launched nothing
+    expect(deps.failures).toHaveLength(1);
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: ready-for-agent",
+    );
+
+    // The Issue is still ready-for-agent on disk, so the frontier would re-pick
+    // it — but the failed-set suppresses it. A second reconcile is a no-op: no
+    // new spawn attempt, no new failure logged.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+  });
+
+  it("suppression is per-PRD: a failure does not suppress a same-named Issue in another PRD", () => {
+    // Two PRDs with an identically-named Issue file. Issue filenames are only
+    // unique within a PRD, but the Reactor sweeps across all PRDs — so a failure
+    // in alpha must not suppress beta's distinct Issue of the same filename.
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    writePrd(root, "beta", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/beta" }),
+    });
+
+    // alpha's spawn fails; beta's would succeed.
+    const deps = recordingDeps({
+      spawn: (repo, prompt) => {
+        if (repo === "/repos/alpha") throw new Error("alpha is broken");
+        deps.spawns.push({ repo, prompt });
+      },
+    });
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+    // beta spawned on the first pass; alpha failed and was recorded.
+    expect(deps.spawns.map((s) => s.repo)).toEqual(["/repos/beta"]);
+    expect(deps.failures).toHaveLength(1);
+
+    // beta finished its work (flipped off ready-for-agent), so only alpha would
+    // re-spawn — but alpha is suppressed. A second pass attempts nothing new.
+    reactor.reconcile();
+    expect(deps.spawns.map((s) => s.repo)).toEqual(["/repos/beta"]);
+  });
+
+  it("records the spawn failure per-edge, leaving the same Issue's reviewer edge free", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    const failed: { issueKey: string; edge: string }[] = [];
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("boom");
+      },
+      failedSet: {
+        record: (issueKey, edge) => failed.push({ issueKey, edge }),
+        has: () => false, // no suppression, so we observe the record() call only
+      },
+    });
+    createReactor(root, deps).reconcile();
+
+    // Keyed by full path (prdDir/filename), under the implementor edge.
+    expect(failed).toEqual([
+      { issueKey: join(root, "alpha", "001-go.md"), edge: "implementor" },
+    ]);
+  });
+
+  it("retries a previously-failed spawn on a fresh reactor instance (session-scoped)", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    // First instance: spawn fails, Issue suppressed for that session.
+    const failingDeps = recordingDeps({
+      spawn: () => {
+        throw new Error("transient");
+      },
+    });
+    const first = createReactor(root, failingDeps);
+    first.reconcile();
+    first.reconcile();
+    expect(failingDeps.failures).toHaveLength(1); // suppressed after the first
+
+    // A fresh instance (reopen): the environment is fixed and the spawn now
+    // succeeds. The new instance builds a fresh failed-set, so it retries.
+    const healthyDeps = recordingDeps();
+    createReactor(root, healthyDeps).reconcile();
+    expect(healthyDeps.spawns).toHaveLength(1);
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+  });
+
   it("is a no-op when called re-entrantly (reconcile during reconcile)", () => {
     writePrd(root, "alpha", {
       "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
