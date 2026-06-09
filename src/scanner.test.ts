@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
+import { mkdtempSync, writeFileSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { scanBoard } from "./scanner.js";
 import type { PRD, Issue } from "./model.js";
 
@@ -53,6 +56,28 @@ describe("scanBoard", () => {
 
     const prd = prdById(board.prds, "bad-status-prd");
     expect(prd.lane).toBe("unsorted");
+  });
+
+  it("does not crash the whole scan when one Issue has malformed frontmatter", () => {
+    // A single Issue with invalid YAML (an unquoted ': ' in a value) must not
+    // throw out of scanBoard and take down the live board on the next watch
+    // event — it degrades to the Unsorted lane, and siblings still scan.
+    const root = mkdtempSync(join(tmpdir(), "overseer-scan-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\nstatus: in-progress\n---\nbody\n");
+    writeFileSync(
+      join(dir, "001-broken.md"),
+      "---\nstatus: ready-for-review\ndeviation: Used a cache: it is faster\n---\nbody\n",
+    );
+    writeFileSync(join(dir, "002-ok.md"), "---\ntitle: OK\nstatus: done\n---\nbody\n");
+
+    let board!: ReturnType<typeof scanBoard>;
+    expect(() => (board = scanBoard(root))).not.toThrow();
+
+    const prd = prdById(board.prds, "feature");
+    expect(issueById(prd.issues, "001-broken.md").lane).toBe("unsorted");
+    expect(issueById(prd.issues, "002-ok.md").lane).toBe("done");
   });
 
   it("maps a ready-for-agent PRD to the ready lane with an agent badge", () => {
@@ -113,6 +138,42 @@ describe("scanBoard Issues", () => {
     const agent = issueById(issues, "004-rate-limiting.md");
     expect(agent.lane).toBe("ready");
     expect(agent.readyFor).toBe("agent");
+  });
+
+  it("maps a ready-for-review Issue to its own lane, never folding it into ready", () => {
+    const issue = issueById(authIssues(), "008-review-ready.md");
+
+    expect(issue.lane).toBe("ready-for-review");
+    // The shared `ready-for-` prefix must NOT fold it into the ready column.
+    expect(issue.lane).not.toBe("ready");
+    expect(issue.readyFor).toBeUndefined();
+  });
+
+  it("maps a human-review Issue to its own lane", () => {
+    const issue = issueById(authIssues(), "009-needs-human.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.readyFor).toBeUndefined();
+  });
+
+  it("records the escalation reason on a human-review Issue", () => {
+    const issue = issueById(authIssues(), "009-needs-human.md");
+
+    expect(issue.humanReviewReason).toBe("deviation");
+  });
+
+  it("omits an unrecognized escalation reason rather than carrying junk", () => {
+    const issue = issueById(authIssues(), "010-bad-reason.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.humanReviewReason).toBeUndefined();
+  });
+
+  it("ignores an escalation reason on an Issue that is not in human-review", () => {
+    const issue = issueById(authIssues(), "011-reason-without-review.md");
+
+    expect(issue.lane).toBe("backlog");
+    expect(issue.humanReviewReason).toBeUndefined();
   });
 
   it("falls an Issue with an unrecognized status to the unsorted lane", () => {

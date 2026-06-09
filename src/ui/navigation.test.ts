@@ -110,4 +110,35 @@ describe("navigation", () => {
       expect(navReduce(initialNav, { type: "confirm" })).toBe(initialNav);
     });
   });
+
+  describe("review confirmation (Issue-level modal preview)", () => {
+    it("opens the review preview from the Issue level, entering the confirming state", () => {
+      const zoomed: NavState = { level: "issues", boardIndex: 1, issueIndex: 2, confirming: false };
+      const opened = navReduce(zoomed, { type: "open-review" });
+      expect(opened.confirming).toBe(true);
+      // The underlying selection is preserved so the review acts on it.
+      expect(opened.issueIndex).toBe(2);
+      expect(opened.level).toBe("issues");
+    });
+
+    it("ignores open-review at the board level (review is Issue-level only)", () => {
+      expect(navReduce(initialNav, { type: "open-review" })).toBe(initialNav);
+    });
+
+    it("suppresses open-review while already confirming", () => {
+      const confirming: NavState = { level: "issues", boardIndex: 0, issueIndex: 0, confirming: true };
+      expect(navReduce(confirming, { type: "open-review" })).toBe(confirming);
+    });
+
+    it("closes the review preview on cancel and on confirm, leaving selection intact", () => {
+      const confirming: NavState = { level: "issues", boardIndex: 1, issueIndex: 3, confirming: true };
+      const cancelled = navReduce(confirming, { type: "cancel" });
+      expect(cancelled.confirming).toBe(false);
+      expect(cancelled.issueIndex).toBe(3);
+
+      const confirmed = navReduce(confirming, { type: "confirm" });
+      expect(confirmed.confirming).toBe(false);
+      expect(confirmed.issueIndex).toBe(3);
+    });
+  });
 });

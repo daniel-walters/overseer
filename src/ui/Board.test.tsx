@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { render } from "ink-testing-library";
+import { renderForTest as render } from "./renderForTest.js";
 import { BoardView } from "./Board.js";
 import type { Board, PRD } from "../model.js";
 
@@ -19,7 +19,9 @@ const HEADINGS = [
   "Backlog",
   "Ready",
   "In Progress",
+  "Ready for Review",
   "In Review",
+  "Human Review",
   "Done",
 ];
 
@@ -52,7 +54,7 @@ function columnOf(rawFrame: string, needle: string): string {
 }
 
 describe("BoardView", () => {
-  it("renders the Unsorted column plus the five fixed columns, left to right", () => {
+  it("renders the Unsorted column plus the seven fixed columns, left to right", () => {
     const { lastFrame } = render(<BoardView board={emptyBoard} />);
     const frame = lastFrame() ?? "";
 

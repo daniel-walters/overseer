@@ -4,25 +4,35 @@
  * scanner from a filesystem path; consumed by the UI.
  *
  * Domain vocabulary follows CONTEXT.md: a PRD is a feature, an Issue is a unit
- * of work belonging to one PRD, and the five statuses drive the kanban columns.
+ * of work belonging to one PRD, and the authored statuses drive the kanban
+ * columns.
  */
 
-/** The five canonical columns, left to right, that an authored status maps to. */
-export type Column = "backlog" | "ready" | "in-progress" | "in-review" | "done";
+/** The canonical columns, left to right, that an authored status maps to. */
+export type Column =
+  | "backlog"
+  | "ready"
+  | "in-progress"
+  | "ready-for-review"
+  | "in-review"
+  | "human-review"
+  | "done";
 
 /** Where a card lands. Missing/unknown authored status falls to "unsorted". */
 export type Lane = Column | "unsorted";
 
 /**
  * The lanes in render order, left to right: Unsorted first (so missing/unknown
- * status is never lost), then the five fixed columns.
+ * status is never lost), then the seven fixed columns.
  */
 export const LANES: readonly Lane[] = [
   "unsorted",
   "backlog",
   "ready",
   "in-progress",
+  "ready-for-review",
   "in-review",
+  "human-review",
   "done",
 ] as const;
 
@@ -32,7 +42,9 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   backlog: "Backlog",
   ready: "Ready",
   "in-progress": "In Progress",
+  "ready-for-review": "Ready for Review",
   "in-review": "In Review",
+  "human-review": "Human Review",
   done: "Done",
 };
 
@@ -41,6 +53,29 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
  * derived from the compound `ready-for-*` authored status.
  */
 export type ReadyFor = "human" | "agent";
+
+/**
+ * The vocabulary of human-review escalation reasons, in one place. The reviewer
+ * prompt's instructions, the scanner's frontmatter parser, and the
+ * {@link HumanReviewReason} type are all derived from this single tuple so a
+ * renamed or added reason can't silently drift between them — a mismatch would
+ * make the reviewer write a token the scanner drops, leaving the card with no
+ * marker and the escalation looking reason-less.
+ */
+export const HUMAN_REVIEW_REASONS = [
+  "deviation",
+  "non-convergence",
+  "conflict",
+] as const;
+
+/**
+ * Why an Issue was escalated to `human-review`, recorded by the reviewer when it
+ * takes the human-review exit (see reviewerPrompt). The three exits the reviewer
+ * can take map one-to-one onto these: a recorded implementor deviation, a review
+ * loop that did not converge within its cap, or a merge conflict. Surfaced as a
+ * marker on the card so a human knows what attention it needs before opening it.
+ */
+export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
 
 export interface Issue {
   /** Identity: the Issue filename (e.g. `001-auth.md`). */
@@ -51,6 +86,8 @@ export interface Issue {
   readonly lane: Lane;
   /** Set only when `lane === "ready"`; drives the human/agent badge. */
   readonly readyFor?: ReadyFor;
+  /** Set only when `lane === "human-review"`; drives the escalation marker. */
+  readonly humanReviewReason?: HumanReviewReason;
 }
 
 export interface PRD {

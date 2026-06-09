@@ -50,7 +50,7 @@ describe("createDispatcher", () => {
 
     // 002 is ready-for-agent with its only blocker (001) done → spawn.
     expect(byId.get("002-payment-intent.md")).toBe("spawn");
-    // 003 has no repo → skipped; 001 is done, 004 backlog → skipped.
+    // 003 has no repo → skipped; 001 is done, 004 ready-for-review → skipped.
     expect(byId.get("003-checkout-button.md")).toBe("skipped");
     expect(byId.get("001-cart-totals.md")).toBe("skipped");
   });
@@ -101,7 +101,7 @@ describe("createDispatcher", () => {
       expect(prompt).toContain("/repos/backend"); // target repo
       expect(prompt).toContain("checkout-flow"); // slugified PRD dir = feature branch
       expect(prompt).toContain("Let a user pay for the items in their cart"); // PRD body
-      expect(prompt).toContain("in-review"); // the completion instruction
+      expect(prompt).toContain("ready-for-review"); // the completion instruction
       expect(prompt).toContain("002-payment-intent.md"); // the Issue file path
     });
 
@@ -141,6 +141,7 @@ describe("createDispatcher", () => {
           issueId: "002-payment-intent.md",
           repo: "/repos/backend",
           error: "claude: command not found",
+          edge: "implementor",
         },
       ]);
     });

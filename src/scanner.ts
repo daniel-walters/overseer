@@ -1,7 +1,15 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import matter from "gray-matter";
-import type { Board, PRD, Issue, Lane, ReadyFor } from "./model.js";
+import {
+  HUMAN_REVIEW_REASONS,
+  type Board,
+  type PRD,
+  type Issue,
+  type Lane,
+  type ReadyFor,
+  type HumanReviewReason,
+} from "./model.js";
 
 /**
  * Scan the root directory into an immutable {@link Board}.
@@ -38,7 +46,7 @@ function scanPrd(dir: string, dirName: string): PRD | null {
     return null; // no prd.md ⇒ not a PRD
   }
 
-  const { data } = matter(raw);
+  const { data } = safeMatter(raw);
   const title = typeof data.title === "string" ? data.title : dirName;
   const { lane, readyFor } = placeStatus(data.status);
   const issues = scanIssues(dir);
@@ -64,14 +72,49 @@ function scanIssues(dir: string): Issue[] {
 
 /** Parse one Issue file. Identity is the filename; title falls back to the slug. */
 function scanIssue(path: string, fileName: string): Issue {
-  const { data } = matter(readFileSync(path, "utf8"));
+  const { data } = safeMatter(readFileSync(path, "utf8"));
   const title =
     typeof data.title === "string" ? data.title : slugFromFileName(fileName);
   const { lane, readyFor } = placeStatus(data.status);
 
-  return readyFor === undefined
-    ? { id: fileName, title, lane }
-    : { id: fileName, title, lane, readyFor };
+  const issue: Issue = { id: fileName, title, lane };
+  // A routing badge belongs only on a ready card; an escalation reason only on a
+  // human-review card. Each rides its own lane so a stale value can't leak onto
+  // a card that has moved on.
+  const withReadyFor: Issue =
+    readyFor === undefined ? issue : { ...issue, readyFor };
+
+  if (lane !== "human-review") return withReadyFor;
+  const humanReviewReason = parseHumanReviewReason(data.human_review_reason);
+  return humanReviewReason === undefined
+    ? withReadyFor
+    : { ...withReadyFor, humanReviewReason };
+}
+
+/**
+ * Read the `human_review_reason` frontmatter into a {@link HumanReviewReason},
+ * or `undefined` when absent or not one of the known reasons. An unrecognized
+ * value is dropped rather than surfaced as a junk marker — the card simply shows
+ * no reason, the same fail-safe the lane mapping uses for an unknown status.
+ */
+function parseHumanReviewReason(value: unknown): HumanReviewReason | undefined {
+  return HUMAN_REVIEW_REASONS.includes(value as HumanReviewReason)
+    ? (value as HumanReviewReason)
+    : undefined;
+}
+
+/**
+ * Parse frontmatter, treating an unparseable file as having none — a single
+ * malformed Issue or PRD (e.g. an agent-written `deviation:` whose value
+ * contains an unquoted `": "`) degrades to the Unsorted lane instead of throwing
+ * out of {@link scanBoard} and crashing the live board on the next watch event.
+ */
+function safeMatter(raw: string): { data: { [key: string]: unknown } } {
+  try {
+    return { data: matter(raw).data };
+  } catch {
+    return { data: {} };
+  }
 }
 
 /**
@@ -91,7 +134,9 @@ function placeStatus(status: unknown): { lane: Lane; readyFor?: ReadyFor } {
   switch (status) {
     case "backlog":
     case "in-progress":
+    case "ready-for-review":
     case "in-review":
+    case "human-review":
     case "done":
       return { lane: status };
     case "ready-for-human":

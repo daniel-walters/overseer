@@ -11,7 +11,14 @@ interface BoardViewProps {
   selectedIndex?: number;
 }
 
-/** The board-level kanban: PRDs as cards across Unsorted + the five columns. */
+/**
+ * The board-level kanban: PRDs as cards across the shared {@link LANES}.
+ *
+ * NOTE: per ADR-0003 the board level should collapse to just backlog /
+ * in-progress / done (a PRD has no Unsorted, ready, or review states). That
+ * derivation isn't built yet, so this currently reuses the full Issue-level
+ * lane set — the extra columns render empty for PRDs until the collapse lands.
+ */
 export function BoardView({ board, selectedIndex }: BoardViewProps) {
   const byLane = groupByLane(board.prds);
   const selectedId =

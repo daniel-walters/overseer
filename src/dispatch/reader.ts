@@ -26,6 +26,20 @@ export interface DispatchIssue {
   readonly blockedBy: readonly string[];
   /** The target repo (path or git URL) the work happens in, or undefined. */
   readonly repo: string | undefined;
+  /**
+   * The implementor's recorded worktree path, or undefined before completion.
+   * Recorded — never derived — because `claude --bg` worktree/branch names are
+   * random (ADR 0006). The reviewer checks this out to review.
+   */
+  readonly worktree: string | undefined;
+  /** The implementor's recorded branch to merge, or undefined. See {@link worktree}. */
+  readonly branch: string | undefined;
+  /**
+   * The implementor's deviation note, present only if it strayed from the
+   * Issue's planned approach. Its mere presence (not any value) forces a human
+   * review; undefined when the implementor followed the plan.
+   */
+  readonly deviation: string | undefined;
   /** The Issue's markdown body (frontmatter stripped). */
   readonly body: string;
 }
@@ -44,6 +58,56 @@ export interface DispatchView {
 }
 
 /**
+ * A recorded handoff field (worktree/branch/repo) counts as present only when it
+ * is a non-blank string. Shared by the review eligibility classifier and the
+ * review runner so the UI preview and the spawn edge can never disagree on what
+ * "recorded" means.
+ */
+export function hasValue(value: string | undefined): value is string {
+  return value !== undefined && value.trim() !== "";
+}
+
+/**
+ * Parse frontmatter, treating an unparseable file as having none. A single Issue
+ * (or PRD) with malformed YAML — e.g. an agent-written `deviation:` whose value
+ * contains an unquoted `": "` — must not throw out of the reader and take down a
+ * whole dispatch/review read; the field is simply read as absent.
+ */
+function safeMatter(raw: string): {
+  data: { [key: string]: unknown };
+  content: string;
+} {
+  try {
+    const { data, content } = matter(raw);
+    return { data, content };
+  } catch {
+    return { data: {}, content: raw };
+  }
+}
+
+/** Read a PRD directory's `prd.md` into its display title and body. */
+export function readPrdMeta(prdDir: string): {
+  prdTitle: string;
+  prdBody: string;
+} {
+  const { data, content } = safeMatter(
+    readFileSync(join(prdDir, "prd.md"), "utf8"),
+  );
+  return {
+    prdTitle: typeof data.title === "string" ? data.title : basename(prdDir),
+    prdBody: content,
+  };
+}
+
+/** Read one Issue file in a PRD directory into a {@link DispatchIssue}. */
+export function readDispatchIssue(
+  prdDir: string,
+  fileName: string,
+): DispatchIssue {
+  return readIssue(join(prdDir, fileName), fileName);
+}
+
+/**
  * Read a single PRD directory into a {@link DispatchView}.
  *
  * A pure path → view function with no side effects: it reads the PRD body and
@@ -52,11 +116,7 @@ export interface DispatchView {
  * lean {@link Issue}.
  */
 export function readDispatchView(prdDir: string): DispatchView {
-  const { data: prdData, content: prdBody } = matter(
-    readFileSync(join(prdDir, "prd.md"), "utf8"),
-  );
-  const prdTitle =
-    typeof prdData.title === "string" ? prdData.title : basename(prdDir);
+  const { prdTitle, prdBody } = readPrdMeta(prdDir);
 
   const files = readdirSync(prdDir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith(".md") && e.name !== "prd.md")
@@ -69,7 +129,7 @@ export function readDispatchView(prdDir: string): DispatchView {
 }
 
 function readIssue(path: string, fileName: string): DispatchIssue {
-  const { data, content } = matter(readFileSync(path, "utf8"));
+  const { data, content } = safeMatter(readFileSync(path, "utf8"));
 
   return {
     id: fileName,
@@ -78,6 +138,16 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     status: typeof data.status === "string" ? data.status : undefined,
     blockedBy: parseBlockedBy(data.blocked_by),
     repo: typeof data.repo === "string" ? data.repo : undefined,
+    worktree: typeof data.worktree === "string" ? data.worktree : undefined,
+    branch: typeof data.branch === "string" ? data.branch : undefined,
+    // A blank `deviation:` is treated as absent: only a real, non-empty note
+    // forecloses the clean auto-merge path (its mere presence forces a human
+    // review), so an empty-string field must not silently escalate.
+    deviation: hasValue(
+      typeof data.deviation === "string" ? data.deviation : undefined,
+    )
+      ? (data.deviation as string)
+      : undefined,
     body: content,
   };
 }

@@ -30,8 +30,9 @@ export interface ImplementorPromptInput {
  * authoring: the same inputs always produce the same prompt, so an
  * auto-permission agent's brief is auditable on every run. The agent inherits an
  * Issue the dispatcher has *already* flipped to `in-progress`, so the template
- * never tells it to set that status — only to advance the work to `in-review`
- * when finished.
+ * never tells it to set that status — only to park the finished work at
+ * `ready-for-review`, recording the worktree, branch, and (if it strayed) a
+ * deviation in the same edit so the reviewer and merge can read them (ADR 0006).
  */
 export function buildImplementorPrompt(input: ImplementorPromptInput): string {
   const { issue, prdTitle, prdBody, repo, featureBranch } = input;
@@ -64,11 +65,24 @@ worktree so that other agents touching the same repo do not collide with you.
 1. Implement the Issue in full.
 2. Commit your work to the worktree. Do NOT open a pull request — the worktree
    itself is the review artifact.
-3. When the implementation is complete, advance the Issue to the review state by
-   writing \`status: in-review\` into the Issue's frontmatter in the Overseer
-   root. The Issue file to edit is:
+3. When the implementation is complete, park the Issue for review with a single
+   edit to its frontmatter in the Overseer root. The Issue file to edit is:
 
    ${issue.path}
 
-Leave the Issue at the review state; a later reviewer step takes it from there.`;
+   In that one edit:
+   - Set \`status: ready-for-review\`. Stop here — do NOT advance the status any
+     further. A later review step flips it onward; that is not your job.
+   - Record \`worktree:\` set to the absolute path of the worktree you worked in,
+     and \`branch:\` set to its branch name. Record both verbatim from the
+     worktree you actually used — never guess or derive them. The reviewer
+     checks out the worktree and merges the branch using exactly these values.
+   - Record a \`deviation:\` field with a short reason ONLY IF you strayed from
+     the Issue's planned approach to get the work done. If you followed the
+     plan, omit the field entirely — its mere presence forces a human review.
+     Quote the value (\`deviation: "..."\`) so a colon or other punctuation in
+     your reason can't corrupt the Issue's frontmatter.
+
+Leave the Issue at \`ready-for-review\`; a later reviewer step takes it from
+there.`;
 }

@@ -2,17 +2,12 @@ import type { FrontierEntry } from "./frontier.js";
 import type { DispatchIssue } from "./reader.js";
 import { setUpRepos, type GitSeam } from "./gitSetup.js";
 import { Status } from "./status.js";
-import { errorMessage } from "../errorMessage.js";
+import { spawnWithFlip, type FailureRecord } from "./failureLog.js";
 
-/** A spawn-failure record appended to the durable dispatch log. */
-export interface FailureRecord {
-  /** The Issue filename whose agent failed to launch. */
-  readonly issueId: string;
-  /** The target repo the agent would have worked in. */
-  readonly repo: string;
-  /** The error message from the failed spawn. */
-  readonly error: string;
-}
+// Re-exported so existing importers (spawn.ts, dispatcher.ts, the review edge)
+// keep their `from "./dispatch.js"` import; the type now lives with the shared
+// failure-log helpers it travels with.
+export type { FailureRecord, SpawnEdgeKind } from "./failureLog.js";
 
 /**
  * The I/O seams a dispatch run depends on, injected so the orchestration can be
@@ -90,58 +85,26 @@ export function runDispatch(
 }
 
 /**
- * Flip one candidate to `in-progress` and spawn its agent. A flip failure (the
- * file vanished from the watched root) skips the spawn with no rollback or log —
- * nothing was started. A spawn failure *after* the flip rolls the status back
- * and records the failure.
- *
- * The rollback and the log append are themselves best-effort: this whole edge
- * runs synchronously inside the Ink input handler, which has no try/catch around
- * it, so a throw here would crash the board. The rollback write can ENOENT (the
- * Issue file deleted in the race window after the flip) and the log append can
- * fail on an unwritable state dir — neither is allowed to escape or to abort the
- * rest of the wave.
+ * Flip one candidate `ready-for-agent → in-progress` and spawn its implementor,
+ * via the shared {@link spawnWithFlip} orchestration (flip-before-spawn with
+ * rollback + log on a post-flip failure). The implementor and reviewer edges
+ * share that structure so the lock-and-rollback contract can't drift between
+ * them.
  */
 function spawnOne(
   issue: DispatchIssue,
   repo: string,
   deps: DispatchDeps,
 ): void {
-  try {
-    deps.writeStatus(issue.path, Status.IN_PROGRESS);
-  } catch {
-    return; // flip failed: nothing was started, so nothing to roll back or log
-  }
-
-  try {
-    deps.spawn(repo, deps.buildPrompt(issue, repo));
-  } catch (err) {
-    rollBack(issue, deps);
-    logFailure(issue, repo, err, deps);
-  }
-}
-
-/** Best-effort rollback of the flip; a failure here must not escape the wave. */
-function rollBack(issue: DispatchIssue, deps: DispatchDeps): void {
-  try {
-    deps.writeStatus(issue.path, Status.READY_FOR_AGENT);
-  } catch {
-    // The Issue file vanished from the watched root after the flip. Nothing left
-    // to roll back; the board will reconcile on the next scan.
-  }
-}
-
-/** Best-effort failure-log append; a failure here must not escape the wave. */
-function logFailure(
-  issue: DispatchIssue,
-  repo: string,
-  err: unknown,
-  deps: DispatchDeps,
-): void {
-  try {
-    deps.logFailure({ issueId: issue.id, repo, error: errorMessage(err) });
-  } catch {
-    // The durable log is unwritable (e.g. an unusable state dir). Losing one
-    // failure record must not crash the board or stop later candidates.
-  }
+  spawnWithFlip({
+    edge: "implementor",
+    issue,
+    repo,
+    awaiting: Status.READY_FOR_AGENT,
+    active: Status.IN_PROGRESS,
+    writeStatus: deps.writeStatus,
+    buildPrompt: () => deps.buildPrompt(issue, repo),
+    spawn: deps.spawn,
+    logFailure: deps.logFailure,
+  });
 }

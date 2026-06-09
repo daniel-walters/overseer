@@ -15,8 +15,12 @@ export const Status = {
   READY_FOR_AGENT: "ready-for-agent",
   /** Set synchronously when an Issue is dispatched, before its agent spawns. */
   IN_PROGRESS: "in-progress",
-  /** Where an implementor agent leaves a finished Issue (reviewer step is later). */
+  /** Where an implementor agent leaves a finished Issue, awaiting a reviewer. */
+  READY_FOR_REVIEW: "ready-for-review",
+  /** Set when a reviewer picks up a ready-for-review Issue and starts reviewing. */
   IN_REVIEW: "in-review",
+  /** The single human-attention queue: a review that an AI alone can't clear. */
+  HUMAN_REVIEW: "human-review",
   /** A blocker only clears once the blocking Issue reaches this status. */
   DONE: "done",
 } as const;

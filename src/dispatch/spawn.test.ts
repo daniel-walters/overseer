@@ -50,15 +50,17 @@ describe("createSpawnEdge", () => {
   });
 
   describe("logFailure", () => {
-    it("appends a timestamped record (issue, repo, error) to the log", () => {
+    it("appends a timestamped record (edge, issue, repo, error) to the log", () => {
       const { logFailure } = createSpawnEdge({ exec: vi.fn(), logPath });
 
-      logFailure({ issueId: "001-a.md", repo: "/repos/api", error: "boom" });
+      logFailure({ issueId: "001-a.md", repo: "/repos/api", error: "boom", edge: "reviewer" });
 
       const contents = readFileSync(logPath, "utf8");
       expect(contents).toContain("001-a.md");
       expect(contents).toContain("/repos/api");
       expect(contents).toContain("boom");
+      // The edge discriminator distinguishes implementor vs reviewer failures.
+      expect(contents).toContain("reviewer");
       // ISO-8601 timestamp prefix.
       expect(contents).toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
     });
@@ -67,7 +69,7 @@ describe("createSpawnEdge", () => {
       expect(existsSync(join(dir, "state"))).toBe(false);
       const { logFailure } = createSpawnEdge({ exec: vi.fn(), logPath });
 
-      logFailure({ issueId: "001-a.md", repo: "/repos/api", error: "boom" });
+      logFailure({ issueId: "001-a.md", repo: "/repos/api", error: "boom", edge: "implementor" });
 
       expect(existsSync(logPath)).toBe(true);
     });
@@ -75,8 +77,8 @@ describe("createSpawnEdge", () => {
     it("appends rather than overwrites across multiple failures", () => {
       const { logFailure } = createSpawnEdge({ exec: vi.fn(), logPath });
 
-      logFailure({ issueId: "001-a.md", repo: "/repos/api", error: "first" });
-      logFailure({ issueId: "002-b.md", repo: "/repos/web", error: "second" });
+      logFailure({ issueId: "001-a.md", repo: "/repos/api", error: "first", edge: "implementor" });
+      logFailure({ issueId: "002-b.md", repo: "/repos/web", error: "second", edge: "reviewer" });
 
       const lines = readFileSync(logPath, "utf8").trimEnd().split("\n");
       expect(lines).toHaveLength(2);

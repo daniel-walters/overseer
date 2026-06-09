@@ -25,6 +25,9 @@ function view(issues: readonly Partial<DispatchIssue>[]): DispatchView {
       status: i.status,
       blockedBy: i.blockedBy ?? [],
       repo: i.repo,
+      worktree: i.worktree,
+      branch: i.branch,
+      deviation: i.deviation,
       body: i.body ?? "",
     })),
   };
