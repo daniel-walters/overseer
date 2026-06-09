@@ -1,10 +1,6 @@
 import { computeFrontier, type FrontierEntry } from "../dispatch/frontier.js";
-import {
-  hasValue,
-  type DispatchIssue,
-  type DispatchView,
-} from "../dispatch/reader.js";
-import { Status } from "../dispatch/status.js";
+import type { DispatchIssue, DispatchView } from "../dispatch/reader.js";
+import { classifyReviewability } from "../review/eligibility.js";
 
 /**
  * One PRD as the Reactor's sweep ingests it: where it lives (for deriving its
@@ -25,10 +21,11 @@ export interface PrdInput {
  * - {@link frontier} — every Issue's implementor classification; `runDispatch`
  *   takes only the `spawn`-classified entries, so the spawn-eligibility decision
  *   is the frontier's, computed here, not re-derived downstream.
- * - {@link reviewers} — the `ready-for-review` Issues with a recorded repo, the
- *   reviewer edge's frontier; `runReview` acts on each. Missing-repo Issues are
- *   excluded here (the reviewer has nothing to launch in), mirroring how the
- *   implementor frontier excludes a missing repo.
+ * - {@link reviewers} — the reviewable `ready-for-review` Issues, the reviewer
+ *   edge's frontier; `runReview` acts on each. Eligibility is the *same*
+ *   {@link classifyReviewability} the `r` keybind uses, so an Issue missing the
+ *   repo, worktree, or branch the reviewer needs is excluded here rather than
+ *   spawning a reviewer with nothing to check out, merge, or launch in.
  *
  * Its `view` is carried through so the orchestrator builds both edges' prompts
  * from the same read.
@@ -52,14 +49,15 @@ export interface SweptPrd {
  * blockers are `done` (with `done` blockers cleared, cycles fail-safe to
  * `blocked`, and human/review statuses skipped).
  *
- * **Reviewer edge.** An Issue is a reviewer candidate when it is
- * `ready-for-review` and names a repo (the reviewer's launch target). A blank
- * repo counts as missing and is excluded. The other handoff fields (worktree,
- * branch) are the reviewer's concern, not the sweep's: the implementor records
- * them in the same edit that flips to `ready-for-review`, so a `ready-for-review`
- * Issue carries them by construction — and `runReview` is total if one is
- * absent. The sweep gates on the same "recorded repo" rule the implementor
- * frontier does, no more.
+ * **Reviewer edge.** Reuses {@link classifyReviewability} so the Reactor's
+ * notion of "spawn a reviewer now" is exactly the `r` keybind's: an Issue is a
+ * reviewer candidate only when it is `ready-for-review` and carries the repo
+ * (the reviewer's launch target), worktree, and branch the reviewer reads to
+ * check out and merge. A normal implementor records all three in the same edit
+ * that flips to `ready-for-review`, but a hand-set or half-written
+ * `ready-for-review` Issue may be missing them — gating on the shared classifier
+ * keeps the auto path from spawning a reviewer with nothing to check out, merge,
+ * or launch in, instead of relying on the fields being present by construction.
  *
  * Both edges are computed independently per PRD: `blocked_by` references resolve
  * only within the same PRD's view (a sibling filename), never across PRDs.
@@ -76,11 +74,13 @@ export function sweepFrontier(prds: readonly PrdInput[]): readonly SweptPrd[] {
 }
 
 /**
- * Whether an Issue is a reviewer-spawn candidate: `ready-for-review` with a
- * recorded (non-blank) repo. The repo gate keeps a reviewer that could only fail
- * to launch off the frontier — the reviewer-edge counterpart to the implementor
- * frontier excluding a missing repo.
+ * Whether an Issue is a reviewer-spawn candidate, via the shared
+ * {@link classifyReviewability} the `r` keybind uses: `ready-for-review` with a
+ * recorded repo, worktree, and branch. Reusing it — rather than re-deriving a
+ * looser status+repo check — keeps the auto and manual reviewer edges from
+ * drifting, so the Reactor never spawns a reviewer the keybind would have
+ * skipped.
  */
 function isReviewerCandidate(issue: DispatchIssue): boolean {
-  return issue.status === Status.READY_FOR_REVIEW && hasValue(issue.repo);
+  return classifyReviewability(issue).reviewable;
 }

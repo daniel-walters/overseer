@@ -37,6 +37,23 @@ function reviewerIds(swept: readonly SweptPrd[]): string[] {
   return swept.flatMap((p) => p.reviewers.map((i) => i.id));
 }
 
+/**
+ * A reviewable Issue, as the implementor leaves it: `ready-for-review` carrying
+ * the repo, worktree, and branch the reviewer reads — the fields
+ * `classifyReviewability` requires.
+ */
+function reviewable(
+  over: Partial<DispatchIssue> & { id: string },
+): DispatchIssue {
+  return issue({
+    status: "ready-for-review",
+    repo: "/repos/app",
+    worktree: "/wt/x",
+    branch: "branch-x",
+    ...over,
+  });
+}
+
 describe("sweepFrontier — implementor edge", () => {
   it("returns a ready-for-agent Issue with all blockers done as spawn-eligible", () => {
     const swept = sweepFrontier([
@@ -118,14 +135,9 @@ describe("sweepFrontier — implementor edge", () => {
 });
 
 describe("sweepFrontier — reviewer edge", () => {
-  it("returns a ready-for-review Issue with a recorded repo as reviewer-eligible", () => {
+  it("returns a ready-for-review Issue with repo, worktree, and branch as reviewer-eligible", () => {
     const swept = sweepFrontier([
-      {
-        prdDir: "/root/p",
-        view: view([
-          issue({ id: "001.md", status: "ready-for-review", repo: "/repos/app" }),
-        ]),
-      },
+      { prdDir: "/root/p", view: view([reviewable({ id: "001.md" })]) },
     ]);
 
     expect(reviewerIds(swept)).toEqual(["001.md"]);
@@ -136,9 +148,27 @@ describe("sweepFrontier — reviewer edge", () => {
       {
         prdDir: "/root/p",
         view: view([
-          issue({ id: "norepo.md", status: "ready-for-review", repo: undefined }),
+          reviewable({ id: "norepo.md", repo: undefined }),
           // a blank repo is also "missing" — nothing to launch the reviewer in
-          issue({ id: "blank.md", status: "ready-for-review", repo: "  " }),
+          reviewable({ id: "blank.md", repo: "  " }),
+        ]),
+      },
+    ]);
+
+    expect(reviewerIds(swept)).toEqual([]);
+  });
+
+  it("excludes a ready-for-review Issue missing the worktree or branch the reviewer reads", () => {
+    // Matches the `r` keybind (classifyReviewability): a hand-set or half-written
+    // ready-for-review Issue without the implementor's recorded handoff fields
+    // must not spawn a reviewer with nothing to check out or merge.
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          reviewable({ id: "noworktree.md", worktree: undefined }),
+          reviewable({ id: "nobranch.md", branch: undefined }),
+          reviewable({ id: "blankworktree.md", worktree: "  " }),
         ]),
       },
     ]);
@@ -169,14 +199,14 @@ describe("sweepFrontier — reviewer edge", () => {
       {
         prdDir: "/root/p1",
         view: view([
-          issue({ id: "a.md", status: "ready-for-review", repo: "/repos/p1" }),
+          reviewable({ id: "a.md", repo: "/repos/p1" }),
           issue({ id: "b.md", status: "in-review", repo: "/repos/p1" }),
         ]),
       },
       {
         prdDir: "/root/p2",
         view: view([
-          issue({ id: "c.md", status: "ready-for-review", repo: "/repos/p2" }),
+          reviewable({ id: "c.md", repo: "/repos/p2" }),
           issue({ id: "d.md", status: "done", repo: "/repos/p2" }),
         ]),
       },
@@ -192,7 +222,7 @@ describe("sweepFrontier — reviewer edge", () => {
         prdDir: "/root/p",
         view: view([
           issue({ id: "impl.md", status: "ready-for-agent", repo: "/repos/app" }),
-          issue({ id: "rev.md", status: "ready-for-review", repo: "/repos/app" }),
+          reviewable({ id: "rev.md" }),
         ]),
       },
     ]);
