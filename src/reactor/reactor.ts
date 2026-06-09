@@ -1,4 +1,4 @@
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { writeStatus } from "../issueFile.js";
 import { readDispatchView } from "../dispatch/reader.js";
 import { runDispatch, type FailureRecord } from "../dispatch/dispatch.js";
@@ -130,13 +130,20 @@ function readPrds(root: string): PrdInput[] {
  *
  * Two failed-set integrations sit around that unchanged edge:
  *
- * - **Subtract.** Drop any `spawn` entry whose `(issueId, implementor)` is
- *   already recorded, so an Issue rolled back by an earlier failed launch — still
+ * - **Subtract.** Drop any `spawn` entry whose `(path, implementor)` is already
+ *   recorded, so an Issue rolled back by an earlier failed launch — still
  *   `ready-for-agent` on disk — is not re-spawned this pass.
  * - **Record.** Wrap `logFailure` so the same record the edge appends to the
- *   durable log also lands in the failed-set, keyed by its `issueId` and `edge`.
- *   The wrap records first, then delegates; both are best-effort and the
- *   delegate already never throws.
+ *   durable log also lands in the failed-set. The wrap records first, then
+ *   delegates; both are best-effort and the delegate already never throws.
+ *
+ * Both sides key the set by the Issue's *full path* (`prdDir/filename`), not its
+ * bare filename: the Reactor sweeps across every PRD, and Issue filenames are
+ * only unique within a PRD, so a bare-filename key would let a failure in one
+ * PRD suppress a same-named Issue in another. The failure record carries only
+ * the filename, so the wrap re-joins it with this loop's `prdDir` — which is
+ * exactly `issue.path` (reader builds `path` as `prdDir/filename`), so the two
+ * sides agree.
  */
 function dispatchEligible(
   prds: readonly PrdInput[],
@@ -158,7 +165,7 @@ function dispatchEligible(
         }),
       spawn: deps.spawn,
       logFailure: (record) => {
-        failed.record(record.issueId, record.edge);
+        failed.record(join(prdDir, record.issueId), record.edge);
         deps.logFailure(record);
       },
     });
@@ -167,9 +174,10 @@ function dispatchEligible(
 
 /**
  * Subtract the failed-set from one PRD's frontier: drop every `spawn`-classified
- * entry whose implementor edge has already failed this session. Non-`spawn`
- * entries pass through untouched — `runDispatch` ignores them anyway, and
- * keeping them keeps the frontier shape intact for any future caller.
+ * entry whose implementor edge has already failed this session, keyed by the
+ * Issue's full path so the suppression is per-PRD (see {@link dispatchEligible}).
+ * Non-`spawn` entries pass through untouched — `runDispatch` ignores them anyway,
+ * and keeping them keeps the frontier shape intact for any future caller.
  */
 function subtractFailed(
   frontier: readonly FrontierEntry[],
@@ -178,6 +186,6 @@ function subtractFailed(
   return frontier.filter(
     (e) =>
       e.classification !== "spawn" ||
-      !failed.has(e.issue.id, "implementor"),
+      !failed.has(e.issue.path, "implementor"),
   );
 }

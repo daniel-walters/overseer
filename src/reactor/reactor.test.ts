@@ -199,24 +199,58 @@ describe("createReactor", () => {
     expect(deps.failures).toHaveLength(1);
   });
 
+  it("suppression is per-PRD: a failure does not suppress a same-named Issue in another PRD", () => {
+    // Two PRDs with an identically-named Issue file. Issue filenames are only
+    // unique within a PRD, but the Reactor sweeps across all PRDs — so a failure
+    // in alpha must not suppress beta's distinct Issue of the same filename.
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    writePrd(root, "beta", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/beta" }),
+    });
+
+    // alpha's spawn fails; beta's would succeed.
+    const deps = recordingDeps({
+      spawn: (repo, prompt) => {
+        if (repo === "/repos/alpha") throw new Error("alpha is broken");
+        deps.spawns.push({ repo, prompt });
+      },
+    });
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+    // beta spawned on the first pass; alpha failed and was recorded.
+    expect(deps.spawns.map((s) => s.repo)).toEqual(["/repos/beta"]);
+    expect(deps.failures).toHaveLength(1);
+
+    // beta finished its work (flipped off ready-for-agent), so only alpha would
+    // re-spawn — but alpha is suppressed. A second pass attempts nothing new.
+    reactor.reconcile();
+    expect(deps.spawns.map((s) => s.repo)).toEqual(["/repos/beta"]);
+  });
+
   it("records the spawn failure per-edge, leaving the same Issue's reviewer edge free", () => {
     writePrd(root, "alpha", {
       "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
     });
 
-    const failed: { issueId: string; edge: string }[] = [];
+    const failed: { issueKey: string; edge: string }[] = [];
     const deps = recordingDeps({
       spawn: () => {
         throw new Error("boom");
       },
       failedSet: {
-        record: (issueId, edge) => failed.push({ issueId, edge }),
+        record: (issueKey, edge) => failed.push({ issueKey, edge }),
         has: () => false, // no suppression, so we observe the record() call only
       },
     });
     createReactor(root, deps).reconcile();
 
-    expect(failed).toEqual([{ issueId: "001-go.md", edge: "implementor" }]);
+    // Keyed by full path (prdDir/filename), under the implementor edge.
+    expect(failed).toEqual([
+      { issueKey: join(root, "alpha", "001-go.md"), edge: "implementor" },
+    ]);
   });
 
   it("retries a previously-failed spawn on a fresh reactor instance (session-scoped)", () => {
