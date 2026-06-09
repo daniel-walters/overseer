@@ -108,12 +108,14 @@ Canonical values: `backlog`, `ready-for-human`, `ready-for-agent`, `in-progress`
 
 ### Status lifecycle {#status-lifecycle}
 
-An Issue advances through two structurally identical **awaiting → active** handoffs, each owned by a trigger (a keybind today; optionally the reactor later) that flips the awaiting status to the active one *before* spawning an agent — the flip is the idempotency lock (see [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)):
+An Issue advances through two structurally identical **awaiting → active** handoffs, each owned by a trigger (a keybind, or the [Reactor](#reactor)) that flips the awaiting status to the active one *before* spawning an agent — the flip is the idempotency lock (see [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)):
 
 | Phase | Awaiting (frontier) | Active | Agent |
 | --- | --- | --- | --- |
 | Implementation | `ready-for-agent` | `in-progress` | implementor |
 | Review | `ready-for-review` | `in-review` | reviewer |
+
+These are the **two — and only two — spawn edges.** Every other transition is either written by the spawned agent itself (`in-progress → ready-for-review` by the implementor; `in-review → done`/`human-review` by the reviewer) or is a deliberate human gate (`backlog → ready-*` authoring/triage; `human-review → done`). A trigger only ever exists on these two edges, because a trigger is precisely "flip an awaiting status, then spawn."
 
 The implementor agent stops at **`ready-for-review`** (it does *not* write `in-review` — that refines [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md), which predates the column split). In the *same* edit that flips to `ready-for-review`, the implementor records its **worktree path and branch** on the Issue frontmatter (and a [Deviation](#deviation), if it strayed) — the review trigger flips `ready-for-review → in-review`, and the reviewer reads the worktree to check out and review, and the branch to merge. These are recorded, never derived: `claude --bg` worktree/branch names are random and uncontrollable (see [ADR 0006](./docs/adr/0006-issues-carry-their-worktree-and-branch.md)).
 
@@ -137,7 +139,7 @@ So a human only ever sees *better* code (AI cleaned it first), and the riskiest 
 
 **The review flow is also what unblocks the dependency graph.** Blockers clear only on `done` (see [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)), and `done` was previously unreachable — which is why dispatch was "single-wave today." With review→merge→`done` in place, completing one Issue can unblock its siblings. The *re-dispatch* of those newly-unblocked Issues is still manual (`d`) until the reactor lands.
 
-`human-review` has a **single exit: `done`**. There is no rework status and no bounce-back-to-agent path in v1 — the human resolves whatever sent the Issue here *in place* (fixing by hand as needed within the worktree), then runs the merge skill. A rejected agent attempt is never re-dispatched; the human finishes it. (A "rework → `ready-for-agent`" path is a possible fast-follow once the manual version's friction is felt.)
+`human-review` has a **single exit: `done`**. There is no rework status and no bounce-back-to-agent path — once an Issue reaches `human-review` it belongs to the human until it is `done`. The human resolves whatever sent the Issue here *in place* (fixing by hand as needed within the worktree), then runs the merge skill. A rejected agent attempt is never re-dispatched.
 
 ### PRD status (derived) {#prd-status-derived}
 
@@ -148,6 +150,24 @@ A PRD has **no stored status** — `prd.md` carries no `status` field. The board
 - otherwise (all Issues `backlog`/`ready-*`, **or zero Issues**) → **backlog**
 
 A freshly created PRD with no Issues is **backlog** — `done` requires at least one Issue, all done. A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never Unsorted**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
+
+## Reactor {#reactor}
+
+The **Reactor** is the in-process automation that drives the pipeline forward without a human pressing a key for every wave. A human kicks a PRD off once with `d` ([dispatch](#interaction-v1)); from then on the Reactor takes over, auto-spawning agents on the two [spawn edges](#status-lifecycle) until the PRD's work is exhausted. It runs **in-process, only while the board is open** ([ADR 0005](./docs/adr/0005-review-reactor-runs-in-process-only.md)), and is **global and always-on** in v1 (a toggle is a future idea).
+
+**What it spawns.** On the same two edges a keybind drives — never a third:
+- **Implementor** for any `ready-for-agent` Issue whose `blocked_by` blockers are all `done` (the re-dispatch the [Review outcome](#review-outcome) was building toward — completing one Issue unblocks its siblings).
+- **Reviewer** for any `ready-for-review` Issue (the auto-review that `r` does by hand).
+
+**Level-triggered, no transition detection.** The Reactor is a step appended to the existing watcher → debounce → full re-scan callback ([Live update](#live-update)): after each rebuild it **reconciles** both frontiers and spawns whatever is eligible *right now*, reading only the on-disk status — never diffing, never tracking "what changed." It needs no transition detection because the same level-triggered model the board uses applies: an Issue is eligible iff its status (and its blockers' statuses) say so. The Reactor **feeds itself** — a spawn (or an agent finishing) writes a status to disk, which fires another re-scan, which reconciles again — so one `d` cascades through the whole dependency graph with no timer and no polling.
+
+**Idempotency: flip before spawn.** Exactly as the keybinds do, the Reactor flips the awaiting status to the active one (`ready-for-agent → in-progress`, `ready-for-review → in-review`) *before* spawning. The flip is the lock: the moment it lands the Issue leaves the frontier, so overlapping reconcile passes can never spawn the same Issue twice. A **re-entrancy guard** (skip a reconcile while one is already running) is added for clean logs, not correctness — the flip already guarantees no double-spawn.
+
+**No spawn cap.** Total spawns are bounded by the PRD's Issue count — every spawn consumes the `ready-*` status that made the Issue eligible, and flip-before-spawn prevents re-pickup, so there is no cycle that re-spawns an Issue. Burst width (a wide PRD fanning out many agents at once) is identical to what `d` already produces and is accepted, not capped ([ADR 0005](./docs/adr/0005-review-reactor-runs-in-process-only.md)).
+
+**Terminal failure: rollback + session suppression.** When a spawn *fails to launch* (transient: bad binary, git hiccup, FS race), the status rolls back to its awaiting value — the same best-effort rollback the keybinds do — and the failure is appended to the durable log. To stop the level-triggered loop from immediately re-picking-up the rolled-back Issue and retrying forever, the Reactor holds an **in-memory failed-set, keyed by `(Issue, edge)`**, and subtracts it from each frontier. The set is **session-scoped**: closing and re-opening the board clears it and retries — accepted, because these failures are transient and re-opening is the natural "I fixed my environment, try again" gesture. A genuinely permanent failure therefore re-attempts once per session, bounded and logged. A spawn failure is **never** routed to `human-review` — that queue is for Issues where *work happened and needs human judgment* ([Review outcome](#review-outcome)), not for launches that never started; routing failures there would resurrect the rejected rework path.
+
+**Visibility.** The Reactor is **visually invisible** in v1 — the live board already tells the story through cards moving on their own, and all diagnostics (spawn failures, suppression) go to the durable failure log. Surfacing Reactor state in the UI (e.g. a marker on a suppressed Issue) is a future idea.
 
 ## View
 
