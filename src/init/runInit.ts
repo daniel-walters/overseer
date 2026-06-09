@@ -29,7 +29,7 @@ function skillsTarget(home: string): string {
 }
 
 /** The default root a freshly-bootstrapped config points at. */
-const DEFAULT_ROOT = "~/overseer";
+const DEFAULT_ROOT = "~/overseer-board";
 
 /**
  * Thin onboarding orchestrator for `overseer init`.

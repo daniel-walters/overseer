@@ -9,7 +9,7 @@ export interface EnsureConfigOptions {
   configPath?: string;
   /** Home directory used to expand a leading `~` in the default root. */
   home?: string;
-  /** Root path to write into a freshly-bootstrapped config. Defaults to `~/overseer`. */
+  /** Root path to write into a freshly-bootstrapped config. Defaults to `~/overseer-board`. */
   defaultRoot?: string;
 }
 
@@ -39,7 +39,7 @@ export function ensureConfig(
   const home = options.home ?? homedir();
   const configPath =
     options.configPath ?? join(home, ".config", "overseer", "config.toml");
-  const defaultRoot = options.defaultRoot ?? "~/overseer";
+  const defaultRoot = options.defaultRoot ?? "~/overseer-board";
 
   if (existsSync(configPath)) {
     return { created: false, configPath };
