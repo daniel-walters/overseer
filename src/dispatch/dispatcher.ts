@@ -1,7 +1,7 @@
 import { basename, join } from "node:path";
 import { computeFrontier, type FrontierEntry } from "./frontier.js";
 import { readDispatchView, type DispatchView } from "./reader.js";
-import { writeStatus } from "./statusWriter.js";
+import { writeStatus } from "../issueFile.js";
 import { runDispatch, type FailureRecord } from "./dispatch.js";
 import { featureBranchName, type GitSeam } from "./gitSetup.js";
 import { buildImplementorPrompt } from "./implementorPrompt.js";

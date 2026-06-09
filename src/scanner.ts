@@ -1,8 +1,9 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import matter from "gray-matter";
+import { FIELD, readString, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
+  placeStatus,
   type Board,
   type PRD,
   type Issue,
@@ -47,8 +48,8 @@ function scanPrd(dir: string, dirName: string): PRD | null {
   }
 
   const { data } = safeMatter(raw);
-  const title = typeof data.title === "string" ? data.title : dirName;
-  const { lane, readyFor } = placeStatus(data.status);
+  const title = readString(data, FIELD.title) ?? dirName;
+  const { lane, readyFor } = placeOrUnsorted(data[FIELD.status]);
   const issues = scanIssues(dir);
 
   return readyFor === undefined
@@ -73,9 +74,8 @@ function scanIssues(dir: string): Issue[] {
 /** Parse one Issue file. Identity is the filename; title falls back to the slug. */
 function scanIssue(path: string, fileName: string): Issue {
   const { data } = safeMatter(readFileSync(path, "utf8"));
-  const title =
-    typeof data.title === "string" ? data.title : slugFromFileName(fileName);
-  const { lane, readyFor } = placeStatus(data.status);
+  const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
+  const { lane, readyFor } = placeOrUnsorted(data[FIELD.status]);
 
   const issue: Issue = { id: fileName, title, lane };
   // A routing badge belongs only on a ready card; an escalation reason only on a
@@ -85,7 +85,7 @@ function scanIssue(path: string, fileName: string): Issue {
     readyFor === undefined ? issue : { ...issue, readyFor };
 
   if (lane !== "human-review") return withReadyFor;
-  const humanReviewReason = parseHumanReviewReason(data.human_review_reason);
+  const humanReviewReason = parseHumanReviewReason(data[FIELD.humanReviewReason]);
   return humanReviewReason === undefined
     ? withReadyFor
     : { ...withReadyFor, humanReviewReason };
@@ -104,20 +104,6 @@ function parseHumanReviewReason(value: unknown): HumanReviewReason | undefined {
 }
 
 /**
- * Parse frontmatter, treating an unparseable file as having none — a single
- * malformed Issue or PRD (e.g. an agent-written `deviation:` whose value
- * contains an unquoted `": "`) degrades to the Unsorted lane instead of throwing
- * out of {@link scanBoard} and crashing the live board on the next watch event.
- */
-function safeMatter(raw: string): { data: { [key: string]: unknown } } {
-  try {
-    return { data: matter(raw).data };
-  } catch {
-    return { data: {} };
-  }
-}
-
-/**
  * The display fallback for an Issue with no `title`: the filename with its
  * `NNN-` sort prefix and `.md` extension stripped (`007-session-tokens.md`
  * ⇒ `session-tokens`).
@@ -127,23 +113,10 @@ function slugFromFileName(fileName: string): string {
 }
 
 /**
- * Map an authored status string to its lane and, while ready, its routing
- * badge. Unknown or missing status ⇒ the "unsorted" lane (never dropped).
+ * Place a card by its authored status, applying the scanner's fail-safe: an
+ * unknown or missing status (where {@link placeStatus} returns `undefined`)
+ * lands the card in the leftmost `unsorted` lane rather than being dropped.
  */
-function placeStatus(status: unknown): { lane: Lane; readyFor?: ReadyFor } {
-  switch (status) {
-    case "backlog":
-    case "in-progress":
-    case "ready-for-review":
-    case "in-review":
-    case "human-review":
-    case "done":
-      return { lane: status };
-    case "ready-for-human":
-      return { lane: "ready", readyFor: "human" };
-    case "ready-for-agent":
-      return { lane: "ready", readyFor: "agent" };
-    default:
-      return { lane: "unsorted" };
-  }
+function placeOrUnsorted(status: unknown): { lane: Lane; readyFor?: ReadyFor } {
+  return placeStatus(status) ?? { lane: "unsorted" };
 }
