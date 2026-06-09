@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 import React from "react";
 import { render } from "ink";
+import meow from "meow";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { loadConfig, ConfigError } from "./config.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
@@ -8,20 +11,36 @@ import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
+import { runInit } from "./init/runInit.js";
+
+const HELP = `
+  Usage
+    $ overseer            Render the live kanban board
+    $ overseer init       Install bundled skills into the global Claude skills dir
+
+  Options
+    --help                Show this help
+    --version             Show the installed version
+`;
+
+/** Print a user-facing error and exit non-zero — never returns. */
+function fail(message: string): never {
+  process.stderr.write(`overseer: ${message}\n`);
+  process.exit(1);
+}
 
 /**
- * Thin wiring: load config → eager first `scanBoard` → render a {@link LiveApp}
- * that re-scans and re-renders on every debounced filesystem change, tearing
- * the watcher down when Ink unmounts.
+ * Load config → eager first `scanBoard` → render a {@link LiveApp} that re-scans
+ * and re-renders on every debounced filesystem change, tearing the watcher down
+ * when Ink unmounts.
  */
-function main(): void {
+function runBoard(): void {
   let root: string;
   try {
     root = loadConfig().root;
   } catch (err) {
     if (err instanceof ConfigError) {
-      process.stderr.write(`overseer: ${err.message}\n`);
-      process.exit(1);
+      fail(err.message);
     }
     throw err;
   }
@@ -50,4 +69,49 @@ function main(): void {
   );
 }
 
-main();
+/**
+ * Thin wiring: parse argv, then branch on the subcommand *before* `loadConfig`,
+ * so `init` works with no config present. With no subcommand, render the board.
+ *
+ * Any filesystem/environment failure from `init` (an unwritable skills dir, a
+ * path occupied by a file, a missing shipped `skills/`) is surfaced as a clean
+ * `overseer: …` message + non-zero exit — the same contract the board path uses
+ * for {@link ConfigError} — rather than an uncaught stack trace.
+ */
+function main(): void {
+  const cli = meow(HELP, { importMeta: import.meta });
+
+  const subcommand = cli.input[0];
+  if (subcommand === "init") {
+    try {
+      runInit({ entryUrl: import.meta.url });
+    } catch (err) {
+      fail(err instanceof Error ? err.message : String(err));
+    }
+    return;
+  }
+  if (subcommand !== undefined) {
+    fail(`unknown command '${subcommand}'. Run 'overseer --help' for usage.`);
+  }
+  runBoard();
+}
+
+/**
+ * Run `main` only when this file is executed directly (the `overseer` bin), not
+ * when it is imported — so importing the module has no argv-parsing, rendering,
+ * or skill-installing side effects. Resolves symlinks (the npm `bin` shim) so
+ * the comparison holds for a globally-installed package.
+ */
+function runningAsScript(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(entry)).href;
+  } catch {
+    return false;
+  }
+}
+
+if (runningAsScript()) {
+  main();
+}
