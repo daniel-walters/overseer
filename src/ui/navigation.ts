@@ -15,10 +15,13 @@ export interface NavState {
   /** Selected Issue index while zoomed into a PRD. */
   readonly issueIndex: number;
   /**
-   * True while the modal dispatch preview is open. A modal state, not a level:
-   * the underlying board selection is kept intact so the dispatch acts on it,
-   * but every normal navigation action is suppressed until the user confirms or
-   * cancels — the selection can't drift out from under the dispatch.
+   * True while a modal preview is open — either the board-level dispatch preview
+   * or the Issue-level review preview. A modal state, not a level: the
+   * underlying selection is kept intact so the action targets it, but every
+   * normal navigation action is suppressed until the user confirms or cancels —
+   * the selection can't drift out from under the dispatch or review. Which
+   * preview is open is App-level data, not nav state; the reducer only tracks
+   * that a modal owns input.
    */
   readonly confirming: boolean;
 }
@@ -40,6 +43,8 @@ export type NavAction =
   | { readonly type: "back" }
   /** Open the modal dispatch preview. Board level only; ignored when zoomed. */
   | { readonly type: "open-preview" }
+  /** Open the modal review preview. Issue level only; ignored at the board. */
+  | { readonly type: "open-review" }
   /** Confirm the dispatch and close the preview. No-op unless confirming. */
   | { readonly type: "confirm" }
   /** Cancel the dispatch and close the preview. No-op unless confirming. */
@@ -61,6 +66,12 @@ export function navReduce(state: NavState, action: NavAction): NavState {
   switch (action.type) {
     case "open-preview": {
       if (state.level !== "board") return state;
+      return { ...state, confirming: true };
+    }
+    case "open-review": {
+      // Review is a deliberate act on one selected Issue, so its preview only
+      // opens while zoomed into a PRD's Issues — never at the board level.
+      if (state.level !== "issues") return state;
       return { ...state, confirming: true };
     }
     case "confirm":

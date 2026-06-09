@@ -3,9 +3,11 @@ import { useApp, useInput } from "ink";
 import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
+import { ReviewPreview } from "./ReviewPreview.js";
 import { navReduce, initialNav } from "./navigation.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
+import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
 
 /**
  * The dispatch seams the App drives, injected so the keypress → preview →
@@ -21,31 +23,52 @@ export interface Dispatcher {
   readonly dispatch: (frontier: readonly FrontierEntry[]) => void;
 }
 
+/**
+ * The review seams the App drives at the Issue level, the deliberate per-Issue
+ * counterpart to {@link Dispatcher}'s per-PRD wave.
+ *
+ * - `readReview` resolves the selected Issue and classifies its reviewability
+ *   for the preview (`undefined` if it vanished from the watched root).
+ * - `review` runs the review over a previewed Issue (flip `ready-for-review →
+ *   in-review`, then spawn the reviewer) — a no-op for an ineligible Issue.
+ */
+export interface Reviewer {
+  readonly readReview: (
+    prdId: string,
+    issueId: string,
+  ) => ReviewPreviewData | undefined;
+  readonly review: (preview: ReviewPreviewData) => void;
+}
+
+/** What the open modal is previewing: a PRD dispatch or a single-Issue review. */
+type ActiveModal =
+  | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
+  | { readonly kind: "review"; readonly preview: ReviewPreviewData };
+
 interface AppProps {
   board: Board;
   /** Wired in production; absent in tests that don't exercise dispatch. */
   dispatcher?: Dispatcher;
+  /** Wired in production; absent in tests that don't exercise review. */
+  reviewer?: Reviewer;
 }
 
 /**
  * The root Ink component. It owns UI state (selection + zoom level + the modal
- * dispatch preview) via the navigation reducer, kept separate from `board` so a
- * live re-scan never clobbers the user's place. Keys drive the reducer; `q`
- * quits, backing out of a zoom first; `d` (board level) opens the dispatch
- * preview, Enter/`y` confirms, `Esc` cancels.
+ * preview) via the navigation reducer, kept separate from `board` so a live
+ * re-scan never clobbers the user's place. Keys drive the reducer; `q` quits,
+ * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
+ * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher }: AppProps) {
+export function App({ board, dispatcher, reviewer }: AppProps) {
   const { exit } = useApp();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
-  // The plan captured when the preview opened — the frontier a confirm
-  // dispatches and the PRD title it renders. Frozen at open time and held
-  // outside the reducer (it's data, not nav) so a live re-scan under the modal
-  // can never re-point the header or the dispatch at a different PRD, nor leave
-  // the modal stranded if its PRD's card disappears from the board.
-  const [preview, setPreview] = useState<{
-    readonly prdTitle: string;
-    readonly frontier: readonly FrontierEntry[];
-  }>({ prdTitle: "", frontier: [] });
+  // The plan captured when a preview opened — the dispatch frontier / review
+  // target a confirm acts on, and what the modal renders. Frozen at open time
+  // and held outside the reducer (it's data, not nav) so a live re-scan under
+  // the modal can never re-point the header or the action at a different
+  // PRD/Issue, nor leave the modal stranded if its card disappears.
+  const [modal, setModal] = useState<ActiveModal | undefined>(undefined);
 
   // Clamp the stored selection against the current board so a shrunk board
   // (after a live refresh) can never leave us pointing past the last card.
@@ -53,12 +76,13 @@ export function App({ board, dispatcher }: AppProps) {
   const selectedPrd = board.prds[boardIndex];
   const issues = selectedPrd?.issues ?? [];
   const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
+  const selectedIssue = issues[issueIndex];
 
   useInput((input, key) => {
     // The modal preview owns input while it is open: confirm, cancel, or quit.
     if (nav.confirming) {
       if (key.return || input === "y") {
-        dispatcher?.dispatch(preview.frontier);
+        confirmModal();
         dispatch({ type: "confirm" });
       } else if (key.escape) {
         dispatch({ type: "cancel" });
@@ -73,11 +97,24 @@ export function App({ board, dispatcher }: AppProps) {
 
     if (input === "d") {
       if (nav.level === "board" && dispatcher && selectedPrd) {
-        setPreview({
+        setModal({
+          kind: "dispatch",
           prdTitle: selectedPrd.title,
           frontier: dispatcher.readFrontier(selectedPrd.id),
         });
         dispatch({ type: "open-preview" });
+      }
+      return;
+    }
+
+    if (input === "r") {
+      if (nav.level === "issues" && reviewer && selectedPrd && selectedIssue) {
+        const preview = reviewer.readReview(selectedPrd.id, selectedIssue.id);
+        // A vanished Issue (raced a deletion) yields no preview — open nothing.
+        if (preview) {
+          setModal({ kind: "review", preview });
+          dispatch({ type: "open-review" });
+        }
       }
       return;
     }
@@ -105,10 +142,24 @@ export function App({ board, dispatcher }: AppProps) {
     }
   });
 
+  /** Act on the frozen modal capture: dispatch a frontier, or review an Issue. */
+  function confirmModal(): void {
+    if (modal?.kind === "dispatch") {
+      dispatcher?.dispatch(modal.frontier);
+    } else if (modal?.kind === "review" && modal.preview.eligibility.reviewable) {
+      // An ineligible Issue's preview is a read-only skip notice: confirm spawns
+      // nothing, it just dismisses (the reviewer would no-op anyway).
+      reviewer?.review(modal.preview);
+    }
+  }
+
   // The modal renders from the frozen capture, not the live board, so it stays
-  // up and correctly labelled even if a re-scan removes its PRD's card.
-  if (nav.confirming) {
-    return <DispatchPreview prdTitle={preview.prdTitle} frontier={preview.frontier} />;
+  // up and correctly labelled even if a re-scan removes its PRD/Issue card.
+  if (nav.confirming && modal?.kind === "dispatch") {
+    return <DispatchPreview prdTitle={modal.prdTitle} frontier={modal.frontier} />;
+  }
+  if (nav.confirming && modal?.kind === "review") {
+    return <ReviewPreview preview={modal.preview} />;
   }
   if (nav.level === "issues" && selectedPrd) {
     return <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />;

@@ -9,6 +9,7 @@ import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
+import { createReviewer } from "./review/reviewer.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 import { runInit } from "./init/runInit.js";
@@ -58,6 +59,10 @@ function runBoard(): void {
     spawn,
     logFailure,
   });
+  // The reviewer reuses the very same `claude --bg` spawn edge — a reviewer is
+  // just another background agent — flipping ready-for-review → in-review and
+  // launching the reviewer in the Issue's repo.
+  const reviewer = createReviewer(root, { spawn, logFailure });
   render(
     <LiveApp
       root={root}
@@ -65,6 +70,7 @@ function runBoard(): void {
       scan={scanBoard}
       watch={watchRoot}
       dispatcher={dispatcher}
+      reviewer={reviewer}
     />,
   );
 }
