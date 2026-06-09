@@ -131,7 +131,7 @@ function readPrds(root: string): PrdInput[] {
  * Two failed-set integrations sit around that unchanged edge:
  *
  * - **Subtract.** Drop any `spawn` entry whose `(issueId, implementor)` is
- *   already recorded, so a Issue rolled back by an earlier failed launch — still
+ *   already recorded, so an Issue rolled back by an earlier failed launch — still
  *   `ready-for-agent` on disk — is not re-spawned this pass.
  * - **Record.** Wrap `logFailure` so the same record the edge appends to the
  *   durable log also lands in the failed-set, keyed by its `issueId` and `edge`.
