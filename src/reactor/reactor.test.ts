@@ -485,4 +485,36 @@ describe("createReactor", () => {
     expect(prompt).toContain("alpha"); // PRD feature branch
     expect(prompt).toContain("reviewer"); // reviewer brief, not implementor
   });
+
+  it("cascades both edges: review reaching done re-dispatches the unblocked sibling", () => {
+    // 002 is blocked by 001. 001 sits in review; once it merges to done, the
+    // Reactor must re-dispatch 002 — with no `r` and no second `d`.
+    writePrd(root, "alpha", {
+      "001-base.md": reviewable("/repos/alpha"),
+      "002-next.md": fm({
+        status: "ready-for-agent",
+        repo: "/repos/alpha",
+        blocked_by: "[001-base.md]",
+      }),
+    });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+    const pass001 = join(root, "alpha", "001-base.md");
+    const pass002 = join(root, "alpha", "002-next.md");
+
+    // Pass 1: 001 gets a reviewer; 002 stays put (its blocker isn't done).
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+    expect(readFileSync(pass001, "utf8")).toContain("status: in-review");
+    expect(readFileSync(pass002, "utf8")).toContain("status: ready-for-agent");
+
+    // The reviewer converges and merges: 001 → done (simulated on disk).
+    writeFileSync(pass001, fm({ status: "done", repo: "/repos/alpha" }));
+
+    // Pass 2: 001's done unblocks 002, so an implementor is dispatched for it.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(2);
+    expect(readFileSync(pass002, "utf8")).toContain("status: in-progress");
+  });
 });
