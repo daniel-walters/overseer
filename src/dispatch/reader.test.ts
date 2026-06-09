@@ -85,6 +85,28 @@ describe("readDispatchView", () => {
     ]);
   });
 
+  it("reads the implementor handoff fields worktree, branch, and deviation", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    const receipt = issueById(view.issues, "004-receipt-email.md");
+    expect(receipt.worktree).toBe(
+      "/Users/daniel/.worktrees/worktree-blue-cat-fox",
+    );
+    expect(receipt.branch).toBe("worktree-blue-cat-fox");
+    expect(receipt.deviation).toBe(
+      "Used a queue instead of inline send to avoid blocking the request.",
+    );
+  });
+
+  it("treats absent worktree, branch, and deviation as undefined", () => {
+    const view = readDispatchView(checkoutFlow);
+
+    const cartTotals = issueById(view.issues, "001-cart-totals.md");
+    expect(cartTotals.worktree).toBeUndefined();
+    expect(cartTotals.branch).toBeUndefined();
+    expect(cartTotals.deviation).toBeUndefined();
+  });
+
   it("reads a scalar blocked_by as a single-entry list rather than dropping it", () => {
     const view = readDispatchView(checkoutFlow);
 

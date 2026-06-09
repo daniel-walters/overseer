@@ -9,7 +9,7 @@ const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 function issue(id: string): DispatchIssue {
-  return { id, title: id, path: `/root/prd/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", body: "" };
+  return { id, title: id, path: `/root/prd/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, body: "" };
 }
 
 function entry(
