@@ -6,6 +6,8 @@ import { featureBranchName, type GitSeam } from "../dispatch/gitSetup.js";
 import { buildImplementorPrompt } from "../dispatch/implementorPrompt.js";
 import { enumeratePrdDirs } from "./prds.js";
 import { sweepImplementorFrontier, type PrdInput } from "./sweep.js";
+import { createFailedSet, type FailedSet } from "./failedSet.js";
+import type { FrontierEntry } from "../dispatch/frontier.js";
 
 /**
  * The I/O seams the Reactor injects into the spawn edge — the *same* three the
@@ -21,6 +23,14 @@ export interface ReactorDeps {
   readonly spawn: (repo: string, prompt: string) => void;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
+  /**
+   * The session-scoped failed-set the Reactor subtracts from each frontier and
+   * records spawn failures into. Optional: the production caller omits it and
+   * each `createReactor` builds its own, which is what makes the set
+   * session-scoped (reopen ⇒ fresh set ⇒ failed spawns retried). Tests inject a
+   * recording fake to observe the suppression.
+   */
+  readonly failedSet?: FailedSet;
 }
 
 /** The in-process automation the live loop drives after every board rebuild. */
@@ -59,19 +69,31 @@ export interface Reactor {
  *   sweep is skipped, and no Reactor code may throw out of the watcher callback
  *   and crash the board. This matches the dispatcher/reviewer contract.
  *
- * This slice covers the implementor edge only; the reviewer auto-spawn and the
- * failed-set suppression build on top in later slices.
+ * **Spawn-failure suppression.** A spawn that fails to launch is rolled back to
+ * `ready-for-agent` and logged by the spawn edge (unchanged) *and* recorded in a
+ * session-scoped {@link FailedSet} keyed by `(issueId, edge)`. The reconcile
+ * subtracts that set from each swept frontier, so a rolled-back Issue — still
+ * `ready-for-agent` on disk — is not re-picked-up and retried forever. The set
+ * is built per instance, so a fresh board (reopen) retries: a permanent failure
+ * re-attempts at most once per session, logged each time, never routed to
+ * `human-review`.
+ *
+ * This slice covers the implementor edge only; once the reviewer auto-spawn
+ * lands, the edge-keyed failed-set covers it with no further change.
  */
 export function createReactor(root: string, deps: ReactorDeps): Reactor {
   /** True while a reconcile is in flight; the re-entrancy guard reads it. */
   let reconciling = false;
+  // Session-scoped: one set per Reactor instance. The production caller omits
+  // `deps.failedSet`, so reopening the board builds a fresh set and retries.
+  const failed = deps.failedSet ?? createFailedSet();
 
   return {
     reconcile(): void {
       if (reconciling) return; // a reconcile is already running ⇒ no-op
       reconciling = true;
       try {
-        dispatchEligible(readPrds(root), deps);
+        dispatchEligible(readPrds(root), deps, failed);
       } finally {
         // Always release the guard, even if a path we believed total threw, so a
         // single bad pass can never wedge the Reactor shut for the session.
@@ -101,15 +123,29 @@ function readPrds(root: string): PrdInput[] {
 }
 
 /**
- * Run the existing `runDispatch` spawn edge over each PRD's swept frontier.
- * `runDispatch` itself takes only the `spawn`-classified entries, flips each off
- * `ready-for-agent` before spawning, and rolls back + logs any post-flip
- * failure — none of which throws — so the loop is total.
+ * Run the existing `runDispatch` spawn edge over each PRD's swept frontier,
+ * minus the failed-set. `runDispatch` itself takes only the `spawn`-classified
+ * entries, flips each off `ready-for-agent` before spawning, and rolls back +
+ * logs any post-flip failure — none of which throws — so the loop is total.
+ *
+ * Two failed-set integrations sit around that unchanged edge:
+ *
+ * - **Subtract.** Drop any `spawn` entry whose `(issueId, implementor)` is
+ *   already recorded, so a Issue rolled back by an earlier failed launch — still
+ *   `ready-for-agent` on disk — is not re-spawned this pass.
+ * - **Record.** Wrap `logFailure` so the same record the edge appends to the
+ *   durable log also lands in the failed-set, keyed by its `issueId` and `edge`.
+ *   The wrap records first, then delegates; both are best-effort and the
+ *   delegate already never throws.
  */
-function dispatchEligible(prds: readonly PrdInput[], deps: ReactorDeps): void {
+function dispatchEligible(
+  prds: readonly PrdInput[],
+  deps: ReactorDeps,
+  failed: FailedSet,
+): void {
   for (const { prdDir, view, frontier } of sweepImplementorFrontier(prds)) {
     const featureBranch = featureBranchName(basename(prdDir));
-    runDispatch(featureBranch, frontier, {
+    runDispatch(featureBranch, subtractFailed(frontier, failed), {
       git: deps.git,
       writeStatus,
       buildPrompt: (issue, repo) =>
@@ -121,7 +157,27 @@ function dispatchEligible(prds: readonly PrdInput[], deps: ReactorDeps): void {
           featureBranch,
         }),
       spawn: deps.spawn,
-      logFailure: deps.logFailure,
+      logFailure: (record) => {
+        failed.record(record.issueId, record.edge);
+        deps.logFailure(record);
+      },
     });
   }
+}
+
+/**
+ * Subtract the failed-set from one PRD's frontier: drop every `spawn`-classified
+ * entry whose implementor edge has already failed this session. Non-`spawn`
+ * entries pass through untouched — `runDispatch` ignores them anyway, and
+ * keeping them keeps the frontier shape intact for any future caller.
+ */
+function subtractFailed(
+  frontier: readonly FrontierEntry[],
+  failed: FailedSet,
+): readonly FrontierEntry[] {
+  return frontier.filter(
+    (e) =>
+      e.classification !== "spawn" ||
+      !failed.has(e.issue.id, "implementor"),
+  );
 }

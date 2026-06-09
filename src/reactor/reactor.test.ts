@@ -171,6 +171,80 @@ describe("createReactor", () => {
     ]);
   });
 
+  it("does not re-spawn an Issue whose spawn just failed, on the next reconcile", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    // First spawn fails ⇒ rolled back to ready-for-agent and recorded.
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0); // the throwing spawn launched nothing
+    expect(deps.failures).toHaveLength(1);
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: ready-for-agent",
+    );
+
+    // The Issue is still ready-for-agent on disk, so the frontier would re-pick
+    // it — but the failed-set suppresses it. A second reconcile is a no-op: no
+    // new spawn attempt, no new failure logged.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+  });
+
+  it("records the spawn failure per-edge, leaving the same Issue's reviewer edge free", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    const failed: { issueId: string; edge: string }[] = [];
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("boom");
+      },
+      failedSet: {
+        record: (issueId, edge) => failed.push({ issueId, edge }),
+        has: () => false, // no suppression, so we observe the record() call only
+      },
+    });
+    createReactor(root, deps).reconcile();
+
+    expect(failed).toEqual([{ issueId: "001-go.md", edge: "implementor" }]);
+  });
+
+  it("retries a previously-failed spawn on a fresh reactor instance (session-scoped)", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    // First instance: spawn fails, Issue suppressed for that session.
+    const failingDeps = recordingDeps({
+      spawn: () => {
+        throw new Error("transient");
+      },
+    });
+    const first = createReactor(root, failingDeps);
+    first.reconcile();
+    first.reconcile();
+    expect(failingDeps.failures).toHaveLength(1); // suppressed after the first
+
+    // A fresh instance (reopen): the environment is fixed and the spawn now
+    // succeeds. The new instance builds a fresh failed-set, so it retries.
+    const healthyDeps = recordingDeps();
+    createReactor(root, healthyDeps).reconcile();
+    expect(healthyDeps.spawns).toHaveLength(1);
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+  });
+
   it("is a no-op when called re-entrantly (reconcile during reconcile)", () => {
     writePrd(root, "alpha", {
       "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
