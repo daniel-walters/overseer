@@ -110,12 +110,24 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
       reconciling = true;
       try {
         for (const swept of sweepFrontier(readPrds(root))) {
-          // The PRD's feature branch — the implementor's worktree base and the
-          // reviewer's merge target — is derived once here and shared by both
-          // edges, so the two can't drift on how it's computed.
-          const featureBranch = featureBranchName(basename(swept.prdDir));
-          dispatchEligible(swept, featureBranch, deps, failed);
-          reviewEligible(swept, featureBranch, deps, failed);
+          // Per-PRD boundary: one PRD's unexpected throw skips that PRD rather
+          // than escaping reconcile() into the unguarded watcher callback and
+          // crashing the board — matching readPrds' per-PRD resilience. The
+          // spawn edges are built total, so this never fires today; it is the
+          // structural backstop that keeps the watcher-callback totality from
+          // resting on every transitive callee staying total forever (e.g. the
+          // recursive cycle-detection in computeFrontier overflowing the stack
+          // on a pathological blocked_by chain). The other PRDs still reconcile.
+          try {
+            // The PRD's feature branch — the implementor's worktree base and the
+            // reviewer's merge target — is derived once here and shared by both
+            // edges, so the two can't drift on how it's computed.
+            const featureBranch = featureBranchName(basename(swept.prdDir));
+            dispatchEligible(swept, featureBranch, deps, failed);
+            reviewEligible(swept, featureBranch, deps, failed);
+          } catch {
+            // Skip this PRD this pass; the next reconcile retries it.
+          }
         }
       } finally {
         // Always release the guard, even if a path we believed total threw, so a
