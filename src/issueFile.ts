@@ -129,8 +129,17 @@ export function writeStatus(path: string, status: string): void {
 
 /** Matches a leading frontmatter block delimited by `---` fences. */
 const FRONTMATTER = /^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n)/;
-/** Matches a top-level `status:` line (and its trailing comment) inside it. */
-const STATUS_LINE = /^(status:[ \t]*)(\S.*?)([ \t]*(?:#.*)?)$/m;
+/**
+ * Matches a top-level `status:` line inside it, capturing its value ($2), any
+ * trailing inline comment ($3), and a trailing `\r` ($4) so a CRLF-authored
+ * file is handled. Without the `(\r?)` capture, the line's own `\r` (which `.`
+ * and `\S` exclude, and which the `\n`-anchored `$` sits after) could be matched
+ * by no group: the test would fail and `writeStatus` would fall back to a full
+ * YAML re-dump that drops inline comments and reflows the block. Capturing the
+ * `\r` lets the surgical replacement re-emit it, keeping the line's ending
+ * consistent with the rest of the (CRLF) file.
+ */
+const STATUS_LINE = /^(status:[ \t]*)(\S.*?)([ \t]*(?:#[^\r\n]*)?)(\r?)$/m;
 
 /**
  * Replace the value of an existing top-level `status:` line inside the file's
@@ -148,10 +157,11 @@ function replaceStatusLine(content: string, status: string): string | undefined 
   const close = fm[3]!;
   if (!STATUS_LINE.test(body)) return undefined;
 
-  // Keep any trailing inline comment ($3); swap only the value ($2).
+  // Keep any trailing inline comment ($3) and the line's own `\r` ($4, present
+  // on a CRLF file); swap only the value ($2).
   const newBody = body.replace(
     STATUS_LINE,
-    (_m, key, _value, comment) => `${key}${status}${comment}`,
+    (_m, key, _value, comment, cr) => `${key}${status}${comment}${cr}`,
   );
   const newBlock = `${open}${newBody}${close}`;
   return content.slice(0, fm.index) + newBlock + content.slice(fm.index + block.length);

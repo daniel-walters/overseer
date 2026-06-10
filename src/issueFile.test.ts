@@ -179,4 +179,30 @@ Body.
     expect(after).toContain("status: ready-for-agent");
     expect(after).not.toContain("in-progress");
   });
+
+  it("surgically edits a CRLF file, keeping its line endings, comments, and body", () => {
+    // A Windows-authored Issue: every line ends in CRLF. The trailing \r on the
+    // status line must not defeat the surgical replace and force a full YAML
+    // re-dump (which would drop comments, reflow the block, and rewrite the file
+    // to LF). Only the status value changes; everything else stays byte-for-byte.
+    const original = [
+      "---",
+      "title: Spawnable  # label",
+      "status: ready-for-agent  # waiting on sign-off",
+      "repo: /repos/backend",
+      "---",
+      "",
+      "Body stays byte-for-byte.",
+      "",
+    ].join("\r\n");
+    const path = file("issue.md", original);
+
+    writeStatus(path, "in-progress");
+
+    const after = readFileSync(path, "utf8");
+    expect(after).toBe(original.replace("ready-for-agent", "in-progress"));
+    // The status line's CRLF and inline comment both survived.
+    expect(after).toContain("status: in-progress  # waiting on sign-off\r\n");
+    expect(after).toContain("title: Spawnable  # label\r\n");
+  });
 });
