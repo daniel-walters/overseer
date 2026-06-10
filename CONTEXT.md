@@ -147,9 +147,11 @@ A PRD has **no stored status** — `prd.md` carries no `status` field. The board
 
 - there is **≥ 1 Issue and every Issue is `done`** → **done**
 - otherwise, **any Issue is `in-progress` or later** (`in-progress`, `ready-for-review`, `in-review`, `human-review`, `done`) → **in-progress**
-- otherwise (all Issues `backlog`/`ready-*`, **or zero Issues**) → **backlog**
+- otherwise (all Issues `backlog`/`ready-*`/`Unsorted`, **or zero Issues**) → **backlog**
 
-A freshly created PRD with no Issues is **backlog** — `done` requires at least one Issue, all done. A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never Unsorted**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
+A freshly created PRD with no Issues is **backlog** — `done` requires at least one Issue, all done.
+
+An **Unsorted** Issue (missing/unknown status) counts as **pre-in-progress**: it never promotes the PRD to in-progress, and — not being `done` — it blocks the all-done `done` derivation. So a PRD with `done` + `Unsorted` Issues derives to **in-progress**, not done: an unknown-status Issue can never silently advance *or* complete a PRD. (Derivation reads each Issue's resolved **lane**, so an Unsorted Issue is simply not in the in-progress-or-later set and not equal to `done`.) A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never Unsorted**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
 
 ## Reactor {#reactor}
 

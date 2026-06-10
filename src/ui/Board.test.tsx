@@ -14,16 +14,7 @@ const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
-const HEADINGS = [
-  "Unsorted",
-  "Backlog",
-  "Ready",
-  "In Progress",
-  "Ready for Review",
-  "In Review",
-  "Human Review",
-  "Done",
-];
+const HEADINGS = ["Backlog", "In Progress", "Done"];
 
 /**
  * The column a piece of text lands in, by horizontal offset. Columns are laid
@@ -54,44 +45,32 @@ function columnOf(rawFrame: string, needle: string): string {
 }
 
 describe("BoardView", () => {
-  it("renders the Unsorted column plus the seven fixed columns, left to right", () => {
+  it("collapses to the three board columns — backlog / in-progress / done", () => {
     const { lastFrame } = render(<BoardView board={emptyBoard} />);
     const frame = lastFrame() ?? "";
 
     for (const heading of HEADINGS) {
       expect(frame).toContain(heading);
     }
+    // No Issue-level columns leak into the board level (ADR 0003).
+    for (const absent of ["Unsorted", "Ready", "Review"]) {
+      expect(frame).not.toContain(absent);
+    }
   });
 
-  it("places each PRD card under its lane's column", () => {
+  it("places each PRD card under its derived lane's column", () => {
     const board: Board = {
       prds: [
+        prd({ id: "todo", title: "TodoCard", lane: "backlog" }),
         prd({ id: "auth", title: "AuthCard", lane: "in-progress" }),
-        prd({ id: "lost", title: "LostCard", lane: "unsorted" }),
         prd({ id: "shipped", title: "DoneCard", lane: "done" }),
       ],
     };
 
     const frame = render(<BoardView board={board} />).lastFrame() ?? "";
 
+    expect(columnOf(frame, "TodoCard")).toBe("Backlog");
     expect(columnOf(frame, "AuthCard")).toBe("In Progress");
-    expect(columnOf(frame, "LostCard")).toBe("Unsorted");
     expect(columnOf(frame, "DoneCard")).toBe("Done");
-  });
-
-  it("shows a human/agent badge on a ready card", () => {
-    const board: Board = {
-      prds: [
-        prd({ id: "h", title: "Hman", lane: "ready", readyFor: "human" }),
-        prd({ id: "a", title: "Agnt", lane: "ready", readyFor: "agent" }),
-      ],
-    };
-
-    const frame = render(<BoardView board={board} />).lastFrame() ?? "";
-
-    expect(frame).toContain("🧑");
-    expect(frame).toContain("🤖");
-    expect(columnOf(frame, "Hman")).toBe("Ready");
-    expect(columnOf(frame, "Agnt")).toBe("Ready");
   });
 });

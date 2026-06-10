@@ -20,7 +20,7 @@ export type ReadyFor = "human" | "agent";
  * the two `ready-for-*` values, the routing badge.
  *
  * Everything downstream is derived from this map so the vocabulary lives in one
- * place: the {@link Column}/{@link Lane} types, the render-order {@link LANES}
+ * place: the {@link Column}/{@link Lane} types, the render-order {@link ISSUE_LANES}
  * array, the {@link placeStatus} placement the scanner uses, and (by referencing
  * its keys) the dispatch state machine's write-vocabulary in
  * {@link import("./dispatch/status.js").Status}. A status added here flows to all
@@ -56,10 +56,11 @@ export type Column = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
 export type Lane = Column | "unsorted";
 
 /**
- * The lanes in render order, left to right: Unsorted first (so missing/unknown
- * status is never lost), then the seven fixed columns.
+ * The Issue-level lanes in render order, left to right: Unsorted first (so
+ * missing/unknown status is never lost), then the seven fixed columns. Used by
+ * the PRD-zoom (Issue) kanban.
  */
-export const LANES: readonly Lane[] = [
+export const ISSUE_LANES: readonly Lane[] = [
   "unsorted",
   "backlog",
   "ready",
@@ -69,6 +70,14 @@ export const LANES: readonly Lane[] = [
   "human-review",
   "done",
 ] as const;
+
+/**
+ * The board-level lanes in render order. A PRD has no stored status; its lane is
+ * {@link derivePrdLane}-derived into just these three, so the top-level board
+ * collapses to backlog / in-progress / done (ADR 0003). No Unsorted, ready, or
+ * review columns — a PRD never lands there.
+ */
+export const BOARD_LANES = ["backlog", "in-progress", "done"] as const;
 
 /**
  * Map an authored status string to its lane and, while ready, its routing badge,
@@ -89,6 +98,36 @@ export function placeStatus(
   if (!Object.hasOwn(STATUS_PLACEMENT, status)) return undefined;
   return STATUS_PLACEMENT[status as AuthoredStatus];
 }
+
+/**
+ * Derive a PRD's board-level lane from its Issues (ADR 0003 — a PRD has no
+ * stored status). The board level collapses to three lanes:
+ *
+ * - **done** — ≥ 1 Issue and every Issue is `done`.
+ * - **in-progress** — any Issue is in-progress or later.
+ * - **backlog** — otherwise (all backlog/ready/Unsorted, or zero Issues).
+ *
+ * An **Unsorted** Issue (missing/unknown status) counts as pre-in-progress: it
+ * never promotes the PRD, and — not being `done` — blocks the all-done check, so
+ * a `done` + `Unsorted` PRD derives to in-progress. An unknown-status Issue can
+ * therefore never silently advance *or* complete a PRD.
+ */
+export function derivePrdLane(
+  issues: readonly Issue[],
+): "backlog" | "in-progress" | "done" {
+  if (issues.length > 0 && issues.every((i) => i.lane === "done")) return "done";
+  if (issues.some((i) => IN_PROGRESS_OR_LATER.has(i.lane))) return "in-progress";
+  return "backlog";
+}
+
+/** The lanes that promote a PRD to in-progress (in-progress or later). */
+const IN_PROGRESS_OR_LATER = new Set<Lane>([
+  "in-progress",
+  "ready-for-review",
+  "in-review",
+  "human-review",
+  "done",
+]);
 
 /** Human-readable column headings, keyed by lane. */
 export const LANE_LABELS: Readonly<Record<Lane, string>> = {
@@ -143,10 +182,12 @@ export interface PRD {
   readonly id: string;
   /** Display title: `title` frontmatter, falling back to the directory name. */
   readonly title: string;
-  /** The lane this PRD's card belongs in. */
-  readonly lane: Lane;
-  /** Set only when `lane === "ready"`; drives the human/agent badge. */
-  readonly readyFor?: ReadyFor;
+  /**
+   * The board-level lane this PRD's card belongs in: always one of backlog /
+   * in-progress / done, {@link derivePrdLane}-derived from its Issues. A PRD is
+   * never Unsorted, ready, or in a review lane, so it carries no `readyFor`.
+   */
+  readonly lane: "backlog" | "in-progress" | "done";
   /**
    * The Issues belonging to this PRD, ordered by their `NNN-` filename prefix.
    * Every markdown file in the PRD directory other than `prd.md` is an Issue.

@@ -4,6 +4,7 @@ import { FIELD, readString, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
   placeStatus,
+  derivePrdLane,
   type Board,
   type PRD,
   type Issue,
@@ -49,12 +50,12 @@ function scanPrd(dir: string, dirName: string): PRD | null {
 
   const { data } = safeMatter(raw);
   const title = readString(data, FIELD.title) ?? dirName;
-  const { lane, readyFor } = placeOrUnsorted(data[FIELD.status]);
   const issues = scanIssues(dir);
+  // A PRD carries no stored status (ADR 0003); its lane is derived from its
+  // Issues, collapsing to backlog / in-progress / done.
+  const lane = derivePrdLane(issues);
 
-  return readyFor === undefined
-    ? { id: dirName, title, lane, issues }
-    : { id: dirName, title, lane, readyFor, issues };
+  return { id: dirName, title, lane, issues };
 }
 
 /**

@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { placeStatus, LANES, type Lane } from "./model.js";
+import { placeStatus, derivePrdLane, ISSUE_LANES, type Lane, type Issue } from "./model.js";
+
+/** Build a minimal Issue carrying just the lane the derivation reads. */
+function issue(lane: Lane): Issue {
+  return { id: `${lane}.md`, title: lane, lane };
+}
 
 /**
  * `placeStatus` is the single derived status→lane mapping every reader shares.
@@ -49,7 +54,7 @@ describe("placeStatus", () => {
   });
 
   it("only ever yields lanes that exist in the render order", () => {
-    const lanes = new Set<Lane>(LANES);
+    const lanes = new Set<Lane>(ISSUE_LANES);
     for (const status of [
       "backlog",
       "ready-for-human",
@@ -64,5 +69,42 @@ describe("placeStatus", () => {
       expect(placed).toBeDefined();
       expect(lanes.has(placed!.lane)).toBe(true);
     }
+  });
+});
+
+/**
+ * A PRD carries no stored status (ADR 0003); its board lane is derived from its
+ * Issues at read time, collapsing to backlog / in-progress / done.
+ */
+describe("derivePrdLane", () => {
+  it("derives done when there is at least one Issue and every Issue is done", () => {
+    expect(derivePrdLane([issue("done"), issue("done")])).toBe("done");
+  });
+
+  it("derives in-progress when any Issue is in-progress or later", () => {
+    for (const lane of [
+      "in-progress",
+      "ready-for-review",
+      "in-review",
+      "human-review",
+    ] as const) {
+      expect(derivePrdLane([issue("backlog"), issue(lane)])).toBe("in-progress");
+    }
+  });
+
+  it("derives backlog when Issues are only backlog/ready, or there are none", () => {
+    expect(derivePrdLane([])).toBe("backlog");
+    expect(derivePrdLane([issue("backlog"), issue("ready")])).toBe("backlog");
+  });
+
+  it("treats an Unsorted Issue as pre-in-progress, never advancing the PRD", () => {
+    // Unsorted (unknown status) does not promote to in-progress on its own...
+    expect(derivePrdLane([issue("backlog"), issue("unsorted")])).toBe("backlog");
+  });
+
+  it("treats an Unsorted Issue as not-done, blocking the all-done derivation", () => {
+    // ...and a done + Unsorted PRD is in-progress, not done: an unknown-status
+    // Issue can never silently complete a PRD.
+    expect(derivePrdLane([issue("done"), issue("unsorted")])).toBe("in-progress");
   });
 });

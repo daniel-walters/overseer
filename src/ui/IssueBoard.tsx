@@ -2,7 +2,7 @@ import React from "react";
 import { Box, Text } from "ink";
 import { Column } from "./Column.js";
 import { groupByLane } from "./lanes.js";
-import { LANES, LANE_LABELS } from "../model.js";
+import { ISSUE_LANES, LANE_LABELS } from "../model.js";
 import type { PRD } from "../model.js";
 
 interface IssueBoardProps {
@@ -21,7 +21,7 @@ export function IssueBoard({ prd, selectedIndex }: IssueBoardProps) {
     <Box flexDirection="column">
       <Text bold>{prd.title}</Text>
       <Box flexDirection="row">
-        {LANES.map((lane) => (
+        {ISSUE_LANES.map((lane) => (
           <Column
             key={lane}
             heading={LANE_LABELS[lane]}

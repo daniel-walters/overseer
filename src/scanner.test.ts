@@ -23,12 +23,29 @@ function issueById(issues: readonly Issue[], id: string): Issue {
 }
 
 describe("scanBoard", () => {
-  it("treats a directory containing prd.md as a PRD, reading its title and status", () => {
+  it("treats a directory containing prd.md as a PRD, reading its title", () => {
     const board = scanBoard(boardFixture);
 
     const auth = prdById(board.prds, "auth-system");
     expect(auth.title).toBe("Authentication System");
+  });
+
+  it("derives a PRD's lane from its Issues — in-progress when any is in-progress or later", () => {
+    const board = scanBoard(boardFixture);
+
+    // auth-system has in-progress (and later) Issues, so it derives in-progress
+    // regardless of any status field in prd.md (a PRD has no stored status).
+    const auth = prdById(board.prds, "auth-system");
     expect(auth.lane).toBe("in-progress");
+  });
+
+  it("derives a PRD with no Issues to backlog, ignoring any prd.md status field", () => {
+    const board = scanBoard(boardFixture);
+
+    // billing's prd.md carries `status: ready-for-agent`, but a PRD has no
+    // stored status (ADR 0003) and it has zero Issues, so it derives backlog.
+    const billing = prdById(board.prds, "billing");
+    expect(billing.lane).toBe("backlog");
   });
 
   it("ignores a directory that has no prd.md", () => {
@@ -42,20 +59,6 @@ describe("scanBoard", () => {
 
     const prd = prdById(board.prds, "no-title-dir-name");
     expect(prd.title).toBe("no-title-dir-name");
-  });
-
-  it("puts a PRD with missing status in the unsorted lane", () => {
-    const board = scanBoard(boardFixture);
-
-    const prd = prdById(board.prds, "no-status-prd");
-    expect(prd.lane).toBe("unsorted");
-  });
-
-  it("puts a PRD with an unrecognized status in the unsorted lane", () => {
-    const board = scanBoard(boardFixture);
-
-    const prd = prdById(board.prds, "bad-status-prd");
-    expect(prd.lane).toBe("unsorted");
   });
 
   it("does not crash the whole scan when one Issue has malformed frontmatter", () => {
@@ -80,12 +83,33 @@ describe("scanBoard", () => {
     expect(issueById(prd.issues, "002-ok.md").lane).toBe("done");
   });
 
-  it("maps a ready-for-agent PRD to the ready lane with an agent badge", () => {
-    const board = scanBoard(boardFixture);
+  it("derives a PRD to done only when it has Issues and all are done", () => {
+    // A throwaway root: an all-done PRD derives done; one with a non-done Issue
+    // does not. (The shared fixture has no all-done PRD.)
+    const root = mkdtempSync(join(tmpdir(), "overseer-derive-"));
 
-    const prd = prdById(board.prds, "billing");
-    expect(prd.lane).toBe("ready");
-    expect(prd.readyFor).toBe("agent");
+    const allDone = join(root, "shipped");
+    mkdirSync(allDone);
+    writeFileSync(join(allDone, "prd.md"), "---\ntitle: Shipped\n---\nbody\n");
+    writeFileSync(join(allDone, "001-a.md"), "---\nstatus: done\n---\nbody\n");
+    writeFileSync(join(allDone, "002-b.md"), "---\nstatus: done\n---\nbody\n");
+
+    const board = scanBoard(root);
+    expect(prdById(board.prds, "shipped").lane).toBe("done");
+  });
+
+  it("derives a done + Unsorted PRD to in-progress, never silently to done", () => {
+    // An unknown-status Issue counts as pre-in-progress: it blocks the all-done
+    // derivation, so the PRD lands in-progress, not done.
+    const root = mkdtempSync(join(tmpdir(), "overseer-derive-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-done.md"), "---\nstatus: done\n---\nbody\n");
+    writeFileSync(join(dir, "002-mystery.md"), "---\nstatus: marinating\n---\nbody\n");
+
+    const board = scanBoard(root);
+    expect(prdById(board.prds, "feature").lane).toBe("in-progress");
   });
 });
 
