@@ -1,9 +1,10 @@
 import React, { useReducer, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "ink";
 import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
+import { HelpModal } from "./HelpModal.js";
 import { navReduce, initialNav } from "./navigation.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
@@ -76,6 +77,12 @@ interface AppProps {
  */
 export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
   const { exit } = useApp();
+  // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
+  // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
+  // pinned to the window height with the status line pushed to the bottom row.
+  // Overflow beyond the viewport clips — the alt screen has no scrollback, and
+  // in-app scrolling is a logged follow-up (docs/ideas.md).
+  const { rows } = useWindowSize();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
   // The plan captured when a preview opened — the dispatch frontier / review
   // preview a confirm acts on, and what the modal renders. Frozen at open time
@@ -86,6 +93,12 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
   // alone drives the render — `nav.confirming` only owns input/navigation
   // suppression, the two are never read together.
   const [modal, setModal] = useState<ActiveModal | undefined>(undefined);
+  // The help modal's open state, kept separate from `modal` — help is a passive
+  // reference card with no frozen capture and no confirm side-effect, so it does
+  // not belong in the action-preview `ActiveModal` union. The `nav.confirming`
+  // guard below suppresses `?` while a preview is up, so help and a preview are
+  // never both open: at most one modal on screen, ever.
+  const [showHelp, setShowHelp] = useState(false);
 
   // Clamp the stored selection against the current board so a shrunk board
   // (after a live refresh) can never leave us pointing past the last card.
@@ -96,6 +109,19 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
   const selectedIssue = issues[issueIndex];
 
   useInput((input, key) => {
+    // The help modal owns input while it is open: ? or Esc close it, q closes it
+    // and quits, everything else is swallowed (so a stray key while reading help
+    // never leaks to the board underneath).
+    if (showHelp) {
+      if (input === "?" || key.escape) {
+        setShowHelp(false);
+      } else if (input === "q") {
+        setShowHelp(false);
+        exit();
+      }
+      return;
+    }
+
     // The modal preview owns input while it is open: confirm, cancel, or quit.
     if (nav.confirming) {
       if (key.return || input === "y") {
@@ -136,6 +162,14 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
           dispatch({ type: "open-review" });
         }
       }
+      return;
+    }
+
+    if (input === "?") {
+      // Opens the keybind reference, at either level. Reached only past the
+      // nav.confirming guard above, so an open preview suppresses it — help and a
+      // preview are never both up.
+      setShowHelp(true);
       return;
     }
 
@@ -191,6 +225,12 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
   if (modal?.kind === "review") {
     return <ReviewPreview preview={modal.preview} />;
   }
+  // The help modal is a full-screen takeover like the previews above. It can only
+  // be open when no preview is (the nav.confirming guard blocks `?` under one), so
+  // ordering against the preview returns is moot — at most one is ever set.
+  if (showHelp) {
+    return <HelpModal />;
+  }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)
   const view =
@@ -199,27 +239,45 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
     ) : (
       <BoardView board={board} selectedIndex={boardIndex} />
     );
+  // The view sits in a flex-shrinking region that clips under overflow; the
+  // status line is held at fixed size (flexShrink={0}) so it is never the thing
+  // pushed off-screen. Without this, a board taller than the viewport consumes
+  // every row and the trailing Spacer + status line clip past the bottom edge —
+  // taking the auto-run indicator with them, which ADR 0007 requires stay legible.
   return (
-    <Box flexDirection="column">
-      {view}
-      <StatusLine autoRun={autoRun} />
+    <Box flexDirection="column" height={rows}>
+      <Box flexDirection="column" flexShrink={1} overflow="hidden">
+        {view}
+      </Box>
+      <Spacer />
+      <Box flexShrink={0}>
+        <StatusLine autoRun={autoRun} />
+      </Box>
     </Box>
   );
 }
 
 /**
- * The persistent board status line. Carries the auto-run indicator — always
- * shown, because an idle on-Reactor and an off one both leave the board still,
- * so the off state must be legible (ADR 0007). When no auto-run seam is wired
- * (board-only tests) it renders nothing. "auto-run", never "reactor".
+ * The persistent board status line: the auto-run indicator on the left, the
+ * `? help` discovery hint pushed to the right by a {@link Spacer}.
+ *
+ * The auto-run indicator is always shown when its seam is wired — an idle
+ * on-Reactor and an off one both leave the board still, so the off state must be
+ * legible (ADR 0007). When no seam is wired (board-only tests) its half is empty.
+ * The `? help` hint, by contrast, is *always* shown regardless of the auto-run
+ * seam: it is what makes `?` discoverable, so it must not hinge on a Reactor being
+ * present. "auto-run", never "reactor".
  */
 function StatusLine({ autoRun }: { autoRun?: AutoRun }) {
-  if (!autoRun) return null;
   return (
     <Box>
-      <Text dimColor>
-        {autoRun.enabled ? "▶ auto-run on" : "⏸ auto-run off"}
-      </Text>
+      {autoRun ? (
+        <Text dimColor>
+          {autoRun.enabled ? "▶ auto-run on" : "⏸ auto-run off"}
+        </Text>
+      ) : null}
+      <Spacer />
+      <Text dimColor>? help</Text>
     </Box>
   );
 }

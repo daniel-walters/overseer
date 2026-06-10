@@ -436,6 +436,193 @@ describe("App review", () => {
   });
 });
 
+describe("App full screen", () => {
+  /** Count the rendered rows in a frame (Ink emits one line per terminal row). */
+  const rowCount = (frame: string): number => frame.split("\n").length;
+
+  it("fills the viewport height, padding a short board to the terminal rows", () => {
+    // A short board (two PRDs) in a 30-row terminal. Inline rendering would emit
+    // only as many rows as the content needs; full-screen fills to the viewport.
+    const { lastFrame } = render(<App board={board} />, 240, 30);
+
+    expect(rowCount(stripAnsi(lastFrame() ?? ""))).toBe(30);
+  });
+
+  it("pins the status line to the bottom row, below the board content", () => {
+    const { lastFrame } = render(
+      <App board={board} autoRun={{ enabled: true, toggle: () => {} }} />,
+      240,
+      30,
+    );
+    const lines = stripAnsi(lastFrame() ?? "").split("\n");
+
+    // The status line sits on the last row, pushed down by the spacer; the board
+    // content is above it (the first PRD card is in the top half).
+    expect(lines[lines.length - 1]).toContain("auto-run on");
+    const authRow = lines.findIndex((l) => l.includes("AuthPRD"));
+    expect(authRow).toBeGreaterThanOrEqual(0);
+    expect(authRow).toBeLessThan(lines.length - 1);
+  });
+
+  it("keeps the status line on screen when the board overflows the viewport", () => {
+    // Many PRDs in a short terminal: content alone exceeds the rows. The status
+    // line must clip the *board*, not itself — the auto-run indicator has to stay
+    // legible however tall the board gets (ADR 0007), so it must never be the
+    // thing pushed off the bottom edge.
+    const tall: Board = {
+      prds: Array.from({ length: 40 }, (_, i) => ({
+        id: `p${i}`,
+        title: `PRD${i}`,
+        lane: "backlog" as const,
+        issues: [],
+      })),
+    };
+    const { lastFrame } = render(
+      <App board={tall} autoRun={{ enabled: true, toggle: () => {} }} />,
+      80,
+      10,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+
+    expect(frame).toContain("auto-run on");
+    expect(frame).toContain("? help");
+  });
+});
+
+describe("App help", () => {
+  it("opens the help modal on ? at the board level", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Keybindings");
+  });
+
+  it("lists every keybind the input handler implements", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    // A drift guard: the help modal is a hand-maintained second copy of the
+    // bindings App implements. Each binding's *action* phrase must appear, so
+    // deleting a row trips the test — asserting bare keys like "d"/"q" would not,
+    // since those letters appear elsewhere in the modal regardless of the rows.
+    expect(frame).toContain("Move selection"); // h j k l / arrows
+    expect(frame).toContain("Zoom into a PRD's Issues"); // Enter
+    expect(frame).toContain("Back out to the board"); // Esc
+    expect(frame).toContain("Dispatch a wave"); // d
+    expect(frame).toContain("Review the selected Issue"); // r
+    expect(frame).toContain("Toggle auto-run"); // a
+    expect(frame).toContain("Show this help"); // ?
+    expect(frame).toContain("Quit"); // q
+    // The movement keys, and the context labels that tell you where each works.
+    expect(frame).toContain("h j k l");
+    expect(frame).toContain("(board)");
+    expect(frame).toContain("(issues)");
+    expect(frame).toContain("(both)");
+  });
+
+  it("opens the help modal on ? at the Issue level too", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("?");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Keybindings");
+  });
+
+  it("ignores ? while a dispatch preview is open (no modal stacking)", async () => {
+    const dispatcher = {
+      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+    };
+    const { stdin, lastFrame } = render(
+      <App board={board} dispatcher={dispatcher} />,
+    );
+
+    stdin.write("d"); // open the dispatch preview
+    await tick();
+    stdin.write("?"); // swallowed by the preview — must not stack help over it
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch");
+    expect(frame).not.toContain("Keybindings");
+  });
+
+  it("closes the help modal on ? (toggle off)", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?"); // open
+    await tick();
+    stdin.write("?"); // toggle closed
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("Keybindings");
+    expect(frame).toContain("AuthPRD"); // back on the board
+  });
+
+  it("closes the help modal on Esc", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Keybindings");
+  });
+
+  it("closes the help modal and quits on q", async () => {
+    const { stdin, frames, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?");
+    await tick();
+    stdin.write("q"); // q closes help AND quits everywhere
+    await tick();
+
+    // Help is gone and the app unmounted: further input produces no new frame.
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Keybindings");
+    const framesAfterQuit = frames.length;
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(frames.length).toBe(framesAfterQuit);
+  });
+
+  it("swallows other keys while help is open (no leak to the board)", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?"); // open help on AuthPRD (first card)
+    await tick();
+    stdin.write(ARROW_DOWN); // would move selection if it leaked through
+    await tick();
+    stdin.write(ENTER); // would zoom if it leaked through
+    await tick();
+    stdin.write("?"); // close help
+    await tick();
+
+    // Selection never moved and we never zoomed: still board level, still AuthPRD.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD");
+    expect(frame).toContain("BillPRD"); // still board level (not zoomed)
+    expect(frame).not.toContain("Login"); // never zoomed into Issues
+  });
+
+  it("shows the ? help hint on the status line even with no auto-run wired", () => {
+    // The hint's discoverability must not depend on the auto-run seam — it shows
+    // whenever the board is up, at both levels (the status line is shared).
+    const { lastFrame } = render(<App board={board} />);
+    expect(stripAnsi(lastFrame() ?? "")).toContain("? help");
+  });
+});
+
 describe("App auto-run", () => {
   /** An auto-run seam whose toggle is a spy, defaulting to enabled. */
   function spyAutoRun(enabled = true) {
@@ -476,6 +663,15 @@ describe("App auto-run", () => {
     await tick();
 
     expect(autoRun.toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the auto-run indicator and the ? help hint together", () => {
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(true)} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("auto-run on");
+    expect(frame).toContain("? help");
   });
 
   it("ignores `a` while a modal is open", async () => {

@@ -12,15 +12,21 @@ import { render as inkRender } from "ink";
  * user would run the board in, which is the point.
  */
 const DEFAULT_COLUMNS = 240;
+// A tall default so content-sized layouts are never clipped by the viewport in
+// tests that don't care about height; the full-screen tests pass an explicit
+// `rows` to assert the board fills (and is bounded by) the terminal height.
+const DEFAULT_ROWS = 200;
 
 class Stdout extends EventEmitter {
   readonly columns: number;
+  readonly rows: number;
   frames: string[] = [];
   private _lastFrame = "";
 
-  constructor(columns: number) {
+  constructor(columns: number, rows: number) {
     super();
     this.columns = columns;
+    this.rows = rows;
   }
 
   write = (frame: string): void => {
@@ -58,8 +64,9 @@ class Stdin extends EventEmitter {
 export function renderForTest(
   tree: ReactElement,
   columns: number = DEFAULT_COLUMNS,
+  rows: number = DEFAULT_ROWS,
 ) {
-  const stdout = new Stdout(columns);
+  const stdout = new Stdout(columns, rows);
   const stdin = new Stdin();
   const instance = inkRender(tree, {
     stdout: stdout as unknown as NodeJS.WriteStream,

@@ -203,7 +203,10 @@ Overseer is a **read-only viewer** — it never writes the PRD/Issue files; edit
 - `d` — **dispatch**, at *board level*: spawns an implementor for every eligible Issue in the selected PRD (a whole wave at once).
 - `r` — **review**, at *Issue level* (zoom): spawns a reviewer for the single selected `ready-for-review` Issue. Deliberately per-Issue, not per-PRD like `d` — dispatch fires a wave, but review is a deliberate act on one Issue's own worktree.
 - `a` — toggle **[auto-run](#auto-run)** on/off, at *either* level: the global switch for the Reactor's auto-spawning. Unlike `d`/`r` it is not level-scoped (it acts on nothing under the cursor — it's a global switch).
+- `?` — show a **keybind reference** modal, at *either* level: a passive full-screen card listing every keybind with its context. Dismissed by `?`/`Esc` (`q` closes it and quits). Suppressed while a dispatch/review preview is open (at most one modal on screen). A persistent `? help` hint on the status line keeps it discoverable.
 - **No issue detail/body view in v1** — cards show title + status badge only. Reading an Issue's markdown body is a fast-follow.
+
+The board renders **full screen** on the terminal's alternate screen buffer (like vim/htop), sized to fill the viewport with the status line pinned to the bottom row, and restores the prior shell contents on quit. The alt screen has no scrollback, so content exceeding the viewport **clips** — in-app scrolling is a logged follow-up (`docs/ideas.md`).
 
 ## Stack
 

@@ -65,3 +65,27 @@ The AI review loop ships with a hardcoded cap of **3** `/code-review` passes at
 calibrate against, promote both to `config.toml` knobs — a per-board (or eventually
 per-PRD) iteration cap and effort level — rather than baking the v1 defaults in
 forever.
+
+### Viewport scrolling (overflow on the alternate screen)
+
+"Always full screen" (UI Polish part 1) renders the board on the terminal's
+**alternate screen buffer** (à la vim/htop), sized to fill the viewport. The alt
+buffer has **no scrollback** (standard terminal behaviour — Ink's own docs warn of
+it), so when a column has more cards than fit, the overflow is **clipped and
+unreachable** — there is no scroll and no scrollback to recover it. This converts an
+overflow that used to be merely awkward (scroll the terminal) into genuinely hidden
+content on small terminals.
+
+We **knowingly accepted clipping** for part 1 rather than block full-screen on it.
+The follow-up is in-app **viewport scrolling / virtualization** within a column (and
+possibly horizontal paging across columns) so no card is ever unreachable. Until then,
+a small terminal can hide cards with no recourse.
+
+### Central keybind registry
+
+Keybinds are hardcoded inline as `if (input === "…")` branches in `App.tsx`'s
+`useInput`. The `?` help modal (UI Polish part 1) lists them as a **second hardcoded
+copy**, guarded against drift only by a test. A future refactor would lift keybinds
+into a single `{key, label, level}` registry that *both* the input handler and the
+help modal consume, eliminating the drift risk — deferred from part 1 to avoid
+dragging an input-architecture refactor into a polish pass.
