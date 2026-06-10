@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { render } from "ink-testing-library";
 import { LiveApp } from "./LiveApp.js";
 import type { Board } from "../model.js";
+import type { Reactor } from "../reactor/reactor.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -79,5 +80,39 @@ describe("LiveApp", () => {
     // …and the deletion is reflected live: Login's card is gone, OAuth remains.
     expect(frame).not.toContain("Login");
     expect(frame).toContain("OAuth");
+  });
+
+  it("starts with auto-run on and toggles the Reactor off on `a`", async () => {
+    const reactor: Reactor = {
+      reconcile: vi.fn(),
+      setEnabled: vi.fn(),
+    };
+
+    const { stdin, lastFrame } = render(
+      <LiveApp
+        root="/root"
+        initialBoard={makeBoard()}
+        scan={() => makeBoard()}
+        watch={() => () => {}}
+        reactor={reactor}
+      />,
+    );
+
+    // On by default.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auto-run on");
+
+    stdin.write("a");
+    await tick();
+
+    // The Reactor was told to disable, and the indicator flipped.
+    expect(reactor.setEnabled).toHaveBeenCalledWith(false);
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auto-run off");
+
+    stdin.write("a");
+    await tick();
+
+    // Toggling back on re-enables the Reactor (which itself catch-up reconciles).
+    expect(reactor.setEnabled).toHaveBeenCalledWith(true);
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auto-run on");
   });
 });

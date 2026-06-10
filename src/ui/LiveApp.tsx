@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { App, type Dispatcher, type Reviewer } from "./App.js";
 import { useLiveBoard, type UseLiveBoardOptions } from "./useLiveBoard.js";
 
@@ -20,5 +20,33 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  */
 export function LiveApp({ dispatcher, reviewer, ...options }: LiveAppProps) {
   const board = useLiveBoard(options);
-  return <App board={board} dispatcher={dispatcher} reviewer={reviewer} />;
+  // Auto-run state lives here, beside the live loop that owns the Reactor — on by
+  // default, in-memory, dies on unmount (ADR 0007). The `a` keybind flips it; the
+  // flip drives both the indicator (this state) and the Reactor (setEnabled, whose
+  // off→on transition catch-up reconciles). When no Reactor is wired (board-only
+  // tests) the toggle is harmless local state.
+  const [autoRunOn, setAutoRunOn] = useState(true);
+  const autoRun = {
+    enabled: autoRunOn,
+    toggle: () => {
+      // Derive `next` from the actual previous state, not this render's closure,
+      // so two presses buffered into one stdin chunk (both handlers run before a
+      // re-render) each flip rather than collapsing to one. The Reactor side
+      // effect lives in the updater too, so the indicator and the Reactor stay in
+      // lockstep on every flip.
+      setAutoRunOn((prev) => {
+        const next = !prev;
+        options.reactor?.setEnabled(next);
+        return next;
+      });
+    },
+  };
+  return (
+    <App
+      board={board}
+      dispatcher={dispatcher}
+      reviewer={reviewer}
+      autoRun={autoRun}
+    />
+  );
 }

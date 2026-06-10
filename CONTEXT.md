@@ -153,7 +153,9 @@ A freshly created PRD with no Issues is **backlog** — `done` requires at least
 
 ## Reactor {#reactor}
 
-The **Reactor** is the in-process automation that drives the pipeline forward without a human pressing a key for every wave. A human kicks a PRD off once with `d` ([dispatch](#interaction-v1)); from then on the Reactor takes over, auto-spawning agents on the two [spawn edges](#status-lifecycle) until the PRD's work is exhausted. It runs **in-process, only while the board is open** ([ADR 0005](./docs/adr/0005-review-reactor-runs-in-process-only.md)), and is **global and always-on** in v1 (a toggle is a future idea).
+The **Reactor** is the in-process automation that drives the pipeline forward without a human pressing a key for every wave. A human kicks a PRD off once with `d` ([dispatch](#interaction-v1)); from then on the Reactor takes over, auto-spawning agents on the two [spawn edges](#status-lifecycle) until the PRD's work is exhausted. It runs **in-process, only while the board is open** ([ADR 0005](./docs/adr/0005-review-reactor-runs-in-process-only.md)), and is **global** — one Reactor drives every PRD, not per-PRD.
+
+"Reactor" is the *mechanism* — an internal term. The user-facing name for its on/off state is **auto-run** (see [Auto-run](#auto-run)); UI strings say "auto-run," never "reactor."
 
 **What it spawns.** On the same two edges a keybind drives — never a third:
 - **Implementor** for any `ready-for-agent` Issue whose `blocked_by` blockers are all `done` (the re-dispatch the [Review outcome](#review-outcome) was building toward — completing one Issue unblocks its siblings).
@@ -167,7 +169,17 @@ The **Reactor** is the in-process automation that drives the pipeline forward wi
 
 **Terminal failure: rollback + session suppression.** When a spawn *fails to launch* (transient: bad binary, git hiccup, FS race), the status rolls back to its awaiting value — the same best-effort rollback the keybinds do — and the failure is appended to the durable log. To stop the level-triggered loop from immediately re-picking-up the rolled-back Issue and retrying forever, the Reactor holds an **in-memory failed-set, keyed by `(Issue, edge)`**, and subtracts it from each frontier. The set is **session-scoped**: closing and re-opening the board clears it and retries — accepted, because these failures are transient and re-opening is the natural "I fixed my environment, try again" gesture. A genuinely permanent failure therefore re-attempts once per session, bounded and logged. A spawn failure is **never** routed to `human-review` — that queue is for Issues where *work happened and needs human judgment* ([Review outcome](#review-outcome)), not for launches that never started; routing failures there would resurrect the rejected rework path.
 
-**Visibility.** The Reactor is **visually invisible** in v1 — the live board already tells the story through cards moving on their own, and all diagnostics (spawn failures, suppression) go to the durable failure log. Surfacing Reactor state in the UI (e.g. a marker on a suppressed Issue) is a future idea.
+**Visibility.** The Reactor's *internal* state is **visually invisible** — the live board tells the story through cards moving on their own, and all diagnostics (spawn failures, suppression) go to the durable failure log. The one exception is the [auto-run](#auto-run) on/off state, which carries a persistent indicator (an idle on-Reactor and an off-Reactor both leave the board still, so the off state *must* be legible). Surfacing the finer Reactor state in the UI (e.g. a marker on a suppressed Issue) is a future idea.
+
+### Auto-run {#auto-run}
+
+**Auto-run** is the user-facing on/off switch for the Reactor. On (the default), the Reactor reconciles after every board rebuild as described above; off, `reconcile()` early-returns and no agents auto-spawn — the user drives the pipeline by hand with `d`/`r`. It exists to brake a runaway wave or step through dispatch manually.
+
+- **Global, one switch.** It toggles the whole Reactor, not a single PRD (a per-PRD pause is a separate, unbuilt idea in `docs/ideas.md`).
+- **Keybind `a`**, at both board *and* Issue level — a global switch should be reachable wherever you are, unlike the level-scoped `d`/`r`. Suppressed while a modal is open.
+- **In-memory, on by default, dies on quit.** Auto-run state is *not* persisted — reopening the board starts it on again. This is deliberate: it keeps the Reactor's stateless, level-triggered resume free, treating auto-run like selection/scroll (live session state, not config). See [ADR 0007](./docs/adr/0007-auto-run-toggle-is-ephemeral.md).
+- **Re-enabling catches up.** Turning auto-run back on immediately reconciles, so the board acts on everything that became eligible while it was off rather than waiting for the next filesystem event.
+- **Persistent indicator.** A status line shows `▶ auto-run on` / `⏸ auto-run off` at all times, so a still board is never ambiguous between "braked" and "finished."
 
 ## View
 
@@ -188,6 +200,7 @@ Overseer is a **read-only viewer** — it never writes the PRD/Issue files; edit
 - `q` — quit (backs out to board level first if zoomed).
 - `d` — **dispatch**, at *board level*: spawns an implementor for every eligible Issue in the selected PRD (a whole wave at once).
 - `r` — **review**, at *Issue level* (zoom): spawns a reviewer for the single selected `ready-for-review` Issue. Deliberately per-Issue, not per-PRD like `d` — dispatch fires a wave, but review is a deliberate act on one Issue's own worktree.
+- `a` — toggle **[auto-run](#auto-run)** on/off, at *either* level: the global switch for the Reactor's auto-spawning. Unlike `d`/`r` it is not level-scoped (it acts on nothing under the cursor — it's a global switch).
 - **No issue detail/body view in v1** — cards show title + status badge only. Reading an Issue's markdown body is a fast-follow.
 
 ## Stack

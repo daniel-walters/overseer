@@ -44,9 +44,18 @@ export interface Reactor {
    * spawn edge right now — implementors for unblocked `ready-for-agent` Issues,
    * reviewers for `ready-for-review` Issues with a recorded repo — reading only
    * on-disk status (level-triggered, no diffing). A no-op while a reconcile is
-   * already in flight.
+   * already in flight, or while auto-run is disabled.
    */
   reconcile(): void;
+  /**
+   * Turn auto-run on or off — the user-facing brake (`a` keybind). While off,
+   * {@link Reactor.reconcile} early-returns and no agents auto-spawn; the user
+   * drives the pipeline by hand with `d`/`r`. Enabling from a disabled state
+   * immediately reconciles, so the board catches up on everything that became
+   * eligible while it was off rather than looking dead until the next filesystem
+   * event. In-memory and on by default; not persisted (ADR 0007).
+   */
+  setEnabled(enabled: boolean): void;
 }
 
 /**
@@ -100,12 +109,25 @@ export interface Reactor {
 export function createReactor(root: string, deps: ReactorDeps): Reactor {
   /** True while a reconcile is in flight; the re-entrancy guard reads it. */
   let reconciling = false;
+  // Auto-run state: on by default, in-memory, dies with the instance (ADR 0007).
+  // While false, reconcile() early-returns so nothing auto-spawns.
+  let enabled = true;
   // Session-scoped: one set per Reactor instance. The production caller omits
   // `deps.failedSet`, so reopening the board builds a fresh set and retries.
   const failed = deps.failedSet ?? createFailedSet();
 
   return {
+    setEnabled(next: boolean): void {
+      // Catch up on re-enable: a flip from off → on immediately reconciles so the
+      // board acts on everything that became eligible while muzzled, rather than
+      // waiting for the next filesystem event. Turning off never reconciles.
+      const wasOff = !enabled;
+      enabled = next;
+      if (next && wasOff) this.reconcile();
+    },
+
     reconcile(): void {
+      if (!enabled) return; // auto-run off ⇒ no-op (the user drives with d/r)
       if (reconciling) return; // a reconcile is already running ⇒ no-op
       reconciling = true;
       try {

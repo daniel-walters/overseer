@@ -435,3 +435,65 @@ describe("App review", () => {
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
   });
 });
+
+describe("App auto-run", () => {
+  /** An auto-run seam whose toggle is a spy, defaulting to enabled. */
+  function spyAutoRun(enabled = true) {
+    return { enabled, toggle: vi.fn<() => void>() };
+  }
+
+  it("shows the auto-run-on indicator by default", () => {
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(true)} />,
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auto-run on");
+  });
+
+  it("shows the auto-run-off indicator when disabled", () => {
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(false)} />,
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auto-run off");
+  });
+
+  it("toggles auto-run on `a` at the board level", async () => {
+    const autoRun = spyAutoRun();
+    const { stdin } = render(<App board={board} autoRun={autoRun} />);
+
+    stdin.write("a");
+    await tick();
+
+    expect(autoRun.toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("toggles auto-run on `a` at the Issue level too (it's a global switch)", async () => {
+    const autoRun = spyAutoRun();
+    const { stdin } = render(<App board={board} autoRun={autoRun} />);
+
+    stdin.write(ENTER); // zoom into the PRD
+    await tick();
+    stdin.write("a");
+    await tick();
+
+    expect(autoRun.toggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores `a` while a modal is open", async () => {
+    // A dispatcher whose read returns a frontier, so `d` opens a modal.
+    const dispatcher = {
+      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+    };
+    const autoRun = spyAutoRun();
+    const { stdin } = render(
+      <App board={board} dispatcher={dispatcher} autoRun={autoRun} />,
+    );
+
+    stdin.write("d"); // open the dispatch preview
+    await tick();
+    stdin.write("a"); // swallowed by the modal
+    await tick();
+
+    expect(autoRun.toggle).not.toHaveBeenCalled();
+  });
+});

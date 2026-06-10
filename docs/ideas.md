@@ -20,7 +20,8 @@ Overseer's world.
 So, separating what's solved from what's only wished-for:
 
 - **Manual vs. automatic** — *solved.* One rule: a human ignites a PRD with `d`; the
-  reactor is cruise control from there. The toggle (below) turns cruise control off.
+  reactor is cruise control from there. The **auto-run** toggle (`a`) turns cruise
+  control off — global, in-memory, on by default (see `CONTEXT.md` → Auto-run).
 - **Resume** — *solved for free*, by level-triggering off the files (above).
 - **Live tracking of running agents** — *open gap.* The board shows `in-progress` /
   `in-review` cards, so you can see *that* agents are working — but not *which* `claude
@@ -45,17 +46,6 @@ should not spawn (or keep spawning) agents for that PRD's issues; resuming picks
 development back up. Open questions: where does the pause state live (PRD frontmatter
 vs. external state, given Overseer is a read-only viewer of the files), how it surfaces
 on the board, and how in-flight agents are handled at the moment of pausing.
-
-### Toggle the reactor on/off
-
-The reactor (auto-spawn reviewers for `ready-for-review` Issues, and re-dispatch
-implementors for Issues whose blockers just went `done`) ships **global and always-on**
-in v1 — once a human kicks a PRD off with `d`, the reactor drives it the rest of the
-way. A future control would let the user toggle the reactor off (a keybind or board
-state) so they can watch the board live without auto-spawning — e.g. to pause a runaway
-wave, or to step through dispatch manually with `d`/`r`. Relates to the per-PRD
-pause/resume idea above (a global switch vs. per-PRD pause). Open question: off-by-default
-vs. on-by-default once toggling exists.
 
 ### Surface reactor state on the board
 

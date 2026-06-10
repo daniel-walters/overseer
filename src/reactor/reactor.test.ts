@@ -551,6 +551,60 @@ describe("createReactor", () => {
     expect(deps.failures).toHaveLength(1);
   });
 
+  it("spawns nothing while auto-run is disabled", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+    reactor.setEnabled(false);
+
+    reactor.reconcile();
+
+    expect(deps.spawns).toHaveLength(0);
+    // The Issue is untouched on disk — not even flipped off its awaiting status.
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: ready-for-agent",
+    );
+  });
+
+  it("catches up when auto-run is re-enabled: it reconciles immediately", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+    reactor.setEnabled(false);
+    reactor.reconcile(); // muzzled: nothing happens
+    expect(deps.spawns).toHaveLength(0);
+
+    // Re-enabling acts on everything eligible right now, with no filesystem event.
+    reactor.setEnabled(true);
+
+    expect(deps.spawns).toHaveLength(1);
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+  });
+
+  it("does not spawn merely by being switched off", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    reactor.setEnabled(false); // turning off must not itself reconcile
+
+    expect(deps.spawns).toHaveLength(0);
+    expect(readFileSync(join(root, "alpha", "001-go.md"), "utf8")).toContain(
+      "status: ready-for-agent",
+    );
+  });
+
   it("a failed implementor edge does not suppress the reviewer edge for the same Issue", () => {
     // The failed-set is keyed by (issue, edge), so a recorded implementor failure
     // must not mask a later reviewer spawn on that same Issue — they are

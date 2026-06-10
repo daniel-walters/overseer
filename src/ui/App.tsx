@@ -1,5 +1,5 @@
 import React, { useReducer, useState } from "react";
-import { useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput } from "ink";
 import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
@@ -45,12 +45,26 @@ type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
   | { readonly kind: "review"; readonly preview: ReviewPreviewData };
 
+/**
+ * The auto-run switch the App reflects and drives — the user-facing name for the
+ * Reactor's on/off state ("reactor" stays internal vocabulary). `enabled` feeds
+ * the persistent status-line indicator; `toggle` is called by the `a` keybind.
+ * A seam, not the Reactor itself, so the keybind and indicator are testable
+ * without a real Reactor (mirroring {@link Dispatcher}/{@link Reviewer}).
+ */
+export interface AutoRun {
+  readonly enabled: boolean;
+  readonly toggle: () => void;
+}
+
 interface AppProps {
   board: Board;
   /** Wired in production; absent in tests that don't exercise dispatch. */
   dispatcher?: Dispatcher;
   /** Wired in production; absent in tests that don't exercise review. */
   reviewer?: Reviewer;
+  /** Wired in production; absent in tests that don't exercise auto-run. */
+  autoRun?: AutoRun;
 }
 
 /**
@@ -60,7 +74,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer }: AppProps) {
+export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
   const { exit } = useApp();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
   // The plan captured when a preview opened — the dispatch frontier / review
@@ -125,6 +139,14 @@ export function App({ board, dispatcher, reviewer }: AppProps) {
       return;
     }
 
+    if (input === "a") {
+      // The global auto-run brake. Unlike d/r it is not level-scoped — it acts on
+      // nothing under the cursor, so it works wherever you are. (The modal already
+      // swallowed input above via the nav.confirming guard.)
+      autoRun?.toggle();
+      return;
+    }
+
     if (input === "q") {
       if (nav.level === "issues") dispatch({ type: "back" });
       else exit();
@@ -169,10 +191,37 @@ export function App({ board, dispatcher, reviewer }: AppProps) {
   if (modal?.kind === "review") {
     return <ReviewPreview preview={modal.preview} />;
   }
-  if (nav.level === "issues" && selectedPrd) {
-    return <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />;
-  }
-  return <BoardView board={board} selectedIndex={boardIndex} />;
+  // The live board levels share a persistent status line carrying the auto-run
+  // indicator. (Modals return above, so the indicator never shows over a preview.)
+  const view =
+    nav.level === "issues" && selectedPrd ? (
+      <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />
+    ) : (
+      <BoardView board={board} selectedIndex={boardIndex} />
+    );
+  return (
+    <Box flexDirection="column">
+      {view}
+      <StatusLine autoRun={autoRun} />
+    </Box>
+  );
+}
+
+/**
+ * The persistent board status line. Carries the auto-run indicator — always
+ * shown, because an idle on-Reactor and an off one both leave the board still,
+ * so the off state must be legible (ADR 0007). When no auto-run seam is wired
+ * (board-only tests) it renders nothing. "auto-run", never "reactor".
+ */
+function StatusLine({ autoRun }: { autoRun?: AutoRun }) {
+  if (!autoRun) return null;
+  return (
+    <Box>
+      <Text dimColor>
+        {autoRun.enabled ? "▶ auto-run on" : "⏸ auto-run off"}
+      </Text>
+    </Box>
+  );
 }
 
 /** Translate a keypress into a selection delta: -1 (up), +1 (down), or 0. */

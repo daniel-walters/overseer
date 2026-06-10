@@ -67,7 +67,10 @@ describe("useLiveBoard", () => {
       onChange = cb;
       return () => {};
     };
-    const reactor = { reconcile: vi.fn(() => order.push("reconcile")) };
+    const reactor = {
+      reconcile: vi.fn(() => order.push("reconcile")),
+      setEnabled: vi.fn(),
+    };
 
     render(
       <Probe
