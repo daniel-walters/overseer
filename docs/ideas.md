@@ -75,3 +75,29 @@ The AI review loop ships with a hardcoded cap of **3** `/code-review` passes at
 calibrate against, promote both to `config.toml` knobs — a per-board (or eventually
 per-PRD) iteration cap and effort level — rather than baking the v1 defaults in
 forever.
+
+### Push spawn-failure suppression into the shared spawn edge
+
+The Reactor's failed-set suppression currently sits **around** the shared spawn edge:
+`createReactor` subtracts the failed-set before `runDispatch`/`runReview` and records
+into it via a `logFailure` wrapper. But `spawnWithFlip` already owns the rollback and
+emits the exact `(issue, edge)` `FailureRecord` the set is keyed on — so the
+"a level-triggered driver must not re-pick-up a rolled-back spawn" invariant is enforced
+by convention at the call site, not by the edge. The next automated re-driver (the
+reactor toggle/cron ideas above, or a per-PRD reactor) must independently re-wire the
+same subtract+record dance, or silently reintroduce the infinite-retry loop with no
+compile error. A deeper version would make suppression a first-class concern of the
+spawn edge (an optional injected failed-set the edge consults and records into),
+collapsing the two asymmetric integration points (implementor: a `subtractFailed…`
+filter pass; reviewer: an inline `failed.has(…)` check) into one parameterized
+mechanism. Deferred from the v1 Reactor to keep the proven spawn-edge core unchanged.
+
+### Single helper for the PRD feature-branch derivation
+
+`featureBranchName(basename(prdDir))` is now computed independently in three places
+(the dispatcher, the reviewer, and the Reactor). The derivation is load-bearing — it
+must agree across all three so the dispatch worktree base, the review merge target, and
+the Reactor's automated spawns all target the same branch — yet nothing enforces that
+agreement. A small shared `prdFeatureBranch(prdDir)` helper would make the rule a single
+edit if the branch-naming convention ever changes (e.g. gains a prefix). Low-risk
+cleanup, deferred to avoid touching the shared edges in the review-fix pass.
