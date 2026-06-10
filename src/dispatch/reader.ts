@@ -137,13 +137,36 @@ function readIssue(path: string, fileName: string): DispatchIssue {
  * entry is a full filename used verbatim as the reference — the `NNN-` prefix
  * is part of the value, never split off.
  *
- * A bare string (a list written as a scalar by mistake) is read as a
+ * A bare scalar (a list written as a single value by mistake) is read as a
  * single-entry list rather than dropped: it still names a dependency, and
  * silently parsing it to `[]` would let the frontier treat a typo as unblocked
- * — the opposite of fail-safe. A missing value yields an empty list.
+ * — the opposite of fail-safe. This includes a *non-string* scalar: an unquoted
+ * `blocked_by: 001` parses to the YAML number 1, and dropping it would unblock
+ * the Issue, so we coerce it back to its string form (`"1"`) — a dependency on a
+ * sibling that won't resolve keeps the Issue safely blocked rather than spawning
+ * it early. `null`/`undefined` (a missing value) still yields an empty list.
  */
 function parseBlockedBy(value: unknown): readonly string[] {
-  if (typeof value === "string") return [value];
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is string => typeof entry === "string");
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => {
+      const ref = blockerRef(entry);
+      return ref === undefined ? [] : [ref];
+    });
+  }
+  const ref = blockerRef(value);
+  return ref === undefined ? [] : [ref];
+}
+
+/**
+ * Coerce one `blocked_by` entry to its string reference, or `undefined` when it
+ * carries no dependency. A string is used verbatim; a number or boolean scalar
+ * (an unquoted YAML value) is stringified so a typo'd blocker stays blocking
+ * rather than silently dropping; `null`/`undefined` is no reference.
+ */
+function blockerRef(entry: unknown): string | undefined {
+  if (typeof entry === "string") return entry;
+  if (typeof entry === "number" || typeof entry === "boolean") {
+    return String(entry);
+  }
+  return undefined;
 }

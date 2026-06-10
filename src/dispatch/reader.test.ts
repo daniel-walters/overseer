@@ -129,6 +129,17 @@ describe("readDispatchView", () => {
     expect(receipt.blockedBy).toEqual(["002-payment-intent.md"]);
   });
 
+  it("coerces a non-string scalar blocked_by to a string instead of dropping it", () => {
+    // An unquoted `blocked_by: 001` parses to the YAML number 1. Dropping it
+    // would unblock the Issue and let the Reactor spawn it early; we keep it as
+    // "1" — a dependency that won't resolve, so the Issue stays safely blocked.
+    const dir = tmpPrd({
+      "001-typo.md": "---\nstatus: ready-for-agent\nrepo: /r\nblocked_by: 001\n---\nbody\n",
+    });
+    const issue = readDispatchIssue(dir, "001-typo.md");
+    expect(issue.blockedBy).toEqual(["1"]);
+  });
+
   it("treats a blank deviation as undefined so it does not foreclose auto-merge", () => {
     // An empty-string deviation is not a real deviation; only a non-blank note
     // should force human review (its mere presence is the gate).
