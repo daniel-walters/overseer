@@ -39,18 +39,27 @@ class FakeGit implements GitSeam {
     }
     set.add(branch);
   });
+  /** `repo` → its current branch (HEAD); absent ⇒ detached/unknown. */
+  readonly heads = new Map<string, string>();
+  readonly currentBranch = vi.fn((repo: string) => this.heads.get(repo));
   /** Repos whose `checkoutBranch` should throw, simulating a git failure. */
   readonly failCheckout = new Set<string>();
-  readonly checkoutBranch = vi.fn((repo: string) => {
+  readonly checkoutBranch = vi.fn((repo: string, branch: string) => {
     if (this.failCheckout.has(repo)) {
       throw new Error(`git checkout failed in ${repo}`);
     }
+    this.heads.set(repo, branch); // HEAD now on the checked-out branch
   });
 
   /** Register a repo as a valid git repo with the given existing branches. */
   addRepo(repo: string, branches: string[] = []): void {
     this.validRepos.add(repo);
     this.branches.set(repo, new Set(branches));
+  }
+
+  /** Put `repo` on `branch` (HEAD), so a redundant checkout would be skipped. */
+  setHead(repo: string, branch: string): void {
+    this.heads.set(repo, branch);
   }
 }
 
@@ -176,6 +185,20 @@ describe("setUpRepos", () => {
     // Even when creation is skipped (branch present), checkout still runs so the
     // repo's HEAD is the feature branch before the agent spawns.
     expect(git.checkoutBranch).toHaveBeenCalledWith("/repos/api", BRANCH);
+  });
+
+  it("skips the checkout when HEAD is already on the feature branch", () => {
+    const git = new FakeGit();
+    git.addRepo("/repos/api", [BRANCH]); // branch exists
+    git.setHead("/repos/api", BRANCH); // and HEAD already on it
+
+    const result = setUpRepos(PRD, ["/repos/api"], git);
+
+    // Still a success, but no HEAD-moving checkout — so the level-triggered
+    // Reactor re-running setup on every reconcile can't clobber a concurrent
+    // same-repo agent in a shared checkout.
+    expect(result.get("/repos/api")).toEqual({ ok: true });
+    expect(git.checkoutBranch).not.toHaveBeenCalled();
   });
 
   it("surfaces a checkout failure as a failed result for that repo", () => {

@@ -17,6 +17,7 @@ function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
     isGitRepo: vi.fn(() => true),
     defaultBase: vi.fn(() => "origin/main"),
     branchExists: vi.fn(() => true),
+    currentBranch: vi.fn(() => undefined),
     createBranch: vi.fn(),
     checkoutBranch: vi.fn(),
     ...overrides,
@@ -349,6 +350,32 @@ describe("createReactor", () => {
     const deps = recordingDeps();
     expect(() => createReactor(root, deps).reconcile()).not.toThrow();
     expect(deps.spawns).toEqual([]);
+  });
+
+  it("isolates an unexpected throw in one PRD's spawn edge, still serving the others", () => {
+    // The spawn edges are built total, but the watcher callback is unguarded, so
+    // the Reactor wraps each PRD in a per-PRD boundary as a backstop. Simulate a
+    // throw the edge does NOT catch (git.isGitRepo runs before setUpRepo's
+    // try/catch): alpha's repo probe blows up, beta's is fine. alpha is skipped,
+    // beta still dispatches, and nothing escapes to crash the board.
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    writePrd(root, "beta", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/beta" }),
+    });
+    const deps = recordingDeps({
+      git: fakeGit({
+        isGitRepo: vi.fn((repo: string) => {
+          if (repo === "/repos/alpha") throw new Error("git exploded");
+          return true;
+        }),
+      }),
+    });
+
+    expect(() => createReactor(root, deps).reconcile()).not.toThrow();
+    // beta still spawned; alpha's throwing PRD was skipped, not fatal.
+    expect(deps.spawns.map((s) => s.repo)).toEqual(["/repos/beta"]);
   });
 
   it("builds an implementor prompt carrying the Issue, PRD body, repo, and feature branch", () => {

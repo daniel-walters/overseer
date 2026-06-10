@@ -37,6 +37,14 @@ export interface GitSeam {
   defaultBase(repo: string): string;
   /** Whether a local branch named `branch` already exists in `repo`. */
   branchExists(repo: string, branch: string): boolean;
+  /**
+   * The repo's current branch (HEAD), or `undefined` when it can't be resolved
+   * (detached HEAD, or a git error). Used to skip a redundant checkout when the
+   * repo is already on the target branch — so the level-triggered Reactor, which
+   * re-runs setup on every reconcile while a candidate stays eligible, does not
+   * move HEAD out from under a concurrent same-repo agent in a shared checkout.
+   */
+  currentBranch(repo: string): string | undefined;
   /** Create `branch` in `repo` from `base` (e.g. `origin/main`). */
   createBranch(repo: string, branch: string, base: string): void;
   /**
@@ -137,7 +145,15 @@ function setUpRepo(
     if (!git.branchExists(repo, branch)) {
       git.createBranch(repo, branch, git.defaultBase(repo));
     }
-    git.checkoutBranch(repo, branch);
+    // Skip the checkout when HEAD is already on the feature branch. The checkout
+    // is idempotent in intent (its goal is "be on `branch`"), but issuing it
+    // anyway on every reconcile would move HEAD in a shared checkout where a
+    // concurrent same-repo agent may have switched branches — clobbering its
+    // work. Reading the current branch first makes the steady-state setup a
+    // read-only no-op; only a real divergence triggers a HEAD move.
+    if (git.currentBranch(repo) !== branch) {
+      git.checkoutBranch(repo, branch);
+    }
   } catch (err) {
     return { ok: false, error: errorMessage(err) };
   }
@@ -190,6 +206,20 @@ export const realGitSeam: GitSeam = {
       return true;
     } catch {
       return false;
+    }
+  },
+
+  currentBranch(repo: string): string | undefined {
+    // `--show-current` prints the branch name, or empty on a detached HEAD.
+    try {
+      const branch = execFileSync(
+        "git",
+        ["-C", repo, "branch", "--show-current"],
+        { encoding: "utf8" },
+      ).trim();
+      return branch || undefined;
+    } catch {
+      return undefined;
     }
   },
 
