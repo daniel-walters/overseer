@@ -18,7 +18,9 @@ import {
  * Look up the liveness verdict for one Issue by its absolute path — the same
  * `prdDir/filename` key the agent sidecar records at spawn time (ADR 0008).
  * `undefined` when the Issue has no recorded handle (a previous session, the
- * spawn/record gap, or simply never dispatched), which leaves its card unmarked.
+ * spawn/record gap, or simply never dispatched). On an active-agent card the
+ * scanner reads that `undefined` as **`unknown`** (the honesty boundary, slice
+ * 3): a present-this-session "live" is the only path to a `live` marker.
  */
 export type LivenessLookup = (issuePath: string) => Liveness | undefined;
 
@@ -113,8 +115,9 @@ function scanIssue(
 
   // The liveness overlay rides only on the two active-agent lanes (in-progress,
   // in-review), keyed by the Issue's absolute path — the sidecar's join key
-  // (ADR 0008). A verdict is added only when the lookup has one; an Issue with no
-  // recorded handle stays unmarked, distinct from a recorded-but-dead one.
+  // (ADR 0008). Once a lookup is wired in, such a card always carries a verdict:
+  // the lookup's "live"/"unknown" when it has one, and a default of "unknown"
+  // when it has none — the honesty boundary (slice 3) below.
   const withLiveness = applyLiveness(withReadyFor, path, lane, lookupLiveness);
 
   if (lane !== "human-review") return withLiveness;
@@ -126,9 +129,19 @@ function scanIssue(
 
 /**
  * Add the liveness verdict to an Issue, but only on an `in-progress` / `in-review`
- * card and only when the lookup returns one. Returns the Issue unchanged
- * otherwise, so a ready/done/unsorted card — or one with no recorded handle —
- * never carries a marker.
+ * card. This is the honesty boundary (ADR 0008, slice 3): once a lookup is
+ * provided, every active-agent card *must* carry a verdict — silence on an
+ * in-progress card is the very ambiguity the feature exists to kill.
+ *
+ * So the lookup's verdict is used when it has one, and **`unknown`** is the
+ * default when it has none (the never-recorded cases: a previous session, an
+ * empty sidecar, or the spawn/record gap). The only path to **`live`** is the
+ * lookup positively returning it for a handle recorded *this* session — every
+ * other case, ambiguous or not, reads `unknown`, never a false `live`.
+ *
+ * A card outside the two active-agent lanes (ready, done, unsorted) — or any
+ * card when no lookup is wired in — is returned unchanged and stays unmarked:
+ * no agent owns it, so it has no liveness to report.
  */
 function applyLiveness(
   issue: Issue,
@@ -137,8 +150,7 @@ function applyLiveness(
   lookupLiveness?: LivenessLookup,
 ): Issue {
   if (!lookupLiveness || !LIVENESS_LANES.has(lane)) return issue;
-  const liveness = lookupLiveness(path);
-  return liveness === undefined ? issue : { ...issue, liveness };
+  return { ...issue, liveness: lookupLiveness(path) ?? "unknown" };
 }
 
 /**
