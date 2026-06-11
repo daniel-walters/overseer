@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { Card } from "./Card.js";
-import type { ReadyFor, HumanReviewReason } from "../model.js";
+import type { ReadyFor, HumanReviewReason, Liveness } from "../model.js";
 
 /** The minimal shape both a PRD and an Issue satisfy as a kanban card. */
 export interface CardItem {
@@ -9,6 +9,7 @@ export interface CardItem {
   readonly title: string;
   readonly readyFor?: ReadyFor;
   readonly humanReviewReason?: HumanReviewReason;
+  readonly liveness?: Liveness;
 }
 
 interface ColumnProps {
@@ -29,6 +30,7 @@ export function Column({ heading, cards, selectedId }: ColumnProps) {
           title={card.title}
           readyFor={card.readyFor}
           humanReviewReason={card.humanReviewReason}
+          liveness={card.liveness}
           selected={card.id === selectedId}
         />
       ))}

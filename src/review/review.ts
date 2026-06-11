@@ -14,10 +14,15 @@ export interface ReviewDeps {
   readonly writeStatus: (path: string, status: string) => void;
   /** Build the reviewer prompt for the Issue under review. */
   readonly buildPrompt: (issue: DispatchIssue) => string;
-  /** Launch a reviewer agent in `repo` with the built `prompt`. Throws on failure. */
-  readonly spawn: (repo: string, prompt: string) => void;
+  /**
+   * Launch a reviewer in `repo` with the built `prompt`, returning the handle
+   * parsed from the launch stdout (or `undefined`). Throws on failure.
+   */
+  readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
+  /** Record a launched reviewer's handle against its Issue key in the sidecar. */
+  readonly recordHandle: (issueKey: string, handle: string) => void;
 }
 
 /**
@@ -57,5 +62,6 @@ export function runReview(issue: DispatchIssue, deps: ReviewDeps): void {
     buildPrompt: () => deps.buildPrompt(issue),
     spawn: deps.spawn,
     logFailure: deps.logFailure,
+    recordHandle: deps.recordHandle,
   });
 }

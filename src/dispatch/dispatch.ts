@@ -24,10 +24,15 @@ export interface DispatchDeps {
   readonly writeStatus: (path: string, status: string) => void;
   /** Build the implementor prompt for one spawn-candidate Issue in `repo`. */
   readonly buildPrompt: (issue: DispatchIssue, repo: string) => string;
-  /** Launch an implementor agent in `repo` with the built `prompt`. Throws on failure. */
-  readonly spawn: (repo: string, prompt: string) => void;
+  /**
+   * Launch an implementor in `repo` with the built `prompt`, returning the
+   * handle parsed from the launch stdout (or `undefined`). Throws on failure.
+   */
+  readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
+  /** Record a launched agent's handle against its Issue key in the sidecar. */
+  readonly recordHandle: (issueKey: string, handle: string) => void;
 }
 
 /** A spawn candidate the frontier has guaranteed carries a usable repo. */
@@ -106,5 +111,6 @@ function spawnOne(
     buildPrompt: () => deps.buildPrompt(issue, repo),
     spawn: deps.spawn,
     logFailure: deps.logFailure,
+    recordHandle: deps.recordHandle,
   });
 }

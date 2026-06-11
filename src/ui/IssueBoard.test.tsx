@@ -43,7 +43,7 @@ const prd: PRD = {
   title: "Authentication",
   lane: "in-progress",
   issues: [
-    { id: "010-login", title: "Login", lane: "in-progress" },
+    { id: "010-login", title: "Login", lane: "in-progress", liveness: "live" },
     { id: "020-oauth", title: "OAuth", lane: "ready", readyFor: "agent" },
     { id: "030-review", title: "Review", lane: "ready", readyFor: "human" },
     { id: "005-mystery", title: "Mystery", lane: "unsorted" },
@@ -52,6 +52,12 @@ const prd: PRD = {
       title: "Escalated",
       lane: "human-review",
       humanReviewReason: "deviation",
+    },
+    {
+      id: "050-reviewing",
+      title: "Reviewing",
+      lane: "in-review",
+      liveness: "unknown",
     },
   ],
 };
@@ -77,6 +83,20 @@ describe("IssueBoard", () => {
 
     expect(columnOf(frame, "Escalated")).toBe("Human Review");
     expect(stripAnsi(frame)).toContain("deviation");
+  });
+
+  it("surfaces the live marker on an in-progress Issue's card", () => {
+    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+
+    expect(columnOf(frame, "Login")).toBe("In Progress");
+    expect(columnOf(frame, "live")).toBe("In Progress");
+  });
+
+  it("surfaces the unknown marker on an in-review Issue's card", () => {
+    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+
+    expect(columnOf(frame, "Reviewing")).toBe("In Review");
+    expect(columnOf(frame, "unknown")).toBe("In Review");
   });
 
   it("marks the selected Issue with a pointer and no other", () => {

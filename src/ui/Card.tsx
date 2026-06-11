@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { ReadyFor, HumanReviewReason } from "../model.js";
+import type { ReadyFor, HumanReviewReason, Liveness } from "../model.js";
 
 interface CardProps {
   title: string;
@@ -8,6 +8,11 @@ interface CardProps {
   readyFor?: ReadyFor;
   /** Escalation marker, present only while the card is in human-review. */
   humanReviewReason?: HumanReviewReason;
+  /**
+   * Liveness marker, present only on a dispatched in-progress / in-review card
+   * (CONTEXT.md, ADR 0008): whether its agent is still in Claude's live set.
+   */
+  liveness?: Liveness;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -29,11 +34,24 @@ const REASON_MARKER: Record<HumanReviewReason, string> = {
   conflict: "✗ conflict",
 };
 
+/**
+ * The liveness marker, mirroring the human-review reason marker's treatment: a
+ * glyph plus the verdict word on its own truncating line. A live agent reads
+ * green (it is working); an unknown one reads dim/gray — deliberately quiet, not
+ * an alarm, because unknown is the honest "this session can't see it" verdict,
+ * not a failure (ADR 0008).
+ */
+const LIVENESS_MARKER: Record<Liveness, { text: string; color: string }> = {
+  live: { text: "● live", color: "green" },
+  unknown: { text: "○ unknown", color: "gray" },
+};
+
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
   readyFor,
   humanReviewReason,
+  liveness,
   selected = false,
 }: CardProps) {
   return (
@@ -54,6 +72,13 @@ export function Card({
         // narrow card under truncation — the title still identifies the card.
         <Text wrap="truncate-end" color="yellow">
           {REASON_MARKER[humanReviewReason]}
+        </Text>
+      )}
+      {liveness && (
+        // Mirrors the human-review marker: its own truncating line under the
+        // title, so the overlay never displaces the card's identity.
+        <Text wrap="truncate-end" color={LIVENESS_MARKER[liveness].color}>
+          {LIVENESS_MARKER[liveness].text}
         </Text>
       )}
     </Box>

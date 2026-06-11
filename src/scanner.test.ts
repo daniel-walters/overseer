@@ -213,3 +213,139 @@ describe("scanBoard Issues", () => {
     expect(prdById(board.prds, "no-status-prd").issues).toEqual([]);
   });
 });
+
+describe("scanBoard liveness overlay", () => {
+  /**
+   * A throwaway root with one Issue in each of the four interesting lanes: the
+   * two the overlay applies to (in-progress, in-review) and two it must never
+   * touch (ready-for-agent, done). The liveness lookup is keyed by the Issue's
+   * absolute path — the same `prdDir/filename` key the sidecar records (ADR 0008).
+   */
+  function liveRoot(): { root: string; pathOf: (file: string) => string } {
+    const root = mkdtempSync(join(tmpdir(), "overseer-live-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-working.md"), "---\nstatus: in-progress\n---\nbody\n");
+    writeFileSync(join(dir, "002-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
+    writeFileSync(join(dir, "003-queued.md"), "---\nstatus: ready-for-agent\n---\nbody\n");
+    writeFileSync(join(dir, "004-shipped.md"), "---\nstatus: done\n---\nbody\n");
+    return { root, pathOf: (file) => join(dir, file) };
+  }
+
+  function featureIssues(board: ReturnType<typeof scanBoard>): readonly Issue[] {
+    return prdById(board.prds, "feature").issues;
+  }
+
+  it("overlays a live verdict on an in-progress Issue by its absolute path", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("001-working.md") ? "live" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBe("live");
+  });
+
+  it("overlays an unknown verdict on an in-review Issue whose agent is gone", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("002-reviewing.md") ? "unknown" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "002-reviewing.md").liveness).toBe(
+      "unknown",
+    );
+  });
+
+  it("never overlays liveness on a lane that is not in-progress or in-review", () => {
+    // The lookup claims every Issue is live; only the two active-agent lanes may
+    // carry the marker — a ready or done card never shows a liveness verdict.
+    const { root } = liveRoot();
+    const board = scanBoard(root, () => "live");
+    const issues = featureIssues(board);
+
+    expect(issueById(issues, "003-queued.md").liveness).toBeUndefined();
+    expect(issueById(issues, "004-shipped.md").liveness).toBeUndefined();
+  });
+
+  it("leaves liveness unset when no lookup is provided", () => {
+    // The default scan (board-only tests, the eager first render) carries no
+    // overlay; an Issue simply has no liveness marker.
+    const { root } = liveRoot();
+    const issues = featureIssues(scanBoard(root));
+
+    expect(issueById(issues, "001-working.md").liveness).toBeUndefined();
+  });
+
+  // ── The honesty boundary (ADR 0008, slice 3) ──────────────────────────────
+  // The contract: an in-progress / in-review card is *never silently blank*
+  // once a lookup is wired in. When the lookup has no verdict for the Issue —
+  // its handle was never recorded (a previous session, an empty sidecar, or the
+  // spawn/record gap) — the card reads **unknown**, never **live**. The only
+  // path to **live** is a lookup that positively returns "live" for a handle
+  // recorded *this* session. Silence on an in-progress card would re-introduce
+  // the exact ambiguity the feature exists to kill, so the scanner defaults the
+  // two active-agent lanes to unknown.
+
+  it("defaults an in-progress Issue with no recorded handle to unknown, never live", () => {
+    // A lookup that knows nothing about this Issue (the never-recorded case:
+    // previous session, spawn/record gap). The card must read unknown — the
+    // honest "this session can't see it" verdict — not stay blank.
+    const { root } = liveRoot();
+    const board = scanBoard(root, () => undefined);
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBe(
+      "unknown",
+    );
+  });
+
+  it("defaults an in-review Issue with no recorded handle to unknown", () => {
+    const { root } = liveRoot();
+    const board = scanBoard(root, () => undefined);
+
+    expect(issueById(featureIssues(board), "002-reviewing.md").liveness).toBe(
+      "unknown",
+    );
+  });
+
+  it("reads unknown for an in-progress Issue whose prior-session handle is absent from the live set", () => {
+    // The lookup explicitly resolved this Issue to unknown (its recorded handle
+    // is gone from `claude agents --json`). Indistinguishable, on the card, from
+    // the never-recorded case above — both honestly read unknown.
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("001-working.md") ? "unknown" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBe(
+      "unknown",
+    );
+  });
+
+  it("only ever reads live for an Issue the lookup positively resolves to live", () => {
+    // The single path to a green "live" marker: a present-this-session handle
+    // that the lookup matched against the live set. Its sibling in-progress
+    // Issue, with no verdict, defaults to unknown — proving the two outcomes are
+    // driven solely by the lookup's positive "live", never by silence.
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("001-working.md") ? "live" : undefined,
+    );
+    const issues = featureIssues(board);
+
+    expect(issueById(issues, "001-working.md").liveness).toBe("live");
+    expect(issueById(issues, "002-reviewing.md").liveness).toBe("unknown");
+  });
+
+  it("never defaults a non-liveness lane to unknown, even with a lookup present", () => {
+    // The unknown default is scoped to the two active-agent lanes. A ready or
+    // done card — which no agent owns — must stay blank, not pick up a spurious
+    // unknown marker, even though the lookup is wired in.
+    const { root } = liveRoot();
+    const board = scanBoard(root, () => undefined);
+    const issues = featureIssues(board);
+
+    expect(issueById(issues, "003-queued.md").liveness).toBeUndefined();
+    expect(issueById(issues, "004-shipped.md").liveness).toBeUndefined();
+  });
+});

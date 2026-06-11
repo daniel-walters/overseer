@@ -4,6 +4,8 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createDispatcher, type DispatcherDeps } from "./dispatcher.js";
+import { createSpawnEdge } from "./spawn.js";
+import { createAgentSidecar } from "./agentSidecar.js";
 import type { GitSeam } from "./gitSetup.js";
 
 const checkoutFlow = fileURLToPath(
@@ -26,15 +28,22 @@ function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
 function recordingDeps(overrides: Partial<DispatcherDeps> = {}): DispatcherDeps & {
   spawns: { repo: string; prompt: string }[];
   failures: unknown[];
+  handles: { issueKey: string; handle: string }[];
 } {
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: unknown[] = [];
+  const handles: { issueKey: string; handle: string }[] = [];
   return {
     spawns,
     failures,
+    handles,
     git: fakeGit(),
-    spawn: (repo, prompt) => spawns.push({ repo, prompt }),
+    spawn: (repo, prompt) => {
+      spawns.push({ repo, prompt });
+      return `handle-${repo}`;
+    },
     logFailure: (r) => failures.push(r),
+    recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
     ...overrides,
   };
 }
@@ -89,6 +98,48 @@ describe("createDispatcher", () => {
         "utf8",
       );
       expect(skipped).toContain("status: done");
+    });
+
+    it("records the spawned agent's handle against the Issue's full path", () => {
+      const deps = recordingDeps();
+      const dispatcher = createDispatcher(root, deps);
+
+      dispatcher.dispatch(dispatcher.readFrontier("checkout-flow"));
+
+      // The handle the spawn returned is recorded against the Issue's full path
+      // (prdDir/filename), the join key a later board open intersects with the
+      // live `claude agents --json` set (ADR 0008).
+      expect(deps.handles).toEqual([
+        {
+          issueKey: join(root, "checkout-flow", "002-payment-intent.md"),
+          handle: "handle-/repos/backend",
+        },
+      ]);
+    });
+
+    it("persists the handle claude --bg printed to the sidecar, end-to-end", () => {
+      // The full production chain with only the child-process exec faked: a real
+      // spawn edge (parses `backgrounded · <handle>` from the launch stdout) and
+      // a real file-backed sidecar. No real Claude is launched.
+      const sidecarPath = join(root, "state", "agents.json");
+      const { record: recordHandle } = createAgentSidecar(sidecarPath);
+      const { spawn, logFailure } = createSpawnEdge({
+        exec: () => "backgrounded · session-9c2",
+        logPath: join(root, "state", "dispatch.log"),
+      });
+      const dispatcher = createDispatcher(root, {
+        git: fakeGit(),
+        spawn,
+        logFailure,
+        recordHandle,
+      });
+
+      dispatcher.dispatch(dispatcher.readFrontier("checkout-flow"));
+
+      const issueKey = join(root, "checkout-flow", "002-payment-intent.md");
+      expect(createAgentSidecar(sidecarPath).read()).toEqual({
+        [issueKey]: "session-9c2",
+      });
     });
 
     it("builds a prompt carrying the Issue body, PRD body, repo, and feature branch", () => {
