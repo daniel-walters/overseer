@@ -24,7 +24,7 @@ describe("createSpawnEdge", () => {
 
   describe("spawn", () => {
     it("invokes claude --bg --permission-mode auto -p <prompt> with cwd=repo", () => {
-      const exec = vi.fn<ExecSeam>();
+      const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
       const { spawn } = createSpawnEdge({ exec, logPath });
 
       spawn("/repos/api", "do the thing");
@@ -35,6 +35,22 @@ describe("createSpawnEdge", () => {
         ["--bg", "--permission-mode", "auto", "-p", "do the thing"],
         { cwd: "/repos/api" },
       );
+    });
+
+    it("parses the handle from the exec's returned stdout and threads it out", () => {
+      const exec = vi.fn<ExecSeam>(() => "backgrounded · session-7f3a");
+      const { spawn } = createSpawnEdge({ exec, logPath });
+
+      expect(spawn("/repos/api", "prompt")).toBe("session-7f3a");
+    });
+
+    it("returns undefined when the launch stdout carries no handle", () => {
+      // A malformed/empty launch line leaves the agent running but unrecorded —
+      // the edge stays total (no throw); liveness degrades to unknown (ADR 0008).
+      const exec = vi.fn<ExecSeam>(() => "");
+      const { spawn } = createSpawnEdge({ exec, logPath });
+
+      expect(spawn("/repos/api", "prompt")).toBeUndefined();
     });
 
     it("propagates a launch failure so the caller can roll back and log", () => {
