@@ -123,6 +123,23 @@ describe("computeLiveness", () => {
   it("returns no verdicts when nothing was ever recorded", () => {
     expect(computeLiveness({}, [{ id: "sess-a", state: "busy" }])).toEqual({});
   });
+
+  it("gives no verdict for an Issue with no recorded handle, only for recorded ones", () => {
+    // The missing-sidecar-entry case (slice 3): a wave recorded one Issue's
+    // handle but not its sibling's (the sibling's spawn crashed in the
+    // spawn/record gap, or it was dispatched by a previous session). Only the
+    // recorded Issue gets a verdict; the missing one is absent from the map, and
+    // the scanner overlay reads that absence as unknown. The recorded handle
+    // being absent from the live set means even it reads unknown — there is no
+    // way for the unrecorded Issue to inherit a false live.
+    const verdicts = computeLiveness(
+      { "prd/001.md": "recorded-but-dead" },
+      [{ id: "unrelated-live-agent", state: "busy" }],
+    );
+
+    expect(verdicts).toEqual({ "prd/001.md": "unknown" });
+    expect(verdicts["prd/002.md"]).toBeUndefined();
+  });
 });
 
 describe("createLivenessProbe", () => {
@@ -172,5 +189,56 @@ describe("createLivenessProbe", () => {
     // No persistence: the next probe re-queries and re-intersects from scratch,
     // so an agent that exited flips to unknown with no stale cache (ADR 0008).
     expect(probe()).toEqual({ "prd/001.md": "unknown" });
+  });
+
+  // ── The honesty boundary (slice 3) ─────────────────────────────────────────
+  // The previous-session and empty-sidecar cases are the correctness heart of
+  // the feature: every ambiguous join must resolve to unknown, never a false
+  // live. The probe is where the recorded handles meet the live registry, so
+  // these cases are pinned here as well as at the scanner overlay.
+
+  it("yields unknown for a prior-session handle absent from the live set", () => {
+    // The sidecar still holds a handle a *previous* board session recorded, but
+    // that session's agent is gone — its handle is no longer a live `id`. The
+    // live set even has an unrelated agent running; the join must not be fooled
+    // into a false live by an active-but-different session.
+    const probe = createLivenessProbe({
+      query: () => JSON.stringify([{ id: "this-session-agent", state: "busy" }]),
+      readHandles: () => ({ "prd/001.md": "prior-session-handle" }),
+    });
+
+    expect(probe()).toEqual({ "prd/001.md": "unknown" });
+  });
+
+  it("yields no verdict from an empty sidecar, so nothing can read live", () => {
+    // A fresh board open with an empty sidecar (a prior run that recorded
+    // nothing, or a wiped file): there are live agents, but none was recorded by
+    // *this* session, so the join produces no verdict at all — and the scanner
+    // overlay defaults those active-agent cards to unknown. No path yields live.
+    const probe = createLivenessProbe({
+      query: () => JSON.stringify([{ id: "some-live-agent", state: "busy" }]),
+      readHandles: () => ({}),
+    });
+
+    expect(probe()).toEqual({});
+  });
+
+  it("never confuses a previous session's live agent for this session's Issue", () => {
+    // Two Issues recorded across two sessions: one handle is still live, the
+    // other (an older session's) is not. Only the present match reads live; the
+    // previous-session handle reads unknown — proving membership is per-handle,
+    // never a blanket "an agent is alive somewhere".
+    const probe = createLivenessProbe({
+      query: () => JSON.stringify([{ id: "live-now", state: "idle" }]),
+      readHandles: () => ({
+        "prd/001.md": "live-now",
+        "prd/002.md": "from-a-closed-session",
+      }),
+    });
+
+    expect(probe()).toEqual({
+      "prd/001.md": "live",
+      "prd/002.md": "unknown",
+    });
   });
 });
