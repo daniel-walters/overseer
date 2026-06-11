@@ -48,6 +48,14 @@ export interface LiveAgent {
  * sidecar uses for a corrupt file. A row with no usable string `id` is dropped
  * (it can join no Issue); the state field's absence is kept as `undefined`.
  */
+/** The first argument that is a non-empty string, or `undefined` if none is. */
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value !== "") return value;
+  }
+  return undefined;
+}
+
 export function parseAgents(json: string): LiveAgent[] {
   let parsed: unknown;
   try {
@@ -63,10 +71,11 @@ export function parseAgents(json: string): LiveAgent[] {
     const record = row as Record<string, unknown>;
     const id = record.id;
     if (typeof id !== "string" || id === "") continue;
-    // Interactive rows carry `status`; background rows carry `state`. Prefer
-    // `state`, fall back to `status`, and keep `undefined` if neither is a string.
-    const stateField = record.state ?? record.status;
-    const state = typeof stateField === "string" ? stateField : undefined;
+    // Interactive rows carry `status`; background rows carry `state`. Prefer the
+    // first that is a non-empty string, and keep `undefined` if neither is. (A
+    // bare `??` would let an empty-string `state: ""` win over a meaningful
+    // `status`, since `??` only short-circuits on null/undefined.)
+    const state = firstString(record.state, record.status);
     agents.push({ id, state });
   }
   return agents;

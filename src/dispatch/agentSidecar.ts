@@ -77,7 +77,16 @@ export function createAgentSidecar(path: string): AgentSidecar {
       if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
         return {};
       }
-      return parsed as Record<string, string>;
+      // Keep only `string → string` entries. A hand-edited or partially-corrupt
+      // file can hold a non-string value (`{"prd/001.md": 42}`); dropping it
+      // rather than casting it through keeps the liveness join total — a
+      // non-string handle could never match a live session `id` anyway, the same
+      // "a row with no usable string id is dropped" rule parseAgents applies.
+      const map: Record<string, string> = {};
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === "string") map[key] = value;
+      }
+      return map;
     } catch {
       return {};
     }

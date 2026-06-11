@@ -75,6 +75,20 @@ describe("parseAgents", () => {
     // hung?" iteration, so its absence must not drop the row from the live set.
     expect(parseAgents(json)).toEqual([{ id: "stateless", state: undefined }]);
   });
+
+  it("prefers a meaningful status over an empty-string state", () => {
+    // A `??` would let `state: ""` win over a real `status`; the row carries the
+    // first non-empty string instead.
+    const json = JSON.stringify([{ id: "sess", state: "", status: "busy" }]);
+
+    expect(parseAgents(json)).toEqual([{ id: "sess", state: "busy" }]);
+  });
+
+  it("captures state as undefined when both fields are empty strings", () => {
+    const json = JSON.stringify([{ id: "sess", state: "", status: "" }]);
+
+    expect(parseAgents(json)).toEqual([{ id: "sess", state: undefined }]);
+  });
 });
 
 describe("computeLiveness", () => {

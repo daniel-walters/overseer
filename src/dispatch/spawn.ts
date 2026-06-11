@@ -82,15 +82,40 @@ export function createSpawnEdge(deps: SpawnEdgeDeps): SpawnEdge {
 }
 
 /**
+ * How long to wait for the `claude --bg` launch line before giving up. The spawn
+ * runs synchronously inside the Ink input handler (the `d`/`r` confirm path and
+ * the Reactor both flow through here), so an unbounded capture would freeze the
+ * whole board if the launch hung. It must hang at most this long: a `--bg` child
+ * that inherits/keeps the captured stdout fd open after the parent backgrounds
+ * would otherwise hold the pipe past EOF forever — exactly the freeze the
+ * liveness query is bounded against ({@link import("./liveness.js")}). On timeout
+ * `execFileSync` throws, which the spawn edge surfaces as a launch failure
+ * (rollback + log), never a wedged render loop.
+ */
+const LAUNCH_TIMEOUT_MS = 30_000;
+
+/**
+ * Cap on captured launch stdout. The handle line is a few dozen bytes; the cap
+ * just guarantees a runaway `claude` can't be read into an unbounded buffer on
+ * the render path. Overflow throws, surfaced as a launch failure.
+ */
+const LAUNCH_MAX_BUFFER = 4 * 1024 * 1024;
+
+/**
  * The production exec seam: shell out to `claude`, wait for the launch, and
  * return its stdout (where `--bg` prints `backgrounded · <handle>`). stderr is
  * inherited so launch diagnostics still reach the terminal; only stdout — the
  * handle line — is captured. `encoding: "utf8"` makes `execFileSync` return a
- * string rather than a Buffer.
+ * string rather than a Buffer. Bounded by {@link LAUNCH_TIMEOUT_MS} and
+ * {@link LAUNCH_MAX_BUFFER} because this runs synchronously on the board's input
+ * path: either bound being hit throws, which the spawn edge treats as a launch
+ * failure rather than hanging or crashing the board.
  */
 export const realExec: ExecSeam = (command, args, options) =>
   execFileSync(command, [...args], {
     cwd: options.cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
+    timeout: LAUNCH_TIMEOUT_MS,
+    maxBuffer: LAUNCH_MAX_BUFFER,
   });

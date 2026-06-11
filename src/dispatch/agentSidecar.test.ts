@@ -99,6 +99,18 @@ describe("createAgentSidecar", () => {
     expect(createAgentSidecar(path).read()).toEqual({});
   });
 
+  it("drops entries whose value is not a string, keeping the valid ones", () => {
+    // A hand-edit / partial corruption can leave a non-string value. It must be
+    // dropped (not cast through), so a non-string handle never reaches the
+    // liveness join — exactly like parseAgents dropping a non-string `id`.
+    plant(
+      '{"checkout/001-cart.md": "abc123", "checkout/002-pay.md": 42, "checkout/003-x.md": {"nested": true}}',
+    );
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": "abc123",
+    });
+  });
+
   it("self-heals: record overwrites a corrupt sidecar with a fresh map", () => {
     plant("}{ not json");
     const { record } = createAgentSidecar(path);

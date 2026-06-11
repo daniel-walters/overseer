@@ -29,4 +29,20 @@ describe("parseHandle", () => {
   it("returns undefined for empty stdout", () => {
     expect(parseHandle("")).toBeUndefined();
   });
+
+  // Now that `--bg` stdout is captured through a pipe, `claude` may still emit
+  // colour. The handle must come back clean — matching the bare `id` from
+  // `claude agents --json` — whether the escapes wrap the line or hug the handle.
+  const ESC = String.fromCharCode(27);
+  it("strips a leading colour escape so the line still matches", () => {
+    expect(parseHandle(`${ESC}[2mbackgrounded · session-7f3a${ESC}[0m`)).toBe(
+      "session-7f3a",
+    );
+  });
+
+  it("strips a trailing colour escape glued to the handle", () => {
+    expect(parseHandle(`backgrounded · session-7f3a${ESC}[0m`)).toBe(
+      "session-7f3a",
+    );
+  });
 });
