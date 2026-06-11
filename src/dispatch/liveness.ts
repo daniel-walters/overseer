@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import type { Liveness } from "../model.js";
 
 /**
  * Liveness: the query+join that makes an `in-progress` / `in-review` Issue
@@ -13,10 +14,10 @@ import { execFileSync } from "node:child_process";
  * the Issue files (ADR 0002). The whole module is pure data-in/data-out behind
  * one seam (the registry query), so it is unit-tested with fixture JSON and no
  * real Claude process, exactly as the dispatcher is.
+ *
+ * The {@link Liveness} verdict type lives on the board model (it is a card
+ * overlay); this module produces it.
  */
-
-/** A live verdict for one Issue: its agent is in the registry, or it is not. */
-export type Liveness = "live" | "unknown";
 
 /**
  * One live session from `claude agents --json`, normalised across the two row
