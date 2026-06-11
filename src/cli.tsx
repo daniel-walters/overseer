@@ -14,6 +14,11 @@ import { createReactor } from "./reactor/reactor.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
+import {
+  createLivenessProbe,
+  realLivenessQuery,
+} from "./dispatch/liveness.js";
+import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
 const HELP = `
@@ -48,7 +53,6 @@ function runBoard(): void {
     throw err;
   }
 
-  const initialBoard = scanBoard(root);
   // The real spawn edge: confirming a dispatch validates each repo, ensures the
   // PRD feature branch, flips Issues to in-progress (driving the live board),
   // and launches a background `claude --bg` agent per spawn candidate.
@@ -60,8 +64,25 @@ function runBoard(): void {
   // `issueKey → handle` outside the watched root (ADR 0008), so a later board
   // open can join a live `claude agents --json` row back to its Issue. Shared by
   // all three spawn paths (manual `d`/`r` and the Reactor) so every launched
-  // agent is recorded identically.
-  const { record: recordHandle } = createAgentSidecar(defaultSidecarPath());
+  // agent is recorded identically; `read` feeds the liveness probe below.
+  const { record: recordHandle, read: readHandles } =
+    createAgentSidecar(defaultSidecarPath());
+  // The liveness probe (ADR 0008): on each call it re-queries
+  // `claude agents --json`, re-reads the recorded handles, and intersects them
+  // into a per-Issue live/unknown verdict. Wrapping `scanBoard` so the overlay is
+  // recomputed on every rebuild keeps liveness a derived overlay, never persisted
+  // into the Issue files (ADR 0002) — a handle that drops out flips to unknown on
+  // the next scan. `scanWithLiveness` is used for both the eager first render and
+  // the live re-scan, so the board carries liveness from the very first frame.
+  const probe = createLivenessProbe({
+    query: realLivenessQuery,
+    readHandles,
+  });
+  const scanWithLiveness = (r: string): Board => {
+    const verdicts = probe();
+    return scanBoard(r, (issuePath) => verdicts[issuePath]);
+  };
+  const initialBoard = scanWithLiveness(root);
   const dispatcher = createDispatcher(root, {
     git: realGitSeam,
     spawn,
@@ -85,14 +106,17 @@ function runBoard(): void {
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
-  // Every fail-fast check above (loadConfig, the eager scanBoard) runs *before*
-  // this call, so a config/scan error still prints on the normal screen rather
-  // than onto the alt buffer, where it would be wiped on restore.
+  // Every fail-fast check above (loadConfig, the eager scanWithLiveness) runs
+  // *before* this call, so a config/scan error still prints on the normal screen
+  // rather than onto the alt buffer, where it would be wiped on restore. The
+  // liveness query inside that eager scan is bounded (timeout + maxBuffer) and
+  // degrades to unknown on any failure, so it neither hangs startup nor throws
+  // here.
   render(
     <LiveApp
       root={root}
       initialBoard={initialBoard}
-      scan={scanBoard}
+      scan={scanWithLiveness}
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}

@@ -38,3 +38,26 @@ describe("Card human-review reason marker", () => {
     expect(frame).toContain("Plain");
   });
 });
+
+describe("Card liveness marker", () => {
+  it("marks a card whose agent is live with a live marker", () => {
+    const frame = frameOf(<Card title="Payments" liveness="live" />);
+
+    expect(frame).toContain("live");
+    expect(frame).toContain("Payments");
+  });
+
+  it("marks a card whose agent is gone with an unknown marker", () => {
+    const frame = frameOf(<Card title="Tokens" liveness="unknown" />);
+
+    expect(frame).toContain("unknown");
+    expect(frame).toContain("Tokens");
+  });
+
+  it("shows no liveness marker on a card without a verdict", () => {
+    const frame = frameOf(<Card title="Plain" />);
+
+    expect(frame).not.toMatch(/live|unknown/);
+    expect(frame).toContain("Plain");
+  });
+});

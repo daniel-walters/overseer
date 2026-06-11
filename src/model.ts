@@ -164,6 +164,17 @@ export const HUMAN_REVIEW_REASONS = [
  */
 export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
 
+/**
+ * The liveness overlay on an Issue card: whether the agent Overseer spawned for
+ * it is still in Claude's live session registry (CONTEXT.md, ADR 0008). Derived
+ * on each board open by joining the recorded `--bg` handles against
+ * `claude agents --json` — **live** if the Issue's handle is present, **unknown**
+ * otherwise — and never written into the Issue files (ADR 0002, free resume).
+ * The verdict degrades to `unknown`, never a false `live`: an Issue from a
+ * previous session, or one whose agent has exited, reads as unknown.
+ */
+export type Liveness = "live" | "unknown";
+
 export interface Issue {
   /** Identity: the Issue filename (e.g. `001-auth.md`). */
   readonly id: string;
@@ -175,6 +186,13 @@ export interface Issue {
   readonly readyFor?: ReadyFor;
   /** Set only when `lane === "human-review"`; drives the escalation marker. */
   readonly humanReviewReason?: HumanReviewReason;
+  /**
+   * The derived liveness overlay, set only on an `in-progress` / `in-review`
+   * card whose agent's handle was recorded — `live` if that handle is in the
+   * registry, `unknown` if not. Absent when no handle was ever recorded (no
+   * marker), so a never-dispatched card is distinct from a dead one.
+   */
+  readonly liveness?: Liveness;
 }
 
 export interface PRD {

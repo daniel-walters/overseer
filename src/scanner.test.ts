@@ -213,3 +213,76 @@ describe("scanBoard Issues", () => {
     expect(prdById(board.prds, "no-status-prd").issues).toEqual([]);
   });
 });
+
+describe("scanBoard liveness overlay", () => {
+  /**
+   * A throwaway root with one Issue in each of the four interesting lanes: the
+   * two the overlay applies to (in-progress, in-review) and two it must never
+   * touch (ready-for-agent, done). The liveness lookup is keyed by the Issue's
+   * absolute path — the same `prdDir/filename` key the sidecar records (ADR 0008).
+   */
+  function liveRoot(): { root: string; pathOf: (file: string) => string } {
+    const root = mkdtempSync(join(tmpdir(), "overseer-live-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-working.md"), "---\nstatus: in-progress\n---\nbody\n");
+    writeFileSync(join(dir, "002-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
+    writeFileSync(join(dir, "003-queued.md"), "---\nstatus: ready-for-agent\n---\nbody\n");
+    writeFileSync(join(dir, "004-shipped.md"), "---\nstatus: done\n---\nbody\n");
+    return { root, pathOf: (file) => join(dir, file) };
+  }
+
+  function featureIssues(board: ReturnType<typeof scanBoard>): readonly Issue[] {
+    return prdById(board.prds, "feature").issues;
+  }
+
+  it("overlays a live verdict on an in-progress Issue by its absolute path", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("001-working.md") ? "live" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBe("live");
+  });
+
+  it("overlays an unknown verdict on an in-review Issue whose agent is gone", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("002-reviewing.md") ? "unknown" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "002-reviewing.md").liveness).toBe(
+      "unknown",
+    );
+  });
+
+  it("never overlays liveness on a lane that is not in-progress or in-review", () => {
+    // The lookup claims every Issue is live; only the two active-agent lanes may
+    // carry the marker — a ready or done card never shows a liveness verdict.
+    const { root } = liveRoot();
+    const board = scanBoard(root, () => "live");
+    const issues = featureIssues(board);
+
+    expect(issueById(issues, "003-queued.md").liveness).toBeUndefined();
+    expect(issueById(issues, "004-shipped.md").liveness).toBeUndefined();
+  });
+
+  it("leaves liveness unset when no lookup is provided", () => {
+    // The default scan (board-only tests, the eager first render) carries no
+    // overlay; an Issue simply has no liveness marker.
+    const { root } = liveRoot();
+    const issues = featureIssues(scanBoard(root));
+
+    expect(issueById(issues, "001-working.md").liveness).toBeUndefined();
+  });
+
+  it("leaves liveness unset on an in-progress Issue the lookup has no verdict for", () => {
+    // An Issue whose handle was never recorded (a previous session, or the
+    // spawn/record gap) gets no verdict — distinct from a recorded-but-dead one.
+    const { root } = liveRoot();
+    const board = scanBoard(root, () => undefined);
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBeUndefined();
+  });
+});
