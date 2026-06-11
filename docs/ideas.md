@@ -37,6 +37,46 @@ launches, without abandoning the read-only/level-triggered model that makes resu
 That likely means a process-tracking seam that lives *beside* the file viewer, not inside
 it. Until then, live tracking and true pause are wishes, not committed solutions.
 
+## High priority: the minimum set to dogfood Overseer on itself
+
+The three ideas below are the concrete resolution of the theme above. Together they are
+the **minimum feature set to confidently dogfood** — to build Overseer using Overseer as
+the harness. The bar is not "more features"; it is **trust**: today `in-progress` is
+ambiguous (working? hung? dead?), and the failure you'd hit while building Overseer is
+exactly the one the board can't show you. The `FailedSet` only suppresses *launch*
+failures — once an agent is spawned, the loop is blind to it. These three convert the
+board from "shows footprints" to "tells the truth," in priority order. They share one new
+seam — **process tracking that survives a board restart** (so resume stays free, ADR
+0002) — so #1 is the architectural foundation for the other two.
+
+### 1. Liveness — know if a spawned agent is alive *(highest value)*
+
+Capture each spawn's process handle (PID / session id) and surface alive-vs-dead per
+card. This is the single highest-value gap: it turns `in-progress` from ambiguous into
+truthful, with no pause/kill required — *observation only*. The design question hiding
+inside it: `claude --bg` detaches, so the handle must be recorded into state that
+**survives a board relaunch**, without violating the read-only/level-triggered model that
+makes resume free. That is the process-tracking seam the theme above gestures at, made
+concrete. Subsumes the liveness half of "Surface reactor state on the board".
+
+### 2. Orphan reconciliation on launch — recover a dead `in-progress` Issue
+
+When a scan finds an `in-progress` Issue with no live process (crash, killed board, reboot
+mid-run), flag it — and optionally offer re-dispatch — rather than leaving a silent
+orphan stuck forever. Without this, every crash during a dogfood session forces hand-editing
+frontmatter to recover, breaking the "resume is free" promise the moment real work relies
+on it. The flip-with-rollback in `dispatch.ts` only covers a spawn that *throws at launch*;
+this covers a worker that dies *after* launch or is gone by relaunch. Depends on #1's
+handles.
+
+### 3. Kill switch — stop a running or hung agent
+
+Build on #1's process handles to actually terminate a spawned agent, turning the auto-run
+toggle's "stop starting more" into a real "stop." Lower priority than #1–#2 (a manual
+`kill` suffices at first), but wanted the first time an agent goes rogue in the very repo
+you're building. This is the "true pause of in-flight agents" gap from the theme, made
+actionable.
+
 ## Ideas
 
 ### Pause / resume development of a PRD
