@@ -23,10 +23,15 @@ import { createFailedSet, type FailedSet } from "./failedSet.js";
 export interface ReactorDeps {
   /** Validate repos and ensure the per-repo PRD feature branch (implementor edge). */
   readonly git: GitSeam;
-  /** Launch an agent (implementor or reviewer) in `repo` with `prompt`; throws on failure. */
-  readonly spawn: (repo: string, prompt: string) => void;
+  /**
+   * Launch an agent (implementor or reviewer) in `repo` with `prompt`, returning
+   * the handle parsed from the launch stdout (or `undefined`); throws on failure.
+   */
+  readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
+  /** Record a launched agent's handle against its Issue key in the sidecar. */
+  readonly recordHandle: (issueKey: string, handle: string) => void;
   /**
    * The session-scoped failed-set the Reactor subtracts from each frontier and
    * records spawn failures into. Optional: the production caller omits it and
@@ -205,6 +210,7 @@ function dispatchEligible(
       }),
     spawn: deps.spawn,
     logFailure: recordingLogFailure(prdDir, deps, failed),
+    recordHandle: deps.recordHandle,
   });
 }
 
@@ -248,6 +254,7 @@ function reviewEligible(
         }),
       spawn: deps.spawn,
       logFailure: recordingLogFailure(prdDir, deps, failed),
+      recordHandle: deps.recordHandle,
     });
   }
 }

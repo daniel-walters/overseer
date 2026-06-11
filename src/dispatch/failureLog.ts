@@ -63,6 +63,27 @@ export function recordSpawnFailure(
   }
 }
 
+/**
+ * Best-effort record of a freshly-spawned agent's handle against its Issue;
+ * never throws. The handle is captured from `claude --bg`'s launch stdout and
+ * written to the durable sidecar (ADR 0008); losing one — an unwritable sidecar
+ * — must not crash the board or stop later candidates. The agent still ran; its
+ * liveness simply degrades to "unknown" until a later orphan-reconciliation
+ * feature picks it up.
+ */
+export function recordSpawnHandle(
+  recordHandle: (issueKey: string, handle: string) => void,
+  issueKey: string,
+  handle: string,
+): void {
+  try {
+    recordHandle(issueKey, handle);
+  } catch {
+    // The sidecar is unwritable (e.g. an unusable state dir). Losing one handle
+    // leaves a live-but-unrecorded agent (unknown liveness), never a crash.
+  }
+}
+
 /** The seams a single flip-then-spawn step depends on. */
 export interface SpawnWithFlip {
   /** Which spawn edge this is — names the failure record. */
@@ -79,10 +100,18 @@ export interface SpawnWithFlip {
   readonly writeStatus: (path: string, status: string) => void;
   /** Build the agent prompt, called only after the flip lands. */
   readonly buildPrompt: () => string;
-  /** Launch the agent in `repo`; throws on failure. */
-  readonly spawn: (repo: string, prompt: string) => void;
+  /**
+   * Launch the agent in `repo`, returning the handle parsed from the launch
+   * stdout (or `undefined` if none was printed); throws on launch failure.
+   */
+  readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable log. */
   readonly logFailure: (record: FailureRecord) => void;
+  /**
+   * Record the launched agent's handle against `issueKey` (the Issue's path) in
+   * the durable sidecar — the third, post-spawn step (ADR 0008).
+   */
+  readonly recordHandle: (issueKey: string, handle: string) => void;
 }
 
 /**
@@ -98,6 +127,14 @@ export interface SpawnWithFlip {
  * edge. Total and best-effort throughout: it runs synchronously inside the Ink
  * input handler, which has no try/catch around it, so neither a vanished Issue
  * file nor an unwritable log may escape and crash the board.
+ *
+ * On a successful spawn there is a *third* step: record the handle the spawn
+ * returned against the Issue in the durable sidecar (ADR 0008). It is last
+ * because the handle does not exist until spawn returns; a crash in the
+ * flip→spawn→record window leaves a live-but-unrecorded agent, deliberately left
+ * to a later orphan-reconciliation feature. A spawn that returned no handle
+ * (malformed launch line) records nothing — the agent ran, but its liveness will
+ * read as unknown.
  */
 export function spawnWithFlip(deps: SpawnWithFlip): void {
   try {
@@ -106,10 +143,18 @@ export function spawnWithFlip(deps: SpawnWithFlip): void {
     return; // flip failed: nothing was started, so nothing to roll back or log
   }
 
+  let handle: string | undefined;
   try {
-    deps.spawn(deps.repo, deps.buildPrompt());
+    handle = deps.spawn(deps.repo, deps.buildPrompt());
   } catch (err) {
     rollBackStatus(deps.writeStatus, deps.issue.path, deps.awaiting);
     recordSpawnFailure(deps.logFailure, deps.edge, deps.issue.id, deps.repo, err);
+    return;
+  }
+
+  // Third step: record the captured handle. Only when the spawn returned one —
+  // a missing handle leaves the agent running but unrecorded (unknown liveness).
+  if (handle !== undefined) {
+    recordSpawnHandle(deps.recordHandle, deps.issue.path, handle);
   }
 }

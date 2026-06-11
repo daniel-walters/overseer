@@ -34,8 +34,12 @@ function recordingDeps(overrides: Partial<ReactorDeps> = {}): ReactorDeps & {
     spawns,
     failures,
     git: fakeGit(),
-    spawn: (repo, prompt) => spawns.push({ repo, prompt }),
+    spawn: (repo, prompt) => {
+      spawns.push({ repo, prompt });
+      return `handle-${repo}`;
+    },
     logFailure: (r) => failures.push(r),
+    recordHandle: () => {},
     ...overrides,
   };
 }

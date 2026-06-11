@@ -13,6 +13,7 @@ import { createReviewer } from "./review/reviewer.js";
 import { createReactor } from "./reactor/reactor.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
+import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
 import { runInit } from "./init/runInit.js";
 
 const HELP = `
@@ -55,20 +56,32 @@ function runBoard(): void {
     exec: realExec,
     logPath: defaultLogPath(),
   });
+  // The sidecar persists each spawned agent's captured `--bg` handle as
+  // `issueKey → handle` outside the watched root (ADR 0008), so a later board
+  // open can join a live `claude agents --json` row back to its Issue. Shared by
+  // all three spawn paths (manual `d`/`r` and the Reactor) so every launched
+  // agent is recorded identically.
+  const { record: recordHandle } = createAgentSidecar(defaultSidecarPath());
   const dispatcher = createDispatcher(root, {
     git: realGitSeam,
     spawn,
     logFailure,
+    recordHandle,
   });
   // The reviewer reuses the very same `claude --bg` spawn edge — a reviewer is
   // just another background agent — flipping ready-for-review → in-review and
   // launching the reviewer in the Issue's repo.
-  const reviewer = createReviewer(root, { spawn, logFailure });
+  const reviewer = createReviewer(root, { spawn, logFailure, recordHandle });
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
   // completed Issue unblocks its siblings and they spawn with no second keypress.
-  const reactor = createReactor(root, { git: realGitSeam, spawn, logFailure });
+  const reactor = createReactor(root, {
+    git: realGitSeam,
+    spawn,
+    logFailure,
+    recordHandle,
+  });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
   // contents are restored untouched on quit. Ink manages enter/exit and restore.

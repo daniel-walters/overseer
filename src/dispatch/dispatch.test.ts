@@ -50,19 +50,28 @@ function deps(
   writes: [string, string][];
   spawns: { repo: string; prompt: string }[];
   failures: { issueId: string; repo: string; error: string; edge: string }[];
+  handles: { issueKey: string; handle: string }[];
 } {
   const writes: [string, string][] = [];
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: { issueId: string; repo: string; error: string; edge: string }[] = [];
+  const handles: { issueKey: string; handle: string }[] = [];
   return {
     writes,
     spawns,
     failures,
+    handles,
     git: fakeGit(),
     writeStatus: (path, status) => writes.push([path, status]),
     buildPrompt: (i) => `prompt-for-${i.id}`,
-    spawn: (repo, prompt) => spawns.push({ repo, prompt }),
+    // A spawn returns a handle derived from the repo, so tests can assert the
+    // exact handle recorded against each Issue.
+    spawn: (repo, prompt) => {
+      spawns.push({ repo, prompt });
+      return `handle-${repo}`;
+    },
     logFailure: (r) => failures.push(r),
+    recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
     ...overrides,
   };
 }
@@ -89,6 +98,95 @@ describe("runDispatch", () => {
     ]);
   });
 
+  it("records each spawned candidate's handle against its Issue key (path)", () => {
+    const d = deps();
+    runDispatch(
+      "prd",
+      [
+        entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" }),
+        entry("spawn", { id: "002-b.md", path: "/root/prd/002-b.md", repo: "/repos/web" }),
+      ],
+      d,
+    );
+
+    expect(d.handles).toEqual([
+      { issueKey: "/root/prd/001-a.md", handle: "handle-/repos/api" },
+      { issueKey: "/root/prd/002-b.md", handle: "handle-/repos/web" },
+    ]);
+  });
+
+  it("records the handle only after the flip and spawn (flip → spawn → record)", () => {
+    const order: string[] = [];
+    runDispatch(
+      "prd",
+      [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
+      deps({
+        writeStatus: (_path, status) => order.push(`write:${status}`),
+        spawn: () => {
+          order.push("spawn");
+          return "h1";
+        },
+        recordHandle: () => order.push("record"),
+      }),
+    );
+
+    expect(order).toEqual(["write:in-progress", "spawn", "record"]);
+  });
+
+  it("does not record a handle when the spawn returned none", () => {
+    const d = deps({ spawn: () => undefined });
+    runDispatch(
+      "prd",
+      [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
+      d,
+    );
+
+    expect(d.handles).toEqual([]);
+  });
+
+  it("does not record a handle when the spawn throws", () => {
+    const d = deps({
+      spawn: () => {
+        throw new Error("claude not found");
+      },
+    });
+    runDispatch(
+      "prd",
+      [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
+      d,
+    );
+
+    expect(d.handles).toEqual([]);
+  });
+
+  it("does not let a throwing recordHandle escape or abort the wave", () => {
+    // The sidecar can be unwritable (an unusable state dir). Losing one handle
+    // must not crash the board or skip later candidates — the agent still ran;
+    // its liveness degrades to unknown (ADR 0008).
+    const d = deps({
+      recordHandle: () => {
+        throw new Error("EACCES on agents.json");
+      },
+    });
+
+    expect(() =>
+      runDispatch(
+        "prd",
+        [
+          entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" }),
+          entry("spawn", { id: "002-b.md", path: "/root/prd/002-b.md", repo: "/repos/web" }),
+        ],
+        d,
+      ),
+    ).not.toThrow();
+
+    // Both candidates still spawned despite the first's record throwing.
+    expect(d.spawns).toEqual([
+      { repo: "/repos/api", prompt: "prompt-for-001-a.md" },
+      { repo: "/repos/web", prompt: "prompt-for-002-b.md" },
+    ]);
+  });
+
   it("flips a candidate's status before spawning it", () => {
     const order: string[] = [];
     runDispatch(
@@ -96,7 +194,10 @@ describe("runDispatch", () => {
       [entry("spawn", { id: "001-a.md" })],
       deps({
         writeStatus: (_path, status) => order.push(`write:${status}`),
-        spawn: () => order.push("spawn"),
+        spawn: () => {
+          order.push("spawn");
+          return undefined;
+        },
       }),
     );
 
