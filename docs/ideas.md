@@ -81,6 +81,18 @@ The follow-up is in-app **viewport scrolling / virtualization** within a column 
 possibly horizontal paging across columns) so no card is ever unreachable. Until then,
 a small terminal can hide cards with no recourse.
 
+### UI polish follow-ups
+
+Small UI fixes noted against the full-screen board and `?` help modal (UI Polish
+part 1):
+
+- **Help modal should be a true modal, not a screen takeover.** It currently
+  replaces the board; it should overlay it (board visible/dimmed behind) so opening
+  help doesn't lose the user's place.
+- **Bottom bar needs spacing between the `auto` indicator and the `?` keybind.**
+  They currently render flush against each other; add separation so they read as
+  distinct elements.
+
 ### Central keybind registry
 
 Keybinds are hardcoded inline as `if (input === "…")` branches in `App.tsx`'s
