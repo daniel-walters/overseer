@@ -23,10 +23,11 @@ So, separating what's solved from what's only wished-for:
   reactor is cruise control from there. The **auto-run** toggle (`a`) turns cruise
   control off — global, in-memory, on by default (see `CONTEXT.md` → Auto-run).
 - **Resume** — *solved for free*, by level-triggering off the files (above).
-- **Live tracking of running agents** — *open gap.* The board shows `in-progress` /
-  `in-review` cards, so you can see *that* agents are working — but not *which* `claude
-  --bg` is which, whether one is hung, or its output. ("Surface reactor state" below
-  gestures at this; it is not yet a design.)
+- **Live tracking of running agents** — *partially solved.* **Liveness** (shipped,
+  [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)) now surfaces
+  alive-vs-unknown per card, so `in-progress` is no longer ambiguous about *whether* its
+  agent is running. Still open: *which* `claude --bg` is which beyond the marker, whether
+  one is hung, and its output (see "Per-agent logs" below).
 - **True pause of in-flight agents** — *open gap.* Toggling the reactor off (or pausing
   a PRD) stops it spawning *new* agents; the ones already running keep running. There is
   no kill switch. "Pause" today means "stop starting more," not "stop."
@@ -39,43 +40,31 @@ it. Until then, live tracking and true pause are wishes, not committed solutions
 
 ## High priority: the minimum set to dogfood Overseer on itself
 
-The three ideas below are the concrete resolution of the theme above. Together they are
-the **minimum feature set to confidently dogfood** — to build Overseer using Overseer as
-the harness. The bar is not "more features"; it is **trust**: today `in-progress` is
-ambiguous (working? hung? dead?), and the failure you'd hit while building Overseer is
-exactly the one the board can't show you. The `FailedSet` only suppresses *launch*
-failures — once an agent is spawned, the loop is blind to it. These three convert the
-board from "shows footprints" to "tells the truth," in priority order. They share one new
-seam — **process tracking that survives a board restart** (so resume stays free, ADR
-0002) — so #1 is the architectural foundation for the other two.
+The ideas below are the concrete resolution of the theme above. Together with the
+now-shipped **Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md))
+they are the **minimum feature set to confidently dogfood** — to build Overseer using
+Overseer as the harness. The bar is not "more features"; it is **trust**: `in-progress`
+used to be ambiguous (working? hung? dead?), and the failure you'd hit while building
+Overseer is exactly the one the board couldn't show you. The `FailedSet` only suppresses
+*launch* failures — once an agent is spawned, the loop is blind to it. These convert the
+board from "shows footprints" to "tells the truth." Liveness shipped the shared
+foundation — **process tracking that survives a board restart** (so resume stays free, ADR
+0002) — the handle sidecar the two below build on.
 
-### 1. Liveness — know if a spawned agent is alive *(highest value; designed — [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md))*
-
-Surface alive-vs-unknown per card. This is the single highest-value gap: it turns
-`in-progress` from ambiguous into truthful, with no pause/kill required — *observation
-only*. **Design (ADR 0008):** read liveness from `claude agents --json` (Claude owns the
-`--bg` lifecycle), joined to Issues by the `backgrounded · <handle>` line Overseer
-captures from `--bg`'s launch stdout, persisted in a **sidecar** outside the watched root
-(beside `dispatch.log`) so the Issue files stay read-only and resume stays free. The
-spawn edge gains a return value: `ExecSeam` goes `=> void` → `=> string` so the handle can
-be captured and recorded (flip → spawn → record). Subsumes the liveness half of "Surface
-reactor state on the board". Degrades to "live / unknown," never a false "live" — the
-unknowns are #2's job. Next step: shape into a PRD + Issues.
-
-### 2. Orphan reconciliation on launch — recover a dead `in-progress` Issue
+### 1. Orphan reconciliation on launch — recover a dead `in-progress` Issue
 
 When a scan finds an `in-progress` Issue with no live process (crash, killed board, reboot
 mid-run), flag it — and optionally offer re-dispatch — rather than leaving a silent
 orphan stuck forever. Without this, every crash during a dogfood session forces hand-editing
 frontmatter to recover, breaking the "resume is free" promise the moment real work relies
 on it. The flip-with-rollback in `dispatch.ts` only covers a spawn that *throws at launch*;
-this covers a worker that dies *after* launch or is gone by relaunch. Depends on #1's
-handles.
+this covers a worker that dies *after* launch or is gone by relaunch. Builds on the
+liveness handles (shipped — [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)).
 
-### 3. Kill switch — stop a running or hung agent
+### 2. Kill switch — stop a running or hung agent
 
-Build on #1's process handles to actually terminate a spawned agent, turning the auto-run
-toggle's "stop starting more" into a real "stop." Lower priority than #1–#2 (a manual
+Build on the shipped liveness handles to actually terminate a spawned agent, turning the
+auto-run toggle's "stop starting more" into a real "stop." Lower priority than #1 (a manual
 `kill` suffices at first), but wanted the first time an agent goes rogue in the very repo
 you're building. This is the "true pause of in-flight agents" gap from the theme, made
 actionable.
@@ -84,15 +73,15 @@ actionable.
 
 ### Per-agent logs from a card *(unlocked by the liveness handle)*
 
-Once the [Liveness](#1-liveness--know-if-a-spawned-agent-is-alive-highest-value-designed--adr-0008)
+Now that the **Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md))
 sidecar records `issueKey → handle`, drilling into a running agent's output is one join
 away: select an in-progress / in-review card → `claude logs <handle>` for *that* Issue's
 agent. The handle (not the PID) is the key — Claude owns the log plumbing and keys it by
-handle, so no extra persistence beyond what #1 already stores.
+handle, so no extra persistence beyond what liveness already stores.
 
-This is **unlocked by #1 but a distinct feature**, deliberately kept out of the liveness
-PRD (it is in that PRD's Out of Scope). It is more than the one-shot `claude agents --json`
-membership test #1 needs:
+This is **unlocked by Liveness but a distinct feature**, deliberately kept out of the
+liveness PRD (it is in that PRD's Out of Scope). It is more than the one-shot
+`claude agents --json` membership test liveness needs:
 
 - **A new capability for a read-only viewer.** Today Overseer spawns (`claude --bg`) and
   reads files; shelling out to `claude logs` to pull/stream output is a different subprocess
@@ -100,12 +89,12 @@ membership test #1 needs:
 - **A TUI rendering problem.** Where do logs render (detail pane? modal?) and how do they
   coexist with the alt-screen board that already *clips* on overflow (see "Viewport
   scrolling" below)? Live log tailing inside Ink is real UI work.
-- **Overlaps "is it hung?".** The `state: working/idle/blocked` field #1's design already
-  surfaces is the *cheap* signal and may answer "what's it doing" 80% of the time; full
+- **Overlaps "is it hung?".** The `state: working/idle/blocked` field liveness already
+  captures is the *cheap* signal and may answer "what's it doing" 80% of the time; full
   logs are the *expensive* signal to reach for when `state` isn't enough.
 
-So: a natural follow-on once the liveness handle lands, but its own UI-shaped piece of work,
-not part of the dogfood-minimum set.
+So: a natural follow-on now that the liveness handle has landed, but its own UI-shaped
+piece of work, not part of the dogfood-minimum set.
 
 ### Pause / resume development of a PRD
 
