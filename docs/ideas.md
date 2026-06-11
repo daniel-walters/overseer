@@ -82,6 +82,31 @@ actionable.
 
 ## Ideas
 
+### Per-agent logs from a card *(unlocked by the liveness handle)*
+
+Once the [Liveness](#1-liveness--know-if-a-spawned-agent-is-alive-highest-value-designed--adr-0008)
+sidecar records `issueKey → handle`, drilling into a running agent's output is one join
+away: select an in-progress / in-review card → `claude logs <handle>` for *that* Issue's
+agent. The handle (not the PID) is the key — Claude owns the log plumbing and keys it by
+handle, so no extra persistence beyond what #1 already stores.
+
+This is **unlocked by #1 but a distinct feature**, deliberately kept out of the liveness
+PRD (it is in that PRD's Out of Scope). It is more than the one-shot `claude agents --json`
+membership test #1 needs:
+
+- **A new capability for a read-only viewer.** Today Overseer spawns (`claude --bg`) and
+  reads files; shelling out to `claude logs` to pull/stream output is a different subprocess
+  call, and live tailing is more than a single membership query.
+- **A TUI rendering problem.** Where do logs render (detail pane? modal?) and how do they
+  coexist with the alt-screen board that already *clips* on overflow (see "Viewport
+  scrolling" below)? Live log tailing inside Ink is real UI work.
+- **Overlaps "is it hung?".** The `state: working/idle/blocked` field #1's design already
+  surfaces is the *cheap* signal and may answer "what's it doing" 80% of the time; full
+  logs are the *expensive* signal to reach for when `state` isn't enough.
+
+So: a natural follow-on once the liveness handle lands, but its own UI-shaped piece of work,
+not part of the dogfood-minimum set.
+
 ### Pause / resume development of a PRD
 
 A way to pause and later resume development of a PRD. While paused, the dispatcher
