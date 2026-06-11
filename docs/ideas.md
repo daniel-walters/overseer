@@ -49,15 +49,18 @@ board from "shows footprints" to "tells the truth," in priority order. They shar
 seam — **process tracking that survives a board restart** (so resume stays free, ADR
 0002) — so #1 is the architectural foundation for the other two.
 
-### 1. Liveness — know if a spawned agent is alive *(highest value)*
+### 1. Liveness — know if a spawned agent is alive *(highest value; designed — [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md))*
 
-Capture each spawn's process handle (PID / session id) and surface alive-vs-dead per
-card. This is the single highest-value gap: it turns `in-progress` from ambiguous into
-truthful, with no pause/kill required — *observation only*. The design question hiding
-inside it: `claude --bg` detaches, so the handle must be recorded into state that
-**survives a board relaunch**, without violating the read-only/level-triggered model that
-makes resume free. That is the process-tracking seam the theme above gestures at, made
-concrete. Subsumes the liveness half of "Surface reactor state on the board".
+Surface alive-vs-unknown per card. This is the single highest-value gap: it turns
+`in-progress` from ambiguous into truthful, with no pause/kill required — *observation
+only*. **Design (ADR 0008):** read liveness from `claude agents --json` (Claude owns the
+`--bg` lifecycle), joined to Issues by the `backgrounded · <handle>` line Overseer
+captures from `--bg`'s launch stdout, persisted in a **sidecar** outside the watched root
+(beside `dispatch.log`) so the Issue files stay read-only and resume stays free. The
+spawn edge gains a return value: `ExecSeam` goes `=> void` → `=> string` so the handle can
+be captured and recorded (flip → spawn → record). Subsumes the liveness half of "Surface
+reactor state on the board". Degrades to "live / unknown," never a false "live" — the
+unknowns are #2's job. Next step: shape into a PRD + Issues.
 
 ### 2. Orphan reconciliation on launch — recover a dead `in-progress` Issue
 

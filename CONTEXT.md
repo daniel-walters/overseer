@@ -12,6 +12,10 @@ _Avoid_: Feature (as a distinct entity), spec, epic
 A unit of work that belongs to exactly one PRD. Rendered as a card on the kanban board.
 _Avoid_: Ticket, task, card (card is the visual rendering of an Issue, not the Issue itself)
 
+**Liveness**:
+Whether the agent Overseer spawned for an Issue is still running. An *overlay* on the board, never a fact in the Issue files: derived from a **sidecar state file** outside the watched root (`~/.local/state/overseer/`, where `dispatch.log` already lives), keyed by Issue, recording each spawn's process handle. Keeps the viewer read-only ([ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)) — the PID is Overseer's operational state, not domain data, so it lives beside the failure log, not in the Issue.
+_Avoid_: health, status (status is the Issue's kanban column; liveness is orthogonal to it)
+
 **Deviation**:
 A record an implementor agent writes on its Issue — a `deviation` frontmatter field carrying the reason — when it strays from the Issue's planned approach to get the work done. The field's *presence* (not any boolean value) is the gate: a recorded Deviation forces a human review rather than an AI-only one. The implementor writes it in the same edit that flips the Issue to `ready-for-review`. See [Review outcome](#review-outcome).
 _Avoid_: drift, divergence
