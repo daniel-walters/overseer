@@ -106,9 +106,12 @@ function runBoard(): void {
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
-  // Every fail-fast check above (loadConfig, the eager scanBoard) runs *before*
-  // this call, so a config/scan error still prints on the normal screen rather
-  // than onto the alt buffer, where it would be wiped on restore.
+  // Every fail-fast check above (loadConfig, the eager scanWithLiveness) runs
+  // *before* this call, so a config/scan error still prints on the normal screen
+  // rather than onto the alt buffer, where it would be wiped on restore. The
+  // liveness query inside that eager scan is bounded (timeout + maxBuffer) and
+  // degrades to unknown on any failure, so it neither hangs startup nor throws
+  // here.
   render(
     <LiveApp
       root={root}

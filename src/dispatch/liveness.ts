@@ -133,12 +133,35 @@ export function createLivenessProbe(
 }
 
 /**
+ * How long to wait for `claude agents --json` before giving up. The probe runs
+ * synchronously on the board's startup path and inside the debounced watcher
+ * callback (one query per rebuild), so an unbounded query would freeze the whole
+ * Ink render loop if `claude` hung or was slow. On timeout `execFileSync` throws,
+ * which {@link createLivenessProbe} catches and degrades to all-unknown — so the
+ * cap fails safe: a slow registry costs at most this delay, never a frozen board.
+ */
+const QUERY_TIMEOUT_MS = 3000;
+
+/**
+ * Cap on captured stdout. `claude agents --json` is small (one row per live
+ * session), so the 1 MiB default would never be hit in practice; the explicit
+ * cap just guarantees a runaway registry can't be read into an unbounded buffer
+ * on the render path. Overflow throws, which the probe degrades to all-unknown.
+ */
+const QUERY_MAX_BUFFER = 4 * 1024 * 1024;
+
+/**
  * The production registry-query seam: shell out to `claude agents --json` and
  * return its stdout. `encoding: "utf8"` makes `execFileSync` return a string;
- * stderr is inherited so any diagnostic still reaches the terminal.
+ * stderr is inherited so any diagnostic still reaches the terminal. Bounded by
+ * {@link QUERY_TIMEOUT_MS} and {@link QUERY_MAX_BUFFER} because this runs
+ * synchronously on the board's hot path; either bound being hit throws, and the
+ * probe degrades that to unknown rather than hanging or crashing the board.
  */
 export const realLivenessQuery: LivenessSeam = () =>
   execFileSync("claude", ["agents", "--json"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "inherit"],
+    timeout: QUERY_TIMEOUT_MS,
+    maxBuffer: QUERY_MAX_BUFFER,
   });
