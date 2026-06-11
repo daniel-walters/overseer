@@ -24,18 +24,25 @@ function deps(
   writes: [string, string][];
   spawns: { repo: string; prompt: string }[];
   failures: { issueId: string; repo: string; error: string; edge: string }[];
+  handles: { issueKey: string; handle: string }[];
 } {
   const writes: [string, string][] = [];
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: { issueId: string; repo: string; error: string; edge: string }[] = [];
+  const handles: { issueKey: string; handle: string }[] = [];
   return {
     writes,
     spawns,
     failures,
+    handles,
     writeStatus: (path, status) => writes.push([path, status]),
     buildPrompt: (i) => `review-prompt-for-${i.id}`,
-    spawn: (repo, prompt) => spawns.push({ repo, prompt }),
+    spawn: (repo, prompt) => {
+      spawns.push({ repo, prompt });
+      return `handle-${repo}`;
+    },
     logFailure: (r) => failures.push(r),
+    recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
     ...overrides,
   };
 }
@@ -57,10 +64,33 @@ describe("runReview", () => {
       issue(),
       deps({
         writeStatus: (_p, status) => order.push(`write:${status}`),
-        spawn: () => order.push("spawn"),
+        spawn: () => {
+          order.push("spawn");
+          return "h1";
+        },
       }),
     );
     expect(order).toEqual(["write:in-review", "spawn"]);
+  });
+
+  it("records the reviewer's handle against the Issue after spawning", () => {
+    const d = deps();
+    runReview(issue({ id: "002-b.md", path: "/root/prd/002-b.md", repo: "/repos/api" }), d);
+
+    expect(d.handles).toEqual([
+      { issueKey: "/root/prd/002-b.md", handle: "handle-/repos/api" },
+    ]);
+  });
+
+  it("does not record a handle when the reviewer spawn throws", () => {
+    const d = deps({
+      spawn: () => {
+        throw new Error("claude not found");
+      },
+    });
+    runReview(issue(), d);
+
+    expect(d.handles).toEqual([]);
   });
 
   it("rolls the Issue back to ready-for-review when the spawn throws", () => {

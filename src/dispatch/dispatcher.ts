@@ -17,10 +17,15 @@ import type { Dispatcher } from "../ui/App.js";
 export interface DispatcherDeps {
   /** Validate repos and ensure the per-repo PRD feature branch. */
   readonly git: GitSeam;
-  /** Launch an implementor in `repo` with `prompt`; throws if the launch fails. */
-  readonly spawn: (repo: string, prompt: string) => void;
+  /**
+   * Launch an implementor in `repo` with `prompt`, returning the handle parsed
+   * from the launch stdout (or `undefined`); throws if the launch fails.
+   */
+  readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
+  /** Record a launched agent's handle against its Issue key in the sidecar. */
+  readonly recordHandle: (issueKey: string, handle: string) => void;
 }
 
 /**
@@ -82,6 +87,7 @@ export function createDispatcher(
           }),
         spawn: deps.spawn,
         logFailure: deps.logFailure,
+        recordHandle: deps.recordHandle,
       });
     },
   };

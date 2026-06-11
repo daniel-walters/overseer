@@ -13,14 +13,21 @@ const checkoutFlow = fileURLToPath(
 function recordingDeps(overrides: Partial<ReviewerDeps> = {}): ReviewerDeps & {
   spawns: { repo: string; prompt: string }[];
   failures: unknown[];
+  handles: { issueKey: string; handle: string }[];
 } {
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: unknown[] = [];
+  const handles: { issueKey: string; handle: string }[] = [];
   return {
     spawns,
     failures,
-    spawn: (repo, prompt) => spawns.push({ repo, prompt }),
+    handles,
+    spawn: (repo, prompt) => {
+      spawns.push({ repo, prompt });
+      return `handle-${repo}`;
+    },
     logFailure: (r) => failures.push(r),
+    recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
     ...overrides,
   };
 }
@@ -72,6 +79,24 @@ describe("createReviewer", () => {
 
       expect(deps.spawns).toHaveLength(1);
       expect(deps.spawns[0]?.repo).toBe("/repos/backend");
+    });
+
+    it("records the reviewer's handle against the Issue's full path", () => {
+      const deps = recordingDeps();
+      const reviewer = createReviewer(root, deps);
+
+      const preview = reviewer.readReview("checkout-flow", "004-receipt-email.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      // The reviewer edge records its handle through the same path as the
+      // implementor edge, so the in-review card is as joinable as in-progress.
+      expect(deps.handles).toEqual([
+        {
+          issueKey: join(root, "checkout-flow", "004-receipt-email.md"),
+          handle: "handle-/repos/backend",
+        },
+      ]);
     });
 
     it("builds a prompt carrying the worktree, branch, feature branch, and PRD body", () => {
