@@ -29,8 +29,10 @@ export interface AgentSidecar {
   record(issueKey: string, handle: string): void;
   /**
    * Read the full `issueKey → handle` map. A missing sidecar file (no spawn has
-   * recorded yet, or a fresh machine) reads as an empty map, never an error, so
-   * the liveness join is total on first board open.
+   * recorded yet, or a fresh machine) — or a corrupt one (truncated, hand-edited,
+   * or a non-object JSON value) — reads as an empty map, never an error, so the
+   * liveness join is total on first board open and `record` self-heals by
+   * overwriting a bad file.
    */
   read(): Record<string, string>;
 }
@@ -64,7 +66,21 @@ export function createAgentSidecar(path: string): AgentSidecar {
       // keeps the liveness join total on first open.
       return {};
     }
-    return JSON.parse(raw) as Record<string, string>;
+    // A corrupt sidecar — truncated by a crash mid-write, hand-edited, or holding
+    // a non-object JSON value — reads as an empty map, exactly like a missing one,
+    // so `read` is total and `record` self-heals by overwriting the bad file. The
+    // alternative (letting `JSON.parse` throw) would permanently wedge `record`:
+    // its caller swallows the throw, so every later spawn would silently no-op
+    // against the same unparseable file.
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+        return {};
+      }
+      return parsed as Record<string, string>;
+    } catch {
+      return {};
+    }
   };
 
   return {

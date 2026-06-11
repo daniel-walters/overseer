@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { createAgentSidecar } from "./agentSidecar.js";
 
 /**
@@ -71,5 +71,43 @@ describe("createAgentSidecar", () => {
     sidecar.record("checkout/001-cart.md", "fresh");
 
     expect(sidecar.read()).toEqual({ "checkout/001-cart.md": "fresh" });
+  });
+
+  // A corrupt sidecar — a crash mid-write, a hand-edit, or a non-object value —
+  // must read as an empty map (never throw), so the liveness join stays total and
+  // `record` can self-heal by overwriting the bad file. Without this, the throw
+  // would be swallowed by `record`'s best-effort caller and silently wedge every
+  // later spawn against the same unparseable file.
+  function plant(contents: string): void {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, contents);
+  }
+
+  it("reads an empty map when the sidecar holds malformed JSON", () => {
+    plant('{"checkout/001-cart.md": "abc123'); // truncated mid-write
+    expect(createAgentSidecar(path).read()).toEqual({});
+  });
+
+  it("reads an empty map when the sidecar holds a non-object JSON value", () => {
+    plant("null");
+    expect(createAgentSidecar(path).read()).toEqual({});
+
+    plant('"just a string"');
+    expect(createAgentSidecar(path).read()).toEqual({});
+
+    plant('["an", "array"]');
+    expect(createAgentSidecar(path).read()).toEqual({});
+  });
+
+  it("self-heals: record overwrites a corrupt sidecar with a fresh map", () => {
+    plant("}{ not json");
+    const { record } = createAgentSidecar(path);
+
+    // record reads the corrupt file (as empty), then writes a clean map over it.
+    record("checkout/001-cart.md", "abc123");
+
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": "abc123",
+    });
   });
 });
