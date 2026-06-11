@@ -1,0 +1,75 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createAgentSidecar } from "./agentSidecar.js";
+
+/**
+ * The agent sidecar is the operational-state counterpart to the failed-set: a
+ * small deep module mapping `issueKey → handle`, persisted as JSON beside the
+ * dispatch failure log (outside the watched root, ADR 0008). It is tested
+ * against a real temp file — the persistence *is* the behaviour — mirroring how
+ * the failure-log half of the spawn edge is tested. No real Claude is involved.
+ */
+describe("createAgentSidecar", () => {
+  let dir: string;
+  let path: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "overseer-sidecar-"));
+    path = join(dir, "state", "agents.json");
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("round-trips a recorded issueKey → handle", () => {
+    const sidecar = createAgentSidecar(path);
+    sidecar.record("checkout/001-cart.md", "abc123");
+
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": "abc123",
+    });
+  });
+
+  it("creates the sidecar's parent directory on first record", () => {
+    expect(existsSync(join(dir, "state"))).toBe(false);
+    createAgentSidecar(path).record("checkout/001-cart.md", "abc123");
+    expect(existsSync(path)).toBe(true);
+  });
+
+  it("reads an empty map when the sidecar file does not exist", () => {
+    expect(createAgentSidecar(path).read()).toEqual({});
+  });
+
+  it("keeps distinct Issues' handles side by side", () => {
+    const sidecar = createAgentSidecar(path);
+    sidecar.record("checkout/001-cart.md", "handle-a");
+    sidecar.record("checkout/002-pay.md", "handle-b");
+
+    expect(sidecar.read()).toEqual({
+      "checkout/001-cart.md": "handle-a",
+      "checkout/002-pay.md": "handle-b",
+    });
+  });
+
+  it("records correctly when the method is destructured (the caller wiring)", () => {
+    // The dispatch edge pulls `record` off the object, so it must not depend on
+    // a `this` binding back to `read`.
+    const { record } = createAgentSidecar(path);
+    record("checkout/001-cart.md", "abc123");
+
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": "abc123",
+    });
+  });
+
+  it("overwrites an Issue's handle when it is re-recorded (re-dispatch)", () => {
+    const sidecar = createAgentSidecar(path);
+    sidecar.record("checkout/001-cart.md", "stale");
+    sidecar.record("checkout/001-cart.md", "fresh");
+
+    expect(sidecar.read()).toEqual({ "checkout/001-cart.md": "fresh" });
+  });
+});
