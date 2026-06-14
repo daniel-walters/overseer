@@ -5,6 +5,7 @@ import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
+import type { RedispatchPreview as RedispatchPreviewData } from "../dispatch/rollback.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -436,6 +437,144 @@ describe("App review", () => {
   });
 });
 
+describe("App re-dispatch (R on an orphan)", () => {
+  // A board whose first PRD's first Issue is an orphaned in-progress card.
+  const orphanBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
+          { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
+        ],
+      },
+    ],
+  };
+
+  function preview(id: string): RedispatchPreviewData {
+    return {
+      issue: {
+        id,
+        title: id,
+        path: `/root/auth/${id}`,
+        status: "in-progress",
+        blockedBy: [],
+        repo: "/r",
+        worktree: undefined,
+        branch: undefined,
+        deviation: undefined,
+        body: "",
+      },
+    };
+  }
+
+  function spyRollback(
+    readRollback: (
+      prdId: string,
+      issueId: string,
+    ) => RedispatchPreviewData | undefined = (_p, id) => preview(id),
+  ) {
+    return {
+      readRollback: vi.fn(readRollback),
+      rollback: vi.fn<(p: RedispatchPreviewData) => void>(),
+    };
+  }
+
+  it("opens a re-dispatch preview on R for the selected orphan", async () => {
+    const rollback = spyRollback();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues; first Issue is the orphan
+    await tick();
+    stdin.write("R");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Re-dispatch 010-login");
+    expect(rollback.readRollback).toHaveBeenCalledWith("auth", "010-login");
+  });
+
+  it("rolls the orphan back on confirm, then closes the modal", async () => {
+    const rollback = spyRollback();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("R");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(rollback.rollback).toHaveBeenCalledTimes(1);
+    expect(rollback.rollback).toHaveBeenCalledWith(preview("010-login"));
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+  });
+
+  it("cancels the re-dispatch on Esc, leaving the orphan untouched", async () => {
+    const rollback = spyRollback();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("R");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(rollback.rollback).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+  });
+
+  it("is a no-op on R for a non-orphan card", async () => {
+    const rollback = spyRollback();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write(ENTER); // zoom in (first Issue is the orphan)
+    await tick();
+    stdin.write(ARROW_DOWN); // move to the live (non-orphan) second Issue
+    await tick();
+    stdin.write("R");
+    await tick();
+
+    expect(rollback.readRollback).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+  });
+
+  it("does nothing on R at the board level (recovery is Issue-level only)", async () => {
+    const rollback = spyRollback();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write("R"); // at board level, no zoom
+    await tick();
+
+    expect(rollback.readRollback).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+  });
+
+  it("does nothing on R when no rollback seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={orphanBoard} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("R");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+  });
+});
+
 describe("App full screen", () => {
   /** Count the rendered rows in a frame (Ink emits one line per terminal row). */
   const rowCount = (frame: string): number => frame.split("\n").length;
@@ -516,6 +655,7 @@ describe("App help", () => {
     expect(frame).toContain("Back out to the board"); // Esc
     expect(frame).toContain("Dispatch a wave"); // d
     expect(frame).toContain("Review the selected Issue"); // r
+    expect(frame).toContain("Re-dispatch an orphaned Issue"); // R
     expect(frame).toContain("Toggle auto-run"); // a
     expect(frame).toContain("Show this help"); // ?
     expect(frame).toContain("Quit"); // q

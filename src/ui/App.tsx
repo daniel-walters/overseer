@@ -6,9 +6,11 @@ import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { navReduce, initialNav } from "./navigation.js";
+import { RedispatchPreview } from "./RedispatchPreview.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
+import type { RedispatchPreview as RedispatchPreviewData } from "../dispatch/rollback.js";
 
 /**
  * The dispatch seams the App drives, injected so the keypress → preview →
@@ -41,10 +43,33 @@ export interface Reviewer {
   readonly review: (preview: ReviewPreviewData) => void;
 }
 
-/** What the open modal is previewing: a PRD dispatch or a single-Issue review. */
+/**
+ * The rollback seam the App drives at the Issue level — the recovery
+ * counterpart to {@link Reviewer}, used by the `R` keybind on an orphaned card.
+ *
+ * - `readRollback` resolves the selected Issue into a re-dispatch preview
+ *   (`undefined` if it vanished from the watched root).
+ * - `rollback` rolls the previewed orphan back onto its frontier (`in-progress →
+ *   ready-for-agent`, `in-review → ready-for-review`). It spawns nothing — the
+ *   normal spawn edge re-picks the Issue up.
+ */
+export interface Rollback {
+  readonly readRollback: (
+    prdId: string,
+    issueId: string,
+  ) => RedispatchPreviewData | undefined;
+  readonly rollback: (preview: RedispatchPreviewData) => void;
+}
+
+/**
+ * What the open modal is previewing: a PRD dispatch, a single-Issue review, or a
+ * single-orphan re-dispatch. At most one is ever open (the `nav.confirming`
+ * guard).
+ */
 type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
-  | { readonly kind: "review"; readonly preview: ReviewPreviewData };
+  | { readonly kind: "review"; readonly preview: ReviewPreviewData }
+  | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -64,6 +89,8 @@ interface AppProps {
   dispatcher?: Dispatcher;
   /** Wired in production; absent in tests that don't exercise review. */
   reviewer?: Reviewer;
+  /** Wired in production; absent in tests that don't exercise orphan recovery. */
+  rollback?: Rollback;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
 }
@@ -75,7 +102,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -165,6 +192,27 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
       return;
     }
 
+    if (input === "R") {
+      // Orphan recovery, Issue-level only. Gated on the card's own `orphaned`
+      // liveness marker — the same verdict the card already renders — so `R` is a
+      // no-op on a healthy, unknown, or non-active card. `readRollback` resolves
+      // the orphan once and freezes it on the modal; a vanished Issue (raced a
+      // deletion) yields no preview, so nothing opens.
+      if (
+        nav.level === "issues" &&
+        rollback &&
+        selectedPrd &&
+        selectedIssue?.liveness === "orphaned"
+      ) {
+        const preview = rollback.readRollback(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "redispatch", preview });
+          dispatch({ type: "open-review" });
+        }
+      }
+      return;
+    }
+
     if (input === "?") {
       // Opens the keybind reference, at either level. Reached only past the
       // nav.confirming guard above, so an open preview suppresses it — help and a
@@ -212,6 +260,10 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
       // An ineligible Issue's preview is a read-only skip notice: confirm spawns
       // nothing, it just dismisses (the reviewer would no-op anyway).
       reviewer?.review(modal.preview);
+    } else if (modal?.kind === "redispatch") {
+      // Roll the orphan back onto its frontier; the normal spawn edge re-picks
+      // it up. No spawn happens here.
+      rollback?.rollback(modal.preview);
     }
   }
 
@@ -224,6 +276,9 @@ export function App({ board, dispatcher, reviewer, autoRun }: AppProps) {
   }
   if (modal?.kind === "review") {
     return <ReviewPreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "redispatch") {
+    return <RedispatchPreview preview={modal.preview} />;
   }
   // The help modal is a full-screen takeover like the previews above. It can only
   // be open when no preview is (the nav.confirming guard blocks `?` under one), so

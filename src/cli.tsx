@@ -10,6 +10,7 @@ import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
+import { createRollback } from "./dispatch/rollback.js";
 import { createReactor } from "./reactor/reactor.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
@@ -95,6 +96,12 @@ function runBoard(): void {
   // just another background agent — flipping ready-for-review → in-review and
   // launching the reviewer in the Issue's repo.
   const reviewer = createReviewer(root, { spawn, logFailure, recordHandle });
+  // Orphan recovery (ADR 0009): `R` on an orphaned card rolls its active status
+  // back onto its frontier through the same status seam the launch-failure
+  // rollback uses. It spawns nothing — the normal spawn edge (the Reactor below
+  // if auto-run is on, manual `d`/`r` if off) re-picks the Issue up — so unlike
+  // the dispatcher/reviewer it needs no spawn or log seam.
+  const rollback = createRollback(root);
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
@@ -122,6 +129,7 @@ function runBoard(): void {
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}
+      rollback={rollback}
       reactor={reactor}
     />,
     { alternateScreen: true },
