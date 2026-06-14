@@ -67,13 +67,15 @@ function runBoard(): void {
   // agent is recorded identically; `read` feeds the liveness probe below.
   const { record: recordHandle, read: readHandles } =
     createAgentSidecar(defaultSidecarPath());
-  // The liveness probe (ADR 0008): on each call it re-queries
+  // The liveness probe (ADR 0008 / 0009): on each call it re-queries
   // `claude agents --json`, re-reads the recorded handles, and intersects them
-  // into a per-Issue live/unknown verdict. Wrapping `scanBoard` so the overlay is
-  // recomputed on every rebuild keeps liveness a derived overlay, never persisted
-  // into the Issue files (ADR 0002) — a handle that drops out flips to unknown on
-  // the next scan. `scanWithLiveness` is used for both the eager first render and
-  // the live re-scan, so the board carries liveness from the very first frame.
+  // into a per-Issue trust-qualified absence (live / absent-clean /
+  // absent-degraded). The scanner maps that onto the card-level verdict behind
+  // the active-lane gate. Wrapping `scanBoard` so the overlay is recomputed on
+  // every rebuild keeps liveness a derived overlay, never persisted into the
+  // Issue files (ADR 0002) — a handle that drops out flips to absent on the next
+  // scan. `scanWithLiveness` is used for both the eager first render and the live
+  // re-scan, so the board carries liveness from the very first frame.
   const probe = createLivenessProbe({
     query: realLivenessQuery,
     readHandles,

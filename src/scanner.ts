@@ -13,16 +13,18 @@ import {
   type HumanReviewReason,
   type Liveness,
 } from "./model.js";
+import type { Absence } from "./dispatch/liveness.js";
 
 /**
- * Look up the liveness verdict for one Issue by its absolute path — the same
- * `prdDir/filename` key the agent sidecar records at spawn time (ADR 0008).
- * `undefined` when the Issue has no recorded handle (a previous session, the
- * spawn/record gap, or simply never dispatched). On an active-agent card the
- * scanner reads that `undefined` as **`unknown`** (the honesty boundary, slice
- * 3): a present-this-session "live" is the only path to a `live` marker.
+ * Look up the probe's trust-qualified absence ({@link Absence}) for one Issue by
+ * its absolute path — the same `prdDir/filename` key the agent sidecar records at
+ * spawn time (ADR 0008). `undefined` when the Issue has no recorded handle (a
+ * previous session, the spawn/record gap, or simply never dispatched). On an
+ * active-agent card the scanner reads that `undefined` as **`unknown`** (the
+ * honesty boundary): a present-this-session match is the only path to `live`, and
+ * a *trustworthy* absence (`absent-clean`) the only path to `orphaned` (ADR 0009).
  */
-export type LivenessLookup = (issuePath: string) => Liveness | undefined;
+export type LivenessLookup = (issuePath: string) => Absence | undefined;
 
 /**
  * Scan the root directory into an immutable {@link Board}.
@@ -116,8 +118,8 @@ function scanIssue(
   // The liveness overlay rides only on the two active-agent lanes (in-progress,
   // in-review), keyed by the Issue's absolute path — the sidecar's join key
   // (ADR 0008). Once a lookup is wired in, such a card always carries a verdict:
-  // the lookup's "live"/"unknown" when it has one, and a default of "unknown"
-  // when it has none — the honesty boundary (slice 3) below.
+  // the lookup's absence mapped to live/orphaned/unknown, and a default of
+  // "unknown" when it has none — the honesty boundary below.
   const withLiveness = applyLiveness(withReadyFor, path, lane, lookupLiveness);
 
   if (lane !== "human-review") return withLiveness;
@@ -129,15 +131,22 @@ function scanIssue(
 
 /**
  * Add the liveness verdict to an Issue, but only on an `in-progress` / `in-review`
- * card. This is the honesty boundary (ADR 0008, slice 3): once a lookup is
+ * card. This is the honesty boundary (ADR 0008 / 0009): once a lookup is
  * provided, every active-agent card *must* carry a verdict — silence on an
  * in-progress card is the very ambiguity the feature exists to kill.
  *
- * So the lookup's verdict is used when it has one, and **`unknown`** is the
- * default when it has none (the never-recorded cases: a previous session, an
- * empty sidecar, or the spawn/record gap). The only path to **`live`** is the
- * lookup positively returning it for a handle recorded *this* session — every
- * other case, ambiguous or not, reads `unknown`, never a false `live`.
+ * The lane gate lives here, not in the probe: the probe emits a status-ignorant
+ * trust-qualified {@link Absence}, and this is the one place that knows these two
+ * lanes are owned by an active agent (ADR 0009). It maps the absence to the
+ * card-level verdict:
+ *
+ * - `live` → **live** (the handle is in the registry).
+ * - `absent-clean` → **orphaned** (a trustworthy query says the agent is gone:
+ *   stuck on an active lane, recoverable).
+ * - `absent-degraded` → **unknown** (the query couldn't be trusted; a false
+ *   `orphaned` would invite a double-spawn, so it degrades to `unknown`).
+ * - no recorded handle → **unknown** (a previous session, an empty sidecar, or
+ *   the spawn/record gap). Never a false `live`, and never a false `orphaned`.
  *
  * A card outside the two active-agent lanes (ready, done, unsorted) — or any
  * card when no lookup is wired in — is returned unchanged and stays unmarked:
@@ -150,7 +159,21 @@ function applyLiveness(
   lookupLiveness?: LivenessLookup,
 ): Issue {
   if (!lookupLiveness || !LIVENESS_LANES.has(lane)) return issue;
-  return { ...issue, liveness: lookupLiveness(path) ?? "unknown" };
+  return { ...issue, liveness: livenessFromAbsence(lookupLiveness(path)) };
+}
+
+/** Map the probe's trust-qualified absence onto the card-level verdict (ADR 0009). */
+function livenessFromAbsence(absence: Absence | undefined): Liveness {
+  switch (absence) {
+    case "live":
+      return "live";
+    case "absent-clean":
+      return "orphaned";
+    // `absent-degraded` and "no recorded handle" both stay unknown: an untrusted
+    // query or an unrecorded card must never read as a dead agent.
+    default:
+      return "unknown";
+  }
 }
 
 /**

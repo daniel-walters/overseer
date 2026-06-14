@@ -39,11 +39,15 @@ const REASON_MARKER: Record<HumanReviewReason, string> = {
  * glyph plus the verdict word on its own truncating line. A live agent reads
  * green (it is working); an unknown one reads dim/gray — deliberately quiet, not
  * an alarm, because unknown is the honest "this session can't see it" verdict,
- * not a failure (ADR 0008).
+ * not a failure (ADR 0008). An orphan reads loud (a yellow warning glyph + word):
+ * the agent is genuinely gone and the card is stuck, recoverable with `R` — so it
+ * is an attention signal, deliberately distinct from the quiet `unknown` dimming
+ * (ADR 0009).
  */
 const LIVENESS_MARKER: Record<Liveness, { text: string; color: string }> = {
   live: { text: "● live", color: "green" },
   unknown: { text: "○ unknown", color: "gray" },
+  orphaned: { text: "⚠ orphaned", color: "yellow" },
 };
 
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */

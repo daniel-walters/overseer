@@ -53,13 +53,52 @@ foundation — **process tracking that survives a board restart** (so resume sta
 
 ### 1. Orphan reconciliation on launch — recover a dead `in-progress` Issue
 
-When a scan finds an `in-progress` Issue with no live process (crash, killed board, reboot
-mid-run), flag it — and optionally offer re-dispatch — rather than leaving a silent
-orphan stuck forever. Without this, every crash during a dogfood session forces hand-editing
-frontmatter to recover, breaking the "resume is free" promise the moment real work relies
-on it. The flip-with-rollback in `dispatch.ts` only covers a spawn that *throws at launch*;
-this covers a worker that dies *after* launch or is gone by relaunch. Builds on the
-liveness handles (shipped — [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)).
+When a scan finds an Issue in an *active* status (`in-progress`/`in-review`) whose recorded
+agent is no longer live (crash, killed board, reboot mid-run), **flag** it with a card
+marker and offer **one-keypress re-dispatch** — rather than leaving a silent orphan stuck
+forever. Without this, every crash during a dogfood session forces hand-editing frontmatter
+to recover, breaking the "resume is free" promise the moment real work relies on it. The
+flip-with-rollback in `dispatch.ts` only covers a spawn that *throws at launch*; this covers
+a worker that dies *after* launch or is gone by relaunch. Builds on the liveness handles
+(shipped — [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)).
+
+Resolved shape (grilled):
+
+- **Detection is a third liveness verdict.** The verdict type grows `live | unknown` →
+  `live | unknown | orphaned`, computed in the *same* probe. The probe must distinguish a
+  **failed/garbled `claude agents --json` query** (degraded ⇒ every active card stays
+  `unknown`, never a false `orphaned`) from a **clean empty array** (Claude is up, reports
+  no live agents ⇒ an active Issue with an absent recorded handle is genuinely orphaned).
+  Only a successfully-parsed array licenses an `orphaned` verdict.
+- **The active-status gate stays in the scanner.** The probe stays status-ignorant and
+  emits a *trust-qualified absence* (`live` / `absent-clean` / `absent-degraded`); the
+  scanner — already the only place that stamps liveness on active-status cards — maps
+  `absent-clean` on an active card to `orphaned`, everything else to `unknown`.
+- **Recovery is human-triggered rollback, never auto.** A new Issue-level keybind **`R`**
+  (with a confirmation preview, like `d`/`r`) rolls the orphan's active status back to its
+  awaiting value (`in-progress → ready-for-agent`, `in-review → ready-for-review`) — the
+  *same* transition `dispatch.ts`'s launch-failure rollback already writes, just
+  human-triggered. It does **not** spawn; the normal spawn edge (reactor if auto-run is on,
+  `d`/`r` if off) re-picks it up. The reactor never auto-rolls-back an orphan: the human is
+  the safety check against a false-dead verdict (a query hiccup, a still-working agent).
+- **Re-dispatch that fails to launch is out of scope** — it lands as a suppressed `ready-*`
+  card and is the "Surface reactor state" idea's job, not this one's.
+- **The second orphan shape is out of scope** (see below).
+
+### 1a. (Deferred) The inverse orphan: a live agent with no recorded handle
+
+ADR 0008 names a *second* orphan shape — a crash in the `flip → spawn → record` window
+leaves an agent **running** (a `claude agents --json` row) whose handle matches **no**
+sidecar entry, and an `in-progress` Issue with no recorded handle (so its card shows no
+marker, looking like a never-tracked legacy Issue). The danger: a human assumes it's dead
+and re-dispatches, double-spawning one Issue. Deliberately **out of scope** for feature #1:
+it can't use the same Issue-anchored join — recovering *which* Issue a stray agent belongs
+to needs the `cwd`/worktree correlation ADR 0008 explicitly rejected as ambiguous — so it
+yields at best a board-level "N untracked live agents" warning, not the per-card marker +
+`R` that #1 builds. It is also *rare*: `spawnWithFlip` records synchronously immediately
+after spawn returns, so the window is only a hard crash (SIGKILL/power loss) in a
+sub-millisecond gap, not any normal error path. Named here so it reads as consciously
+deferred, not forgotten.
 
 ### 2. Kill switch — stop a running or hung agent
 
@@ -114,6 +153,11 @@ reactor is deliberately ignoring it); (2) idle vs. actively-working vs. at-rest.
 future UI pass would surface these — e.g. a card marker for spawn-failed/suppressed
 Issues (mirroring the `human_review_reason` marker), and/or a board status line. For
 now everything goes to the log; we surface in the UI later.
+
+This also catches **orphan re-dispatch that fails to launch**: feature #1 rolls an
+orphan back to `ready-for-agent` and lets the normal spawn edge re-pick it up, so a
+relaunch that throws lands as a suppressed `ready-*` card exactly like any other
+spawn failure — invisible by the same mechanism, fixed here, not in #1.
 
 ### Configurable AI-review turns and effort
 

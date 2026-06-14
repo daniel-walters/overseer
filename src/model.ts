@@ -166,14 +166,23 @@ export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
 
 /**
  * The liveness overlay on an Issue card: whether the agent Overseer spawned for
- * it is still in Claude's live session registry (CONTEXT.md, ADR 0008). Derived
- * on each board open by joining the recorded `--bg` handles against
- * `claude agents --json` — **live** if the Issue's handle is present, **unknown**
- * otherwise — and never written into the Issue files (ADR 0002, free resume).
- * The verdict degrades to `unknown`, never a false `live`: an Issue from a
- * previous session, or one whose agent has exited, reads as unknown.
+ * it is still in Claude's live session registry (CONTEXT.md, ADR 0008 / 0009).
+ * Derived on each board open by joining the recorded `--bg` handles against
+ * `claude agents --json`, and never written into the Issue files (ADR 0002, free
+ * resume):
+ *
+ * - **live** — the Issue's handle is present in the registry.
+ * - **orphaned** — the handle is gone *and* the registry query was trustworthy
+ *   (a cleanly-parsed array), so the agent is genuinely dead on an active-lane
+ *   card: stuck, recoverable (ADR 0009).
+ * - **unknown** — every other case: the query was untrustworthy (a false
+ *   `orphaned` would invite a double-spawn, ADR 0009), or no handle was recorded
+ *   this session (a previous session, the spawn/record gap).
+ *
+ * The verdict never reads a false `live`; the scanner maps the probe's
+ * trust-qualified absence onto this card-level type behind the active-lane gate.
  */
-export type Liveness = "live" | "unknown";
+export type Liveness = "live" | "unknown" | "orphaned";
 
 export interface Issue {
   /** Identity: the Issue filename (e.g. `001-auth.md`). */
@@ -188,9 +197,10 @@ export interface Issue {
   readonly humanReviewReason?: HumanReviewReason;
   /**
    * The derived liveness overlay, set only on an `in-progress` / `in-review`
-   * card whose agent's handle was recorded — `live` if that handle is in the
-   * registry, `unknown` if not. Absent when no handle was ever recorded (no
-   * marker), so a never-dispatched card is distinct from a dead one.
+   * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
+   * query shows the handle is gone, `unknown` otherwise. Absent on every other
+   * lane (and when no lookup is wired in), so a never-dispatched card is distinct
+   * from a dead one.
    */
   readonly liveness?: Liveness;
 }

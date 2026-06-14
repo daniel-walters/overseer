@@ -16,6 +16,10 @@ _Avoid_: Ticket, task, card (card is the visual rendering of an Issue, not the I
 Whether the agent Overseer spawned for an Issue is still running. An *overlay* on the board, never a fact in the Issue files: derived from a **sidecar state file** outside the watched root (`~/.local/state/overseer/`, where `dispatch.log` already lives), keyed by Issue, recording each spawn's process handle. Keeps the viewer read-only ([ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)) — the PID is Overseer's operational state, not domain data, so it lives beside the failure log, not in the Issue.
 _Avoid_: health, status (status is the Issue's kanban column; liveness is orthogonal to it)
 
+**Orphan**:
+An Issue stuck in an *active* status (`in-progress` / `in-review`) on disk whose agent is no longer alive — the agent crashed, was killed, or the board died mid-run after the status flip. Distinct from plain `unknown` [Liveness](#): an Orphan is an active-status Issue whose agent will never write the next status, so it is stuck forever, not merely unobserved. Overseer **flags** it with a card marker and offers a **one-keypress re-dispatch** (rolling the status back to its awaiting value so the normal spawn edge re-picks it up); it never rolls an orphan back automatically — the human is the safety check against a false-dead verdict.
+_Avoid_: dead (an orphan may be flagged from a `unknown` verdict that is merely a query hiccup, not a confirmed death), stuck (too vague)
+
 **Deviation**:
 A record an implementor agent writes on its Issue — a `deviation` frontmatter field carrying the reason — when it strays from the Issue's planned approach to get the work done. The field's *presence* (not any boolean value) is the gate: a recorded Deviation forces a human review rather than an AI-only one. The implementor writes it in the same edit that flips the Issue to `ready-for-review`. See [Review outcome](#review-outcome).
 _Avoid_: drift, divergence

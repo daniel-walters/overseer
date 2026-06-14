@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   parseAgents,
+  parseLiveSet,
   computeLiveness,
   createLivenessProbe,
   type LivenessSeam,
@@ -9,10 +10,16 @@ import {
 /**
  * The liveness module is the highest-value surface of the feature: it joins the
  * handles Overseer recorded at spawn time against Claude's live session registry
- * (`claude agents --json`) and returns a per-Issue live/unknown verdict (ADR
- * 0008). Both halves are pure data-in/data-out, fed fixture JSON — no test
+ * (`claude agents --json`) and returns a per-Issue trust-qualified absence (ADR
+ * 0008 / 0009). Both halves are pure data-in/data-out, fed fixture JSON — no test
  * launches a real Claude process, mirroring how the dispatcher is tested behind
  * its exec seam.
+ *
+ * The load-bearing, easily-mis-simplified logic is the **degraded-vs-clean**
+ * distinction (ADR 0009): a *thrown* or *non-array* query must yield
+ * `absent-degraded` (→ `unknown` on the card, never `orphaned`), while a
+ * cleanly-parsed array — even an empty one — yields `absent-clean`, the only path
+ * to `orphaned`. These cases are pinned hard below.
  */
 describe("parseAgents", () => {
   it("reads a background row's `state` field", () => {
@@ -91,67 +98,100 @@ describe("parseAgents", () => {
   });
 });
 
+describe("parseLiveSet", () => {
+  // The trust signal (ADR 0009) — `degraded` decides whether an absent handle may
+  // ever become `orphaned`. Only a value that parses to an array is trustworthy.
+  it("flags a cleanly-parsed array as trustworthy, even when empty", () => {
+    expect(parseLiveSet("[]")).toEqual({ agents: [], degraded: false });
+    expect(
+      parseLiveSet(JSON.stringify([{ id: "sess-a", state: "busy" }])),
+    ).toEqual({ agents: [{ id: "sess-a", state: "busy" }], degraded: false });
+  });
+
+  it("flags unparseable JSON as degraded with an empty live set", () => {
+    expect(parseLiveSet("not json")).toEqual({ agents: [], degraded: true });
+    expect(parseLiveSet("")).toEqual({ agents: [], degraded: true });
+  });
+
+  it("flags a non-array value (an error object) as degraded", () => {
+    // The registry printed something that wasn't the expected array — an error
+    // object, truncated output. Claude can't be trusted to have reported the true
+    // live set, so no absent handle may be called gone.
+    expect(parseLiveSet("{}")).toEqual({ agents: [], degraded: true });
+    expect(parseLiveSet('{"error":"boom"}')).toEqual({
+      agents: [],
+      degraded: true,
+    });
+  });
+});
+
 describe("computeLiveness", () => {
   it("marks an Issue whose recorded handle is in the live set live", () => {
     const verdicts = computeLiveness(
       { "prd/001.md": "sess-a" },
       [{ id: "sess-a", state: "busy" }],
+      false,
     );
 
     expect(verdicts).toEqual({ "prd/001.md": "live" });
   });
 
-  it("marks an Issue whose recorded handle is absent unknown", () => {
+  it("marks an absent handle absent-clean after a trustworthy query", () => {
+    // The handle is gone and the query parsed cleanly: a genuine absence, which
+    // the scanner may turn into `orphaned` on an active lane (ADR 0009).
     const verdicts = computeLiveness(
       { "prd/001.md": "sess-dead" },
       [{ id: "sess-other", state: "busy" }],
+      false,
     );
 
-    expect(verdicts).toEqual({ "prd/001.md": "unknown" });
+    expect(verdicts).toEqual({ "prd/001.md": "absent-clean" });
   });
 
-  it("marks every Issue unknown when no agents are live", () => {
+  it("marks an absent handle absent-degraded when the query was untrustworthy", () => {
+    // Same membership miss, but the query couldn't be trusted — so the absence is
+    // degraded, and can only ever read as `unknown`, never `orphaned`.
     const verdicts = computeLiveness(
-      { "prd/001.md": "sess-a", "prd/002.md": "sess-b" },
+      { "prd/001.md": "sess-dead" },
       [],
+      true,
     );
 
-    expect(verdicts).toEqual({
-      "prd/001.md": "unknown",
-      "prd/002.md": "unknown",
-    });
+    expect(verdicts).toEqual({ "prd/001.md": "absent-degraded" });
   });
 
-  it("verdicts each recorded Issue independently", () => {
+  it("classifies each recorded Issue independently against one trust verdict", () => {
     const verdicts = computeLiveness(
       { "prd/001.md": "live-handle", "prd/002.md": "dead-handle" },
       [{ id: "live-handle", state: "idle" }],
+      false,
     );
 
     expect(verdicts).toEqual({
       "prd/001.md": "live",
-      "prd/002.md": "unknown",
+      "prd/002.md": "absent-clean",
     });
   });
 
   it("returns no verdicts when nothing was ever recorded", () => {
-    expect(computeLiveness({}, [{ id: "sess-a", state: "busy" }])).toEqual({});
+    expect(computeLiveness({}, [{ id: "sess-a", state: "busy" }], false)).toEqual(
+      {},
+    );
   });
 
   it("gives no verdict for an Issue with no recorded handle, only for recorded ones", () => {
-    // The missing-sidecar-entry case (slice 3): a wave recorded one Issue's
-    // handle but not its sibling's (the sibling's spawn crashed in the
-    // spawn/record gap, or it was dispatched by a previous session). Only the
-    // recorded Issue gets a verdict; the missing one is absent from the map, and
-    // the scanner overlay reads that absence as unknown. The recorded handle
-    // being absent from the live set means even it reads unknown — there is no
-    // way for the unrecorded Issue to inherit a false live.
+    // The missing-sidecar-entry case: a wave recorded one Issue's handle but not
+    // its sibling's (the sibling's spawn crashed in the spawn/record gap, or it
+    // was dispatched by a previous session). Only the recorded Issue gets a
+    // verdict; the missing one is absent from the map, and the scanner overlay
+    // reads that absence as unknown.
     const verdicts = computeLiveness(
       { "prd/001.md": "recorded-but-dead" },
       [{ id: "unrelated-live-agent", state: "busy" }],
+      false,
     );
 
-    expect(verdicts).toEqual({ "prd/001.md": "unknown" });
+    expect(verdicts).toEqual({ "prd/001.md": "absent-clean" });
     expect(verdicts["prd/002.md"]).toBeUndefined();
   });
 });
@@ -171,15 +211,20 @@ describe("createLivenessProbe", () => {
 
     expect(probe()).toEqual({
       "prd/001.md": "live",
-      "prd/002.md": "unknown",
+      "prd/002.md": "absent-clean",
     });
     expect(query).toHaveBeenCalledOnce();
   });
 
-  it("degrades every Issue to unknown when the registry query throws", () => {
-    // `claude agents --json` failing to run (binary missing, non-zero exit) must
-    // not crash the board open: liveness simply reads as unknown everywhere,
-    // never a false live (ADR 0008).
+  // ── The degraded-vs-clean distinction (ADR 0009) ────────────────────────────
+  // The single most important — and most reversible-by-accident — behaviour: a
+  // false `orphaned` invites a double-spawn, so any untrustworthy query degrades
+  // every absent handle to `absent-degraded` (→ `unknown`), never `orphaned`.
+
+  it("degrades every absent handle when the registry query throws", () => {
+    // `claude agents --json` failing to run (binary missing, non-zero exit,
+    // timeout) must not crash the board open, and must never read as `orphaned`:
+    // the agent might still be alive behind the failure (ADR 0009).
     const probe = createLivenessProbe({
       query: () => {
         throw new Error("claude: command not found");
@@ -187,10 +232,32 @@ describe("createLivenessProbe", () => {
       readHandles: () => ({ "prd/001.md": "sess-a" }),
     });
 
-    expect(probe()).toEqual({ "prd/001.md": "unknown" });
+    expect(probe()).toEqual({ "prd/001.md": "absent-degraded" });
   });
 
-  it("recomputes on each call — a handle that drops out flips live → unknown", () => {
+  it("degrades every absent handle when the query result is not an array", () => {
+    // A registry that printed an error object instead of the array is just as
+    // untrustworthy as one that threw — same fail-safe, never `orphaned`.
+    const probe = createLivenessProbe({
+      query: () => '{"error":"registry unavailable"}',
+      readHandles: () => ({ "prd/001.md": "sess-a" }),
+    });
+
+    expect(probe()).toEqual({ "prd/001.md": "absent-degraded" });
+  });
+
+  it("licenses absent-clean only from a cleanly-parsed array, even an empty one", () => {
+    // The empty array is the crux: Claude is up and reports no live agents, so an
+    // absent handle is genuinely gone — the only path to `orphaned` downstream.
+    const probe = createLivenessProbe({
+      query: () => "[]",
+      readHandles: () => ({ "prd/001.md": "sess-a" }),
+    });
+
+    expect(probe()).toEqual({ "prd/001.md": "absent-clean" });
+  });
+
+  it("recomputes on each call — a handle that drops out flips live → absent-clean", () => {
     let live = true;
     const probe = createLivenessProbe({
       query: () =>
@@ -201,34 +268,31 @@ describe("createLivenessProbe", () => {
     expect(probe()).toEqual({ "prd/001.md": "live" });
     live = false;
     // No persistence: the next probe re-queries and re-intersects from scratch,
-    // so an agent that exited flips to unknown with no stale cache (ADR 0008).
-    expect(probe()).toEqual({ "prd/001.md": "unknown" });
+    // so an agent that exited flips to absent-clean with no stale cache.
+    expect(probe()).toEqual({ "prd/001.md": "absent-clean" });
   });
 
-  // ── The honesty boundary (slice 3) ─────────────────────────────────────────
-  // The previous-session and empty-sidecar cases are the correctness heart of
-  // the feature: every ambiguous join must resolve to unknown, never a false
-  // live. The probe is where the recorded handles meet the live registry, so
-  // these cases are pinned here as well as at the scanner overlay.
+  // ── The honesty boundary ────────────────────────────────────────────────────
+  // The previous-session and empty-sidecar cases: every ambiguous join must
+  // resolve away from a false `live`. The probe is where the recorded handles
+  // meet the live registry, so these are pinned here as well as at the scanner.
 
-  it("yields unknown for a prior-session handle absent from the live set", () => {
+  it("yields absent-clean for a prior-session handle absent from a healthy live set", () => {
     // The sidecar still holds a handle a *previous* board session recorded, but
-    // that session's agent is gone — its handle is no longer a live `id`. The
-    // live set even has an unrelated agent running; the join must not be fooled
-    // into a false live by an active-but-different session.
+    // that session's agent is gone. The live set even has an unrelated agent
+    // running; the join must not be fooled into a false live.
     const probe = createLivenessProbe({
       query: () => JSON.stringify([{ id: "this-session-agent", state: "busy" }]),
       readHandles: () => ({ "prd/001.md": "prior-session-handle" }),
     });
 
-    expect(probe()).toEqual({ "prd/001.md": "unknown" });
+    expect(probe()).toEqual({ "prd/001.md": "absent-clean" });
   });
 
   it("yields no verdict from an empty sidecar, so nothing can read live", () => {
-    // A fresh board open with an empty sidecar (a prior run that recorded
-    // nothing, or a wiped file): there are live agents, but none was recorded by
-    // *this* session, so the join produces no verdict at all — and the scanner
-    // overlay defaults those active-agent cards to unknown. No path yields live.
+    // A fresh board open with an empty sidecar: there are live agents, but none
+    // was recorded by *this* session, so the join produces no verdict at all —
+    // the scanner overlay defaults those active-agent cards to unknown.
     const probe = createLivenessProbe({
       query: () => JSON.stringify([{ id: "some-live-agent", state: "busy" }]),
       readHandles: () => ({}),
@@ -240,8 +304,8 @@ describe("createLivenessProbe", () => {
   it("never confuses a previous session's live agent for this session's Issue", () => {
     // Two Issues recorded across two sessions: one handle is still live, the
     // other (an older session's) is not. Only the present match reads live; the
-    // previous-session handle reads unknown — proving membership is per-handle,
-    // never a blanket "an agent is alive somewhere".
+    // previous-session handle reads absent-clean — proving membership is
+    // per-handle, never a blanket "an agent is alive somewhere".
     const probe = createLivenessProbe({
       query: () => JSON.stringify([{ id: "live-now", state: "idle" }]),
       readHandles: () => ({
@@ -252,7 +316,7 @@ describe("createLivenessProbe", () => {
 
     expect(probe()).toEqual({
       "prd/001.md": "live",
-      "prd/002.md": "unknown",
+      "prd/002.md": "absent-clean",
     });
   });
 });

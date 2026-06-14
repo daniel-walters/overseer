@@ -246,22 +246,56 @@ describe("scanBoard liveness overlay", () => {
     expect(issueById(featureIssues(board), "001-working.md").liveness).toBe("live");
   });
 
-  it("overlays an unknown verdict on an in-review Issue whose agent is gone", () => {
+  // ── The orphan mapping (ADR 0009) ─────────────────────────────────────────
+  // The active-status gate lives here, not in the probe: the scanner is the one
+  // place that knows in-progress / in-review are owned by an active agent, so it
+  // maps the probe's trust-qualified absence onto the card-level verdict. The
+  // load-bearing rule: `absent-clean` (a trustworthy "gone") becomes `orphaned`;
+  // `absent-degraded` (an untrustworthy "gone") must stay `unknown`, never
+  // `orphaned`, because a false `orphaned` invites a double-spawn.
+
+  it("maps an absent-clean verdict on an in-progress card to orphaned", () => {
     const { root, pathOf } = liveRoot();
     const board = scanBoard(root, (path) =>
-      path === pathOf("002-reviewing.md") ? "unknown" : undefined,
+      path === pathOf("001-working.md") ? "absent-clean" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBe(
+      "orphaned",
+    );
+  });
+
+  it("maps an absent-clean verdict on an in-review card to orphaned", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("002-reviewing.md") ? "absent-clean" : undefined,
     );
 
     expect(issueById(featureIssues(board), "002-reviewing.md").liveness).toBe(
+      "orphaned",
+    );
+  });
+
+  it("maps an absent-degraded verdict to unknown, never orphaned", () => {
+    // An untrustworthy query (it threw, or did not parse to an array): the agent
+    // might still be alive behind the hiccup, so the card must read unknown.
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("001-working.md") ? "absent-degraded" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "001-working.md").liveness).toBe(
       "unknown",
     );
   });
 
   it("never overlays liveness on a lane that is not in-progress or in-review", () => {
-    // The lookup claims every Issue is live; only the two active-agent lanes may
-    // carry the marker — a ready or done card never shows a liveness verdict.
+    // The lookup claims every Issue is gone-clean; only the two active-agent
+    // lanes may carry the marker — a ready or done card never shows a verdict, so
+    // an Issue that legitimately advanced past the active status never reads
+    // orphaned (ADR 0009).
     const { root } = liveRoot();
-    const board = scanBoard(root, () => "live");
+    const board = scanBoard(root, () => "absent-clean");
     const issues = featureIssues(board);
 
     expect(issueById(issues, "003-queued.md").liveness).toBeUndefined();
@@ -308,13 +342,14 @@ describe("scanBoard liveness overlay", () => {
     );
   });
 
-  it("reads unknown for an in-progress Issue whose prior-session handle is absent from the live set", () => {
-    // The lookup explicitly resolved this Issue to unknown (its recorded handle
-    // is gone from `claude agents --json`). Indistinguishable, on the card, from
-    // the never-recorded case above — both honestly read unknown.
+  it("reads unknown for an in-progress Issue whose query was degraded", () => {
+    // The lookup resolved this Issue to absent-degraded (its handle is gone, but
+    // the query that said so couldn't be trusted). On the card this is
+    // indistinguishable from the never-recorded case above — both honestly read
+    // unknown, never orphaned.
     const { root, pathOf } = liveRoot();
     const board = scanBoard(root, (path) =>
-      path === pathOf("001-working.md") ? "unknown" : undefined,
+      path === pathOf("001-working.md") ? "absent-degraded" : undefined,
     );
 
     expect(issueById(featureIssues(board), "001-working.md").liveness).toBe(
