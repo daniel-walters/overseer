@@ -24,10 +24,13 @@ So, separating what's solved from what's only wished-for:
   control off — global, in-memory, on by default (see `CONTEXT.md` → Auto-run).
 - **Resume** — *solved for free*, by level-triggering off the files (above).
 - **Live tracking of running agents** — *partially solved.* **Liveness** (shipped,
-  [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)) now surfaces
-  alive-vs-unknown per card, so `in-progress` is no longer ambiguous about *whether* its
-  agent is running. Still open: *which* `claude --bg` is which beyond the marker, whether
-  one is hung, and its output (see "Per-agent logs" below).
+  [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)) surfaces
+  live/unknown/orphaned per card, so `in-progress` is no longer ambiguous about *whether*
+  its agent is running, and **orphan reconciliation** (shipped,
+  [ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md)) recovers a
+  card whose agent is gone with one keypress (`R`). Still open: *which* `claude --bg` is
+  which beyond the marker, whether one is hung, and its output (see "Per-agent logs"
+  below).
 - **True pause of in-flight agents** — *open gap.* Toggling the reactor off (or pausing
   a PRD) stops it spawning *new* agents; the ones already running keep running. There is
   no kill switch. "Pause" today means "stop starting more," not "stop."
@@ -40,73 +43,41 @@ it. Until then, live tracking and true pause are wishes, not committed solutions
 
 ## High priority: the minimum set to dogfood Overseer on itself
 
-The ideas below are the concrete resolution of the theme above. Together with the
-now-shipped **Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md))
-they are the **minimum feature set to confidently dogfood** — to build Overseer using
-Overseer as the harness. The bar is not "more features"; it is **trust**: `in-progress`
-used to be ambiguous (working? hung? dead?), and the failure you'd hit while building
-Overseer is exactly the one the board couldn't show you. The `FailedSet` only suppresses
-*launch* failures — once an agent is spawned, the loop is blind to it. These convert the
-board from "shows footprints" to "tells the truth." Liveness shipped the shared
-foundation — **process tracking that survives a board restart** (so resume stays free, ADR
-0002) — the handle sidecar the two below build on.
+The idea below is the concrete resolution of the theme above. Together with the now-shipped
+**Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)) and
+**Orphan reconciliation** ([ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md))
+it is the **minimum feature set to confidently dogfood** — to build Overseer using Overseer
+as the harness. The bar is not "more features"; it is **trust**: `in-progress` used to be
+ambiguous (working? hung? dead?), and the failure you'd hit while building Overseer is
+exactly the one the board couldn't show you. The `FailedSet` only suppresses *launch*
+failures — once an agent is spawned, the loop is blind to it. These convert the board from
+"shows footprints" to "tells the truth." Liveness shipped the shared foundation — **process
+tracking that survives a board restart** (so resume stays free, ADR 0002) — the handle
+sidecar both it and the kill switch below build on; orphan reconciliation then made a dead
+`in-progress` card recoverable with one keypress (`R`).
 
-### 1. Orphan reconciliation on launch — recover a dead `in-progress` Issue
+### 1. Kill switch — stop a running or hung agent
 
-When a scan finds an Issue in an *active* status (`in-progress`/`in-review`) whose recorded
-agent is no longer live (crash, killed board, reboot mid-run), **flag** it with a card
-marker and offer **one-keypress re-dispatch** — rather than leaving a silent orphan stuck
-forever. Without this, every crash during a dogfood session forces hand-editing frontmatter
-to recover, breaking the "resume is free" promise the moment real work relies on it. The
-flip-with-rollback in `dispatch.ts` only covers a spawn that *throws at launch*; this covers
-a worker that dies *after* launch or is gone by relaunch. Builds on the liveness handles
-(shipped — [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)).
+Build on the shipped liveness handles to actually terminate a spawned agent, turning the
+auto-run toggle's "stop starting more" into a real "stop." A manual `kill` suffices at
+first, but it is wanted the first time an agent goes rogue in the very repo you're building.
+This is the "true pause of in-flight agents" gap from the theme, made actionable.
 
-Resolved shape (grilled):
-
-- **Detection is a third liveness verdict.** The verdict type grows `live | unknown` →
-  `live | unknown | orphaned`, computed in the *same* probe. The probe must distinguish a
-  **failed/garbled `claude agents --json` query** (degraded ⇒ every active card stays
-  `unknown`, never a false `orphaned`) from a **clean empty array** (Claude is up, reports
-  no live agents ⇒ an active Issue with an absent recorded handle is genuinely orphaned).
-  Only a successfully-parsed array licenses an `orphaned` verdict.
-- **The active-status gate stays in the scanner.** The probe stays status-ignorant and
-  emits a *trust-qualified absence* (`live` / `absent-clean` / `absent-degraded`); the
-  scanner — already the only place that stamps liveness on active-status cards — maps
-  `absent-clean` on an active card to `orphaned`, everything else to `unknown`.
-- **Recovery is human-triggered rollback, never auto.** A new Issue-level keybind **`R`**
-  (with a confirmation preview, like `d`/`r`) rolls the orphan's active status back to its
-  awaiting value (`in-progress → ready-for-agent`, `in-review → ready-for-review`) — the
-  *same* transition `dispatch.ts`'s launch-failure rollback already writes, just
-  human-triggered. It does **not** spawn; the normal spawn edge (reactor if auto-run is on,
-  `d`/`r` if off) re-picks it up. The reactor never auto-rolls-back an orphan: the human is
-  the safety check against a false-dead verdict (a query hiccup, a still-working agent).
-- **Re-dispatch that fails to launch is out of scope** — it lands as a suppressed `ready-*`
-  card and is the "Surface reactor state" idea's job, not this one's.
-- **The second orphan shape is out of scope** (see below).
-
-### 1a. (Deferred) The inverse orphan: a live agent with no recorded handle
+### (Deferred) The inverse orphan: a live agent with no recorded handle
 
 ADR 0008 names a *second* orphan shape — a crash in the `flip → spawn → record` window
 leaves an agent **running** (a `claude agents --json` row) whose handle matches **no**
 sidecar entry, and an `in-progress` Issue with no recorded handle (so its card shows no
 marker, looking like a never-tracked legacy Issue). The danger: a human assumes it's dead
-and re-dispatches, double-spawning one Issue. Deliberately **out of scope** for feature #1:
+and re-dispatches, double-spawning one Issue. Deliberately **out of scope** for the shipped
+orphan reconciliation ([ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md)):
 it can't use the same Issue-anchored join — recovering *which* Issue a stray agent belongs
 to needs the `cwd`/worktree correlation ADR 0008 explicitly rejected as ambiguous — so it
 yields at best a board-level "N untracked live agents" warning, not the per-card marker +
-`R` that #1 builds. It is also *rare*: `spawnWithFlip` records synchronously immediately
-after spawn returns, so the window is only a hard crash (SIGKILL/power loss) in a
-sub-millisecond gap, not any normal error path. Named here so it reads as consciously
+`R` that ADR 0009 builds. It is also *rare*: `spawnWithFlip` records synchronously
+immediately after spawn returns, so the window is only a hard crash (SIGKILL/power loss) in
+a sub-millisecond gap, not any normal error path. Named here so it reads as consciously
 deferred, not forgotten.
-
-### 2. Kill switch — stop a running or hung agent
-
-Build on the shipped liveness handles to actually terminate a spawned agent, turning the
-auto-run toggle's "stop starting more" into a real "stop." Lower priority than #1 (a manual
-`kill` suffices at first), but wanted the first time an agent goes rogue in the very repo
-you're building. This is the "true pause of in-flight agents" gap from the theme, made
-actionable.
 
 ## Ideas
 
@@ -154,10 +125,11 @@ future UI pass would surface these — e.g. a card marker for spawn-failed/suppr
 Issues (mirroring the `human_review_reason` marker), and/or a board status line. For
 now everything goes to the log; we surface in the UI later.
 
-This also catches **orphan re-dispatch that fails to launch**: feature #1 rolls an
+This also catches **orphan re-dispatch that fails to launch**: orphan reconciliation
+([ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md)) rolls an
 orphan back to `ready-for-agent` and lets the normal spawn edge re-pick it up, so a
-relaunch that throws lands as a suppressed `ready-*` card exactly like any other
-spawn failure — invisible by the same mechanism, fixed here, not in #1.
+relaunch that throws lands as a suppressed `ready-*` card exactly like any other spawn
+failure — invisible by the same mechanism, to be fixed here, not in ADR 0009.
 
 ### Configurable AI-review turns and effort
 
