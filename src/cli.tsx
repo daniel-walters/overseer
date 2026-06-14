@@ -11,6 +11,7 @@ import { LiveApp } from "./ui/LiveApp.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
+import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
@@ -110,6 +111,12 @@ function runBoard(): void {
   // if auto-run is on, manual `d`/`r` if off) re-picks the Issue up — so unlike
   // the dispatcher/reviewer it needs no spawn or log seam.
   const rollback = createRollback(root);
+  // The kill switch (ADR 0010): `K` on a `live` card `claude stop`s the agent
+  // Overseer recorded for it, looked up in the same sidecar the liveness probe
+  // reads. It writes no status — the stopped agent's Issue orphans and the
+  // rollback above recovers it — so like the rollback it needs no spawn or log
+  // seam, only the `claude stop` edge (realStop) and the sidecar read.
+  const killer = createKiller(root, readHandles, realStop);
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
@@ -138,6 +145,7 @@ function runBoard(): void {
       dispatcher={dispatcher}
       reviewer={reviewer}
       rollback={rollback}
+      killer={killer}
       reactor={reactor}
     />,
     { alternateScreen: true },

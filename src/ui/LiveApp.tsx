@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { App, type Dispatcher, type Reviewer, type Rollback } from "./App.js";
+import { App, type Dispatcher, type Reviewer, type Rollback, type Killer } from "./App.js";
 import { useLiveBoard, type UseLiveBoardOptions } from "./useLiveBoard.js";
 
 export interface LiveAppProps extends UseLiveBoardOptions {
@@ -9,6 +9,8 @@ export interface LiveAppProps extends UseLiveBoardOptions {
   readonly reviewer?: Reviewer;
   /** The orphan-recovery seam, wired in cli.tsx; absent in board-only tests. */
   readonly rollback?: Rollback;
+  /** The kill-switch seam, wired in cli.tsx; absent in board-only tests. */
+  readonly killer?: Killer;
 }
 
 // `reactor` rides in via UseLiveBoardOptions, consumed by useLiveBoard rather
@@ -20,7 +22,7 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  * preview) separately from the board, so a refresh under the user's feet never
  * loses their place. The dispatcher and reviewer are threaded straight through.
  */
-export function LiveApp({ dispatcher, reviewer, rollback, ...options }: LiveAppProps) {
+export function LiveApp({ dispatcher, reviewer, rollback, killer, ...options }: LiveAppProps) {
   const board = useLiveBoard(options);
   // Auto-run state lives here, beside the live loop that owns the Reactor — on by
   // default, in-memory, dies on unmount (ADR 0007). The `a` keybind flips it; the
@@ -49,6 +51,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, ...options }: LiveAppP
       dispatcher={dispatcher}
       reviewer={reviewer}
       rollback={rollback}
+      killer={killer}
       autoRun={autoRun}
     />
   );

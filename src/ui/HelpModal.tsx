@@ -25,6 +25,7 @@ const BINDINGS: readonly Binding[] = [
   { key: "d", action: "Dispatch a wave", context: "board" },
   { key: "r", action: "Review the selected Issue", context: "issues" },
   { key: "R", action: "Re-dispatch an orphaned Issue", context: "issues" },
+  { key: "K", action: "Stop a live Issue's agent", context: "issues" },
   { key: "a", action: "Toggle auto-run", context: "both" },
   { key: "?", action: "Show this help", context: "both" },
   { key: "q", action: "Quit (backs out first if zoomed)", context: "both" },

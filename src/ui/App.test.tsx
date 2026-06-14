@@ -9,6 +9,10 @@ import type {
   RedispatchPreview as RedispatchPreviewData,
   RollbackOutcome,
 } from "../dispatch/rollback.js";
+import type {
+  KillPreview as KillPreviewData,
+  KillOutcome,
+} from "../dispatch/kill.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -623,6 +627,214 @@ describe("App re-dispatch (R on an orphan)", () => {
   });
 });
 
+describe("App kill (K on a live card)", () => {
+  // The same orphanBoard shape: first Issue is the orphan, second (020-oauth) is
+  // the *live* card — the one a kill targets.
+  const orphanBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
+          { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
+        ],
+      },
+    ],
+  };
+
+  function killPreview(id: string): KillPreviewData {
+    return {
+      prdId: "auth",
+      issueId: id,
+      handle: "17f1797e",
+      issue: {
+        id,
+        title: id,
+        path: `/root/auth/${id}`,
+        status: "in-progress",
+        blockedBy: [],
+        repo: "/r",
+        worktree: undefined,
+        branch: undefined,
+        deviation: undefined,
+        body: "",
+      },
+    };
+  }
+
+  function spyKiller(
+    kill: (p: KillPreviewData) => KillOutcome = () => "stopped",
+    readKill: (
+      prdId: string,
+      issueId: string,
+    ) => KillPreviewData | undefined = (_p, id) => killPreview(id),
+  ) {
+    return {
+      readKill: vi.fn(readKill),
+      kill: vi.fn(kill),
+    };
+  }
+
+  /** Zoom in and move the cursor to the live second Issue (020-oauth). */
+  async function selectLive(stdin: { write: (s: string) => void }) {
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write(ARROW_DOWN); // first Issue is the orphan; move to the live one
+    await tick();
+  }
+
+  it("opens a kill preview on K for the selected live Issue", async () => {
+    const killer = spyKiller();
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Stop 020-oauth's agent");
+    expect(killer.readKill).toHaveBeenCalledWith("auth", "020-oauth");
+  });
+
+  it("stops the agent on confirm, then closes the modal with a notice", async () => {
+    const killer = spyKiller();
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(killer.kill).toHaveBeenCalledTimes(1);
+    expect(killer.kill).toHaveBeenCalledWith(killPreview("020-oauth"));
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop 020-oauth");
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Stopped 020-oauth");
+  });
+
+  it("surfaces a 'no longer running' notice when the agent had already gone", async () => {
+    const killer = spyKiller(() => "not-running");
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("no longer running");
+  });
+
+  it("surfaces an 'uncertain' notice when the stop could not be confirmed", async () => {
+    const killer = spyKiller(() => "uncertain");
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Couldn't confirm");
+  });
+
+  it("surfaces an 'unavailable' notice when claude could not be launched", async () => {
+    const killer = spyKiller(() => "unavailable");
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("claude CLI on your PATH");
+  });
+
+  it("notices (not silently no-ops) when a live card has no recorded handle", async () => {
+    // The verdict/sidecar race: the card reads `live` but readKill finds no
+    // handle. Without feedback K would look broken, so it must say so.
+    const killer = spyKiller(undefined, () => undefined);
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+
+    expect(killer.kill).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop 020-oauth"); // no modal
+    expect(stripAnsi(lastFrame() ?? "")).toContain("no recorded agent to stop");
+  });
+
+  it("clears the kill notice on the next keypress", async () => {
+    const killer = spyKiller();
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+    stdin.write(ENTER); // confirm → notice shown
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Stopped 020-oauth");
+
+    stdin.write(ARROW_DOWN); // any keypress dismisses the one-shot notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stopped 020-oauth");
+  });
+
+  it("cancels the kill on Esc, leaving the agent untouched", async () => {
+    const killer = spyKiller();
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    await selectLive(stdin);
+    stdin.write("K");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(killer.kill).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop 020-oauth");
+  });
+
+  it("is a no-op on K for a non-live card", async () => {
+    const killer = spyKiller();
+    const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
+
+    stdin.write(ENTER); // zoom in; first Issue is the *orphan* (not live)
+    await tick();
+    stdin.write("K");
+    await tick();
+
+    expect(killer.readKill).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop ");
+  });
+
+  it("does nothing on K at the board level (kill is Issue-level only)", async () => {
+    const killer = spyKiller();
+    const { stdin } = render(<App board={orphanBoard} killer={killer} />);
+
+    stdin.write("K"); // at board level, no zoom
+    await tick();
+
+    expect(killer.readKill).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on K when no killer seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={orphanBoard} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write(ARROW_DOWN);
+    await tick();
+    stdin.write("K");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop ");
+  });
+});
+
 describe("App full screen", () => {
   /** Count the rendered rows in a frame (Ink emits one line per terminal row). */
   const rowCount = (frame: string): number => frame.split("\n").length;
@@ -704,6 +916,7 @@ describe("App help", () => {
     expect(frame).toContain("Dispatch a wave"); // d
     expect(frame).toContain("Review the selected Issue"); // r
     expect(frame).toContain("Re-dispatch an orphaned Issue"); // R
+    expect(frame).toContain("Stop a live Issue's agent"); // K
     expect(frame).toContain("Toggle auto-run"); // a
     expect(frame).toContain("Show this help"); // ?
     expect(frame).toContain("Quit"); // q

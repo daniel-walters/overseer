@@ -31,37 +31,39 @@ So, separating what's solved from what's only wished-for:
   card whose agent is gone with one keypress (`R`). Still open: *which* `claude --bg` is
   which beyond the marker, whether one is hung, and its output (see "Per-agent logs"
   below).
-- **True pause of in-flight agents** — *open gap.* Toggling the reactor off (or pausing
-  a PRD) stops it spawning *new* agents; the ones already running keep running. There is
-  no kill switch. "Pause" today means "stop starting more," not "stop."
+- **True pause of in-flight agents** — *solved.* The **kill switch** (shipped,
+  [ADR 0010](./adr/0010-kill-switch-is-stop-only-on-the-liveness-handle.md)) `claude stop`s
+  one live agent on `K`, parking its Issue off the reactor's frontiers — a durable
+  per-agent pause the auto-run toggle could not give. It is stop-only; the shipped `R`
+  orphan flow recovers the parked Issue.
 
-The next real design frontier, when the unease bites, is therefore **not more
-automation** — it is giving Overseer a way to *observe and rein in* the agents it
-launches, without abandoning the read-only/level-triggered model that makes resume free.
-That likely means a process-tracking seam that lives *beside* the file viewer, not inside
-it. Until then, live tracking and true pause are wishes, not committed solutions.
+The remaining design frontier, when the unease bites, is therefore **not more
+automation** — it is giving Overseer a way to *observe* the agents it launches more
+richly (which one is hung, what it is printing), without abandoning the
+read-only/level-triggered model that makes resume free. That likely means a
+process-tracking seam that lives *beside* the file viewer, not inside it. Until then,
+live tracking beyond the liveness verdict is a wish (see "Per-agent logs" below).
 
-## High priority: the minimum set to dogfood Overseer on itself
+## Dogfood-minimum: shipped
 
-The idea below is the concrete resolution of the theme above. Together with the now-shipped
-**Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)) and
-**Orphan reconciliation** ([ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md))
-it is the **minimum feature set to confidently dogfood** — to build Overseer using Overseer
-as the harness. The bar is not "more features"; it is **trust**: `in-progress` used to be
-ambiguous (working? hung? dead?), and the failure you'd hit while building Overseer is
-exactly the one the board couldn't show you. The `FailedSet` only suppresses *launch*
-failures — once an agent is spawned, the loop is blind to it. These convert the board from
-"shows footprints" to "tells the truth." Liveness shipped the shared foundation — **process
-tracking that survives a board restart** (so resume stays free, ADR 0002) — the handle
-sidecar both it and the kill switch below build on; orphan reconciliation then made a dead
-`in-progress` card recoverable with one keypress (`R`).
+The minimum set to confidently dogfood Overseer on itself — to build Overseer using
+Overseer as the harness — has **shipped**. The bar was never "more features"; it was
+**trust**: `in-progress` used to be ambiguous (working? hung? dead?), and the failure
+you'd hit while building Overseer was exactly the one the board couldn't show you. Three
+layered features, all on one handle sidecar, converted the board from "shows footprints"
+to "tells the truth":
 
-### 1. Kill switch — stop a running or hung agent
+- **Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md)) —
+  process tracking that survives a board restart (so resume stays free, ADR 0002): each
+  card reads live / unknown / orphaned.
+- **Orphan reconciliation** ([ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md))
+  — a dead `in-progress` card is recoverable with one keypress (`R`).
+- **Kill switch** ([ADR 0010](./adr/0010-kill-switch-is-stop-only-on-the-liveness-handle.md))
+  — `K` `claude stop`s one live agent (stop-only), the durable per-agent pause auto-run
+  could not give; the parked Issue orphans and `R` recovers it.
 
-Build on the shipped liveness handles to actually terminate a spawned agent, turning the
-auto-run toggle's "stop starting more" into a real "stop." A manual `kill` suffices at
-first, but it is wanted the first time an agent goes rogue in the very repo you're building.
-This is the "true pause of in-flight agents" gap from the theme, made actionable.
+What remains below is *beyond* the dogfood minimum — richer observation and convenience,
+not trust.
 
 ### (Deferred) The inverse orphan: a live agent with no recorded handle
 

@@ -7,6 +7,7 @@ import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { navReduce, initialNav } from "./navigation.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
+import { KillPreview } from "./KillPreview.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
@@ -14,6 +15,10 @@ import type {
   RedispatchPreview as RedispatchPreviewData,
   RollbackOutcome,
 } from "../dispatch/rollback.js";
+import type {
+  KillPreview as KillPreviewData,
+  KillOutcome,
+} from "../dispatch/kill.js";
 
 /**
  * The dispatch seams the App drives, injected so the keypress → preview →
@@ -68,14 +73,35 @@ export interface Rollback {
 }
 
 /**
- * What the open modal is previewing: a PRD dispatch, a single-Issue review, or a
- * single-orphan re-dispatch. At most one is ever open (the `nav.confirming`
- * guard).
+ * The kill seam the App drives at the Issue level — the live-agent counterpart
+ * to {@link Rollback}, used by the `K` keybind on a `live` card (ADR 0010).
+ *
+ * - `readKill` resolves the selected Issue into a kill preview with the recorded
+ *   agent handle frozen (`undefined` if it vanished, or the `live` card had no
+ *   recorded handle — a verdict/sidecar race).
+ * - `kill` runs `claude stop` on the previewed handle and returns a
+ *   {@link KillOutcome}, so the App can tell `stopped` from `not-running` (the
+ *   agent had already gone) and `uncertain` (the stop could not be confirmed). It
+ *   writes no status — the stopped agent's Issue orphans and `R` recovers it.
+ */
+export interface Killer {
+  readonly readKill: (
+    prdId: string,
+    issueId: string,
+  ) => KillPreviewData | undefined;
+  readonly kill: (preview: KillPreviewData) => KillOutcome;
+}
+
+/**
+ * What the open modal is previewing: a PRD dispatch, a single-Issue review, a
+ * single-orphan re-dispatch, or a single-agent kill. At most one is ever open
+ * (the `nav.confirming` guard).
  */
 type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
   | { readonly kind: "review"; readonly preview: ReviewPreviewData }
-  | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData };
+  | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData }
+  | { readonly kind: "kill"; readonly preview: KillPreviewData };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -97,6 +123,8 @@ interface AppProps {
   reviewer?: Reviewer;
   /** Wired in production; absent in tests that don't exercise orphan recovery. */
   rollback?: Rollback;
+  /** Wired in production; absent in tests that don't exercise the kill switch. */
+  killer?: Killer;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
 }
@@ -108,7 +136,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -229,6 +257,33 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
       return;
     }
 
+    if (input === "K") {
+      // Kill, Issue-level only. Gated on the card's own `live` liveness marker —
+      // only a running agent Overseer recorded can be stopped — so `K` is a no-op
+      // on an orphaned, unknown, or non-active card. `readKill` freezes the
+      // recorded handle on the modal; a vanished Issue, or a `live` card with no
+      // recorded handle (a verdict/sidecar race), yields no preview (ADR 0010).
+      if (
+        nav.level === "issues" &&
+        killer &&
+        selectedPrd &&
+        selectedIssue?.liveness === "live"
+      ) {
+        const preview = killer.readKill(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "kill", preview });
+          dispatch({ type: "open-review" });
+        } else {
+          // The card read `live` but readKill found no recorded handle (the
+          // verdict/sidecar race, or the Issue vanished). Without this notice the
+          // keypress would do nothing at all — indistinguishable from K being
+          // broken — so say plainly there's nothing to stop.
+          setNotice(`${selectedIssue.id} has no recorded agent to stop — re-check the board.`);
+        }
+      }
+      return;
+    }
+
     if (input === "?") {
       // Opens the keybind reference, at either level. Reached only past the
       // nav.confirming guard above, so an open preview suppresses it — help and a
@@ -291,6 +346,22 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
       } else if (outcome === "vanished") {
         setNotice(`${issueId} is gone from the board — nothing to recover.`);
       }
+    } else if (modal?.kind === "kill") {
+      // Stop the live agent via `claude stop` on the frozen handle. Writes no
+      // status, so the Issue orphans and `R` recovers it (ADR 0010). The board's
+      // next scan is the source of truth, so `uncertain` only sets honest
+      // expectations rather than claiming anything authoritative.
+      const outcome = killer?.kill(modal.preview);
+      const issueId = modal.preview.issueId;
+      if (outcome === "stopped") {
+        setNotice(`Stopped ${issueId}'s agent — recover it with R.`);
+      } else if (outcome === "not-running") {
+        setNotice(`${issueId}'s agent is no longer running — nothing to stop.`);
+      } else if (outcome === "uncertain") {
+        setNotice(`Couldn't confirm ${issueId}'s agent stopped — re-check the board.`);
+      } else if (outcome === "unavailable") {
+        setNotice(`Couldn't run \`claude stop\` — is the claude CLI on your PATH?`);
+      }
     }
   }
 
@@ -306,6 +377,9 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
   }
   if (modal?.kind === "redispatch") {
     return <RedispatchPreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "kill") {
+    return <KillPreview preview={modal.preview} />;
   }
   // The help modal is a full-screen takeover like the previews above. It can only
   // be open when no preview is (the nav.confirming guard blocks `?` under one), so
