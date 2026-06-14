@@ -88,6 +88,17 @@ export interface ParsedAgents {
  * object) yields an empty live set flagged `degraded: true`, so the probe can
  * keep those absent handles at `unknown` rather than flagging them `orphaned`.
  * Either way it is total over bad input — the board never crashes on garbage.
+ *
+ * **Known limit (a clean empty array is trusted, even transiently).** A
+ * single `[]` licenses `absent-clean` for *every* recorded active handle at once,
+ * so one momentary empty result — a registry that restarted and briefly reports
+ * zero sessions while agents reconnect — flags every active card `orphaned` in
+ * one scan. ADR 0009 accepts this: an empty array is a positive "Claude is up,
+ * no live agents", and the human (never the reactor) is the safety check before
+ * any re-dispatch. The recovery is also non-destructive and re-checked at confirm
+ * (the rollback re-reads disk), so a transient false `orphaned` self-clears on
+ * the next scan with no action taken. Debouncing N consecutive empties was
+ * rejected as it would reintroduce the stale cache ADR 0002 / 0008 forbid.
  */
 export function parseLiveSet(json: string): ParsedAgents {
   let parsed: unknown;
@@ -115,15 +126,6 @@ export function parseLiveSet(json: string): ParsedAgents {
 }
 
 /**
- * The live agents from a registry query, dropping the trust signal. Retained as
- * the simple parse for callers (and tests) that only need the membership set;
- * {@link parseLiveSet} is the trust-aware form the probe uses.
- */
-export function parseAgents(json: string): LiveAgent[] {
-  return parseLiveSet(json).agents;
-}
-
-/**
  * Join the recorded `issueKey → handle` map against the live agents into a
  * per-Issue {@link Absence} verdict. An Issue is **live** iff its recorded handle
  * is present as a live session `id`. Otherwise it is absent — `absent-degraded`
@@ -136,6 +138,15 @@ export function parseAgents(json: string): LiveAgent[] {
  * Mapping `absent-clean` to `orphaned` is the scanner's job (ADR 0009). Pure,
  * with no I/O, so it is exhaustively testable with fixture handles and a fixture
  * live set.
+ *
+ * **Known limit (membership is id-only).** A handle counts as `live` purely by
+ * its `id` being *present* in the registry — the row's {@link LiveAgent.state} is
+ * captured but deliberately not consulted here. So an agent that has exited but
+ * whose row still lingers in `claude agents --json` (a retention window) reads
+ * `live`, not `orphaned`, until the row ages out. Reading `state` to call a
+ * lingering row dead is the "is it hung?" iteration ADR 0009 defers (a wrong
+ * guess at which state strings mean *terminated* would turn live agents into
+ * false orphans — the worse failure), so membership stays id-only on purpose.
  */
 export function computeLiveness(
   recordedHandles: Record<string, string>,

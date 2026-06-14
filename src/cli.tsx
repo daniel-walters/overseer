@@ -18,6 +18,7 @@ import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.
 import {
   createLivenessProbe,
   realLivenessQuery,
+  type Absence,
 } from "./dispatch/liveness.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
@@ -82,8 +83,15 @@ function runBoard(): void {
     readHandles,
   });
   const scanWithLiveness = (r: string): Board => {
-    const verdicts = probe();
-    return scanBoard(r, (issuePath) => verdicts[issuePath]);
+    // Run the probe *lazily*, memoised for this scan: `scanBoard` only calls the
+    // lookup for an in-progress / in-review card (LIVENESS_LANES), so a board
+    // with no active-agent card never forks `claude agents --json` at all — the
+    // subprocess is deferred to the first active card and reused for the rest.
+    let verdicts: Record<string, Absence> | undefined;
+    return scanBoard(r, (issuePath) => {
+      verdicts ??= probe();
+      return verdicts[issuePath];
+    });
   };
   const initialBoard = scanWithLiveness(root);
   const dispatcher = createDispatcher(root, {

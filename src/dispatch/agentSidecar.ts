@@ -81,7 +81,7 @@ export function createAgentSidecar(path: string): AgentSidecar {
       // file can hold a non-string value (`{"prd/001.md": 42}`); dropping it
       // rather than casting it through keeps the liveness join total — a
       // non-string handle could never match a live session `id` anyway, the same
-      // "a row with no usable string id is dropped" rule parseAgents applies.
+      // "a row with no usable string id is dropped" rule parseLiveSet applies.
       const map: Record<string, string> = {};
       for (const [key, value] of Object.entries(parsed)) {
         if (typeof value === "string") map[key] = value;

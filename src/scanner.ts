@@ -162,17 +162,31 @@ function applyLiveness(
   return { ...issue, liveness: livenessFromAbsence(lookupLiveness(path)) };
 }
 
-/** Map the probe's trust-qualified absence onto the card-level verdict (ADR 0009). */
+/**
+ * Map the probe's trust-qualified absence onto the card-level verdict (ADR 0009).
+ *
+ * `undefined` (no recorded handle — a previous session, an empty sidecar, or the
+ * spawn/record gap) reads `unknown` up front. Every *named* {@link Absence} is
+ * then matched explicitly, with a `never`-checked default: adding a fourth
+ * Absence variant (e.g. the planned kill-switch verdict) without a case here is a
+ * compile error, not a silent fold into `unknown`, so a real liveness signal can
+ * never be misclassified as benign.
+ */
 function livenessFromAbsence(absence: Absence | undefined): Liveness {
+  if (absence === undefined) return "unknown";
   switch (absence) {
     case "live":
       return "live";
     case "absent-clean":
       return "orphaned";
-    // `absent-degraded` and "no recorded handle" both stay unknown: an untrusted
-    // query or an unrecorded card must never read as a dead agent.
-    default:
+    // An untrusted query ("gone" we can't believe) must never read as a dead
+    // agent — a false `orphaned` invites a double-spawn.
+    case "absent-degraded":
       return "unknown";
+    default: {
+      const exhaustive: never = absence;
+      return exhaustive;
+    }
   }
 }
 

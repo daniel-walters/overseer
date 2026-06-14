@@ -5,7 +5,10 @@ import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
-import type { RedispatchPreview as RedispatchPreviewData } from "../dispatch/rollback.js";
+import type {
+  RedispatchPreview as RedispatchPreviewData,
+  RollbackOutcome,
+} from "../dispatch/rollback.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -455,6 +458,8 @@ describe("App re-dispatch (R on an orphan)", () => {
 
   function preview(id: string): RedispatchPreviewData {
     return {
+      prdId: "auth",
+      issueId: id,
       issue: {
         id,
         title: id,
@@ -471,6 +476,7 @@ describe("App re-dispatch (R on an orphan)", () => {
   }
 
   function spyRollback(
+    rollback: (p: RedispatchPreviewData) => RollbackOutcome = () => "rolled-back",
     readRollback: (
       prdId: string,
       issueId: string,
@@ -478,7 +484,7 @@ describe("App re-dispatch (R on an orphan)", () => {
   ) {
     return {
       readRollback: vi.fn(readRollback),
-      rollback: vi.fn<(p: RedispatchPreviewData) => void>(),
+      rollback: vi.fn(rollback),
     };
   }
 
@@ -513,7 +519,49 @@ describe("App re-dispatch (R on an orphan)", () => {
 
     expect(rollback.rollback).toHaveBeenCalledTimes(1);
     expect(rollback.rollback).toHaveBeenCalledWith(preview("010-login"));
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch ");
+    // A real recovery surfaces a confirmation notice on the status line.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Rolled 010-login back");
+  });
+
+  it("surfaces a 'nothing to recover' notice when the orphan already advanced", async () => {
+    // The agent wasn't actually dead: by confirm the on-disk status advanced, so
+    // `rollback` re-reads it and returns `advanced` — the confirm must not look
+    // like a silent no-op (ADR 0009).
+    const rollback = spyRollback(() => "advanced");
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("R");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("already advanced");
+    expect(frame).not.toContain("Re-dispatch"); // modal closed
+  });
+
+  it("clears the rollback notice on the next keypress", async () => {
+    const rollback = spyRollback(() => "rolled-back");
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} rollback={rollback} />,
+    );
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("R");
+    await tick();
+    stdin.write(ENTER); // confirm → notice shown
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Rolled 010-login back");
+
+    stdin.write(ARROW_DOWN); // any keypress dismisses the one-shot notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Rolled 010-login back");
   });
 
   it("cancels the re-dispatch on Esc, leaving the orphan untouched", async () => {

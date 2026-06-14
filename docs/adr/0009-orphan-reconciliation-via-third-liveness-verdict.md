@@ -83,3 +83,26 @@ agent that merely *looks* gone while still working).
   deferred.
 - **The kill switch (feature #3) still builds on the same seam** — the captured
   handle and the `state` field — unchanged by this ADR.
+- **The `R` confirm re-reads disk; it never acts on the frozen verdict.** The
+  `orphaned` marker is computed at scan time and can be stale by confirm (an agent
+  that merely *looked* gone keeps working and writes its next status). So the
+  rollback re-resolves the Issue from disk at confirm and rolls back *only* a
+  still-active status — a status that advanced under the open modal is a no-op,
+  surfaced to the human ("already advanced — nothing to recover") rather than
+  clobbered back to a frontier. This is what makes "the human is the safety check"
+  real: the check is against current disk state, not a snapshot.
+- **Membership is id-only (a lingering exited row reads `live`).** A handle is
+  `live` purely by its `id` being present in `claude agents --json`; the row's
+  `state` is captured but not consulted, so an agent that exited but whose row
+  still lingers reads `live`, not `orphaned`, until it ages out. Reading `state`
+  to call a lingering row dead is the "is it hung?" iteration deferred above — a
+  wrong guess at which states mean *terminated* would manufacture false orphans,
+  the worse failure.
+- **A clean empty array is trusted even when transient.** One `[]` licenses
+  `orphaned` for every recorded active card at once, so a registry that briefly
+  reports zero sessions (a restart mid-reconnect) can mass-flag in a single scan.
+  Accepted: the empty array is a positive "Claude is up, none live", the human
+  (never the reactor) gates re-dispatch, and the recovery is non-destructive and
+  re-checked at confirm, so a transient false `orphaned` self-clears on the next
+  scan with nothing done. Debouncing N empties was rejected — it reintroduces the
+  stale cache ADR 0002 / 0008 forbid.

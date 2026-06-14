@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  parseAgents,
   parseLiveSet,
   computeLiveness,
   createLivenessProbe,
@@ -21,13 +20,17 @@ import {
  * cleanly-parsed array — even an empty one — yields `absent-clean`, the only path
  * to `orphaned`. These cases are pinned hard below.
  */
-describe("parseAgents", () => {
+describe("parseLiveSet row parsing", () => {
+  // The membership-set half of the parse, asserted via `.agents`. (The trust
+  // signal — `degraded` — is pinned in its own block below.) `parseLiveSet` is
+  // the single parse entry point; there is no trust-blind `parseAgents` wrapper
+  // to keep in sync, so this is the only place the row shapes are exercised.
   it("reads a background row's `state` field", () => {
     const json = JSON.stringify([
       { id: "sess-bg", cwd: "/repo", state: "busy" },
     ]);
 
-    expect(parseAgents(json)).toEqual([{ id: "sess-bg", state: "busy" }]);
+    expect(parseLiveSet(json).agents).toEqual([{ id: "sess-bg", state: "busy" }]);
   });
 
   it("reads an interactive row's `status` field", () => {
@@ -37,7 +40,7 @@ describe("parseAgents", () => {
 
     // The two row shapes (interactive `status` vs background `state`) are
     // normalised to the same `state` so downstream code never branches on shape.
-    expect(parseAgents(json)).toEqual([{ id: "sess-int", state: "idle" }]);
+    expect(parseLiveSet(json).agents).toEqual([{ id: "sess-int", state: "idle" }]);
   });
 
   it("parses a mix of both shapes in one array", () => {
@@ -46,23 +49,10 @@ describe("parseAgents", () => {
       { id: "int", status: "busy" },
     ]);
 
-    expect(parseAgents(json)).toEqual([
+    expect(parseLiveSet(json).agents).toEqual([
       { id: "bg", state: "blocked" },
       { id: "int", state: "busy" },
     ]);
-  });
-
-  it("reads an empty array as no live agents", () => {
-    expect(parseAgents("[]")).toEqual([]);
-  });
-
-  it("reads malformed or non-array JSON as no live agents", () => {
-    // A registry that printed something unexpected (an error object, truncated
-    // output, garbage) degrades every Issue to unknown rather than crashing the
-    // board open — the same fail-safe the sidecar uses for a corrupt file.
-    expect(parseAgents("not json")).toEqual([]);
-    expect(parseAgents("{}")).toEqual([]);
-    expect(parseAgents("")).toEqual([]);
   });
 
   it("drops a row with no usable id", () => {
@@ -72,7 +62,7 @@ describe("parseAgents", () => {
       { id: "keep", state: "busy" },
     ]);
 
-    expect(parseAgents(json)).toEqual([{ id: "keep", state: "busy" }]);
+    expect(parseLiveSet(json).agents).toEqual([{ id: "keep", state: "busy" }]);
   });
 
   it("keeps a row whose state field is absent (state captured as undefined)", () => {
@@ -80,7 +70,9 @@ describe("parseAgents", () => {
 
     // The id is what the join needs; the state is captured for a future "is it
     // hung?" iteration, so its absence must not drop the row from the live set.
-    expect(parseAgents(json)).toEqual([{ id: "stateless", state: undefined }]);
+    expect(parseLiveSet(json).agents).toEqual([
+      { id: "stateless", state: undefined },
+    ]);
   });
 
   it("prefers a meaningful status over an empty-string state", () => {
@@ -88,13 +80,13 @@ describe("parseAgents", () => {
     // first non-empty string instead.
     const json = JSON.stringify([{ id: "sess", state: "", status: "busy" }]);
 
-    expect(parseAgents(json)).toEqual([{ id: "sess", state: "busy" }]);
+    expect(parseLiveSet(json).agents).toEqual([{ id: "sess", state: "busy" }]);
   });
 
   it("captures state as undefined when both fields are empty strings", () => {
     const json = JSON.stringify([{ id: "sess", state: "", status: "" }]);
 
-    expect(parseAgents(json)).toEqual([{ id: "sess", state: undefined }]);
+    expect(parseLiveSet(json).agents).toEqual([{ id: "sess", state: undefined }]);
   });
 });
 

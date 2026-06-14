@@ -10,7 +10,10 @@ import { RedispatchPreview } from "./RedispatchPreview.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
-import type { RedispatchPreview as RedispatchPreviewData } from "../dispatch/rollback.js";
+import type {
+  RedispatchPreview as RedispatchPreviewData,
+  RollbackOutcome,
+} from "../dispatch/rollback.js";
 
 /**
  * The dispatch seams the App drives, injected so the keypress → preview →
@@ -49,16 +52,19 @@ export interface Reviewer {
  *
  * - `readRollback` resolves the selected Issue into a re-dispatch preview
  *   (`undefined` if it vanished from the watched root).
- * - `rollback` rolls the previewed orphan back onto its frontier (`in-progress →
- *   ready-for-agent`, `in-review → ready-for-review`). It spawns nothing — the
- *   normal spawn edge re-picks the Issue up.
+ * - `rollback` re-reads the previewed orphan from disk and rolls it back onto
+ *   its frontier (`in-progress → ready-for-agent`, `in-review →
+ *   ready-for-review`). It spawns nothing — the normal spawn edge re-picks the
+ *   Issue up. It returns a {@link RollbackOutcome} so the App can tell the human
+ *   "recovered" apart from the silent "nothing to recover" (the agent wasn't
+ *   actually dead, or the Issue vanished).
  */
 export interface Rollback {
   readonly readRollback: (
     prdId: string,
     issueId: string,
   ) => RedispatchPreviewData | undefined;
-  readonly rollback: (preview: RedispatchPreviewData) => void;
+  readonly rollback: (preview: RedispatchPreviewData) => RollbackOutcome;
 }
 
 /**
@@ -126,6 +132,11 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
   // guard below suppresses `?` while a preview is up, so help and a preview are
   // never both open: at most one modal on screen, ever.
   const [showHelp, setShowHelp] = useState(false);
+  // A one-line transient notice shown on the status line — currently only the
+  // outcome of a re-dispatch confirm (ADR 0009), so the human can tell a real
+  // recovery from the silent "nothing to recover" no-op (the agent wasn't
+  // actually dead, or the Issue vanished). Cleared on the next keypress.
+  const [notice, setNotice] = useState<string | undefined>(undefined);
 
   // Clamp the stored selection against the current board so a shrunk board
   // (after a live refresh) can never leave us pointing past the last card.
@@ -136,6 +147,11 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
   const selectedIssue = issues[issueIndex];
 
   useInput((input, key) => {
+    // Any keypress dismisses a lingering rollback notice — it is a one-shot
+    // outcome line, not persistent chrome. Cleared up front so even the keypress
+    // that opened the help/modal below first wipes the stale notice.
+    if (notice !== undefined) setNotice(undefined);
+
     // The help modal owns input while it is open: ? or Esc close it, q closes it
     // and quits, everything else is swallowed (so a stray key while reading help
     // never leaks to the board underneath).
@@ -262,8 +278,19 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
       reviewer?.review(modal.preview);
     } else if (modal?.kind === "redispatch") {
       // Roll the orphan back onto its frontier; the normal spawn edge re-picks
-      // it up. No spawn happens here.
-      rollback?.rollback(modal.preview);
+      // it up. No spawn happens here. `rollback` re-reads the Issue from disk, so
+      // a status that advanced under the modal (a not-actually-dead agent) is a
+      // no-op — surfaced via the outcome so the human isn't left with a confirm
+      // that silently did nothing (ADR 0009).
+      const outcome = rollback?.rollback(modal.preview);
+      const issueId = modal.preview.issueId;
+      if (outcome === "rolled-back") {
+        setNotice(`Rolled ${issueId} back onto its frontier for re-dispatch.`);
+      } else if (outcome === "advanced") {
+        setNotice(`${issueId} already advanced past its orphan state — nothing to recover.`);
+      } else if (outcome === "vanished") {
+        setNotice(`${issueId} is gone from the board — nothing to recover.`);
+      }
     }
   }
 
@@ -305,6 +332,11 @@ export function App({ board, dispatcher, reviewer, rollback, autoRun }: AppProps
         {view}
       </Box>
       <Spacer />
+      {notice !== undefined && (
+        <Box flexShrink={0}>
+          <Text color="yellow">{notice}</Text>
+        </Box>
+      )}
       <Box flexShrink={0}>
         <StatusLine autoRun={autoRun} />
       </Box>
