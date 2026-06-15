@@ -153,6 +153,46 @@ next card matching a predicate, select it, zoom if needed) would also serve "jum
 next orphan" or "next suppressed" later, so it may be worth designing as a general
 "jump to next card matching X" rather than a one-off human-review jump.
 
+### Delete a done PRD and its Issues with a keybind
+
+Once a PRD is `done` (and presumably its work merged / PR'd), its folder is clutter on
+the board — the work is over but the cards stay forever. A keybind to **delete a done
+PRD's directory and all its Issue files** in one gesture would let the board be tidied
+from inside it, instead of `rm -rf`-ing the folder out-of-band.
+
+This one collides head-on with a core invariant, which is the whole reason it needs a
+design pass rather than a quick keybind: **the board has never written to the watched
+root.** Every file mutation in the system today is an agent/trigger flipping a
+*status* (`writeStatus`); nothing, anywhere, *deletes*. A delete keybind makes the
+read-only viewer (ADR 0002) perform its **first destructive write to the root** — and
+not a status transition but the removal of domain data outright. That's a real boundary
+crossing, not an extension of an existing pattern.
+
+Tensions to resolve before building it:
+
+- **Read-only contract (ADR 0002).** The board reflects files; agents write them. A
+  delete is the *board itself* writing (removing) — a new actor on the root. Is that an
+  acceptable exception for an explicit, human-only, done-gated destructive action, or
+  does deletion belong in a skill (like merge) run outside the board, keeping the TUI a
+  pure viewer? Leaning skill-vs-keybind is the first fork.
+- **Irreversibility + confirmation.** Deleting a folder of markdown is hard to undo
+  (no git in the root — it's not a repo). This needs a real confirm modal (like the
+  dispatch/review previews), not a bare keypress, and probably a `done`-only gate so a
+  fat-finger can't wipe in-flight work. Consider whether "delete" should mean *move to
+  a trash/archive area* rather than hard-remove, so it's recoverable.
+- **What "done" guarantees.** A `done` PRD's work lives on its feature branch (and
+  maybe a PR) — deleting the PRD/Issue *files* doesn't touch that code. Worth stating
+  so a user doesn't think deleting the cards deletes the work. Conversely, should delete
+  be blocked until the PR is merged (tie-in with the "open/link a PR" idea), so you
+  can't discard the only record of unmerged work?
+- **The live re-scan handles the rest for free.** Once the files are gone, the
+  watcher's debounced re-scan rebuilds the board without them (the same path that
+  already tolerates a folder vanishing out-of-band) — so the *rendering* side is
+  solved; only the *act* of deleting is new.
+
+Pairs with the per-PRD-pause and archive notions — "what do you do with a PRD you're
+finished with" is a small cluster: pause, archive, delete.
+
 ### (Discussion) Finished agents linger in `claude agents` — clean up, or keep for post-mortem?
 
 *Captured as an open discussion point, not a decided direction.*
