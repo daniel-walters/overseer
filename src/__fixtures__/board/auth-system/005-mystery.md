@@ -3,4 +3,4 @@ title: Mystery work
 status: marinating
 ---
 
-Unrecognized status; should fall to unsorted.
+Unrecognized status; should fold into backlog flagged malformed.

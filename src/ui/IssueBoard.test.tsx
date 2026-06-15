@@ -8,7 +8,6 @@ const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 const HEADINGS = [
-  "Unsorted",
   "Backlog",
   "Ready",
   "In Progress",
@@ -52,7 +51,7 @@ const prd: PRD = {
       suppressed: true,
     },
     { id: "030-review", title: "Review", lane: "ready", readyFor: "human" },
-    { id: "005-mystery", title: "Mystery", lane: "unsorted" },
+    { id: "005-mystery", title: "Mystery", lane: "backlog", malformedStatus: true },
     {
       id: "040-escalated",
       title: "Escalated",
@@ -74,7 +73,18 @@ describe("IssueBoard", () => {
 
     expect(columnOf(frame, "Login")).toBe("In Progress");
     expect(columnOf(frame, "OAuth")).toBe("Ready");
-    expect(columnOf(frame, "Mystery")).toBe("Unsorted");
+    expect(columnOf(frame, "Mystery")).toBe("Backlog");
+  });
+
+  it("folds a malformed-status Issue into Backlog with a loud warning marker", () => {
+    // The Unsorted column is gone (no such heading renders); a missing/unknown
+    // status lands in Backlog carrying the `⚠ bad status` marker, so the data
+    // error stays triageable rather than parked as ordinary backlog.
+    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+
+    expect(stripAnsi(frame)).not.toContain("Unsorted");
+    expect(columnOf(frame, "Mystery")).toBe("Backlog");
+    expect(columnOf(frame, "bad status")).toBe("Backlog");
   });
 
   it("shows a human/agent badge on ready Issues", () => {

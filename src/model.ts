@@ -20,12 +20,12 @@ export type ReadyFor = "human" | "agent";
  * the two `ready-for-*` values, the routing badge.
  *
  * Everything downstream is derived from this map so the vocabulary lives in one
- * place: the {@link Column}/{@link Lane} types, the render-order {@link ISSUE_LANES}
+ * place: the {@link Lane} type, the render-order {@link ISSUE_LANES}
  * array, the {@link placeStatus} placement the scanner uses, and (by referencing
  * its keys) the dispatch state machine's write-vocabulary in
  * {@link import("./dispatch/status.js").Status}. A status added here flows to all
  * of them; a typo can't silently diverge one copy from another and strand a card
- * in Unsorted.
+ * in backlog flagged `malformedStatus`.
  *
  * Note the fold the map encodes: `ready-for-human` and `ready-for-agent` both
  * land in the single `ready` lane (distinguished only by the badge), so the
@@ -49,19 +49,22 @@ const STATUS_PLACEMENT = {
  */
 export type AuthoredStatus = keyof typeof STATUS_PLACEMENT;
 
-/** The canonical columns, left to right, that an authored status maps to. */
-export type Column = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
-
-/** Where a card lands. Missing/unknown authored status falls to "unsorted". */
-export type Lane = Column | "unsorted";
+/**
+ * Where a card lands — one of the canonical columns an authored status maps to.
+ * A missing/unrecognised status no longer gets its own lane: the scanner folds
+ * it into `backlog` carrying a `malformedStatus` flag (so it stays one fewer
+ * column while the data error is still flagged on the card), so every lane is a
+ * real column.
+ */
+export type Lane = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
 
 /**
- * The Issue-level lanes in render order, left to right: Unsorted first (so
- * missing/unknown status is never lost), then the seven fixed columns. Used by
- * the PRD-zoom (Issue) kanban.
+ * The Issue-level lanes in render order, left to right: the seven fixed columns.
+ * There is no Unsorted column — a missing/unknown status folds into `backlog`
+ * flagged `malformedStatus` (CONTEXT.md, ADR 0003). Used by the PRD-zoom (Issue)
+ * kanban.
  */
 export const ISSUE_LANES: readonly Lane[] = [
-  "unsorted",
   "backlog",
   "ready",
   "in-progress",
@@ -82,9 +85,10 @@ export const BOARD_LANES = ["backlog", "in-progress", "done"] as const;
 /**
  * Map an authored status string to its lane and, while ready, its routing badge,
  * or `undefined` when the status is missing or not a recognised authored value.
- * The scanner maps that `undefined` to the `unsorted` lane — its fail-safe so a
- * card is never dropped. Derived from {@link STATUS_PLACEMENT} so the lane rules
- * are never restated as a parallel switch.
+ * The scanner folds that `undefined` into the `backlog` lane flagged
+ * `malformedStatus` — its fail-safe so a card is never dropped. Derived from
+ * {@link STATUS_PLACEMENT} so the lane rules are never restated as a parallel
+ * switch.
  */
 export function placeStatus(
   status: unknown,
@@ -93,8 +97,8 @@ export function placeStatus(
   // Own-property check, not a bare index: a `status` that names an
   // `Object.prototype` member (`toString`, `constructor`, `__proto__`, …) would
   // otherwise read the inherited function off the literal and return it as a
-  // bogus placement — bypassing the unsorted fail-safe and crashing the lane
-  // grouping with a `lane: undefined` card.
+  // bogus placement — bypassing the backlog/malformed fail-safe and crashing the
+  // lane grouping with a `lane: undefined` card.
   if (!Object.hasOwn(STATUS_PLACEMENT, status)) return undefined;
   return STATUS_PLACEMENT[status as AuthoredStatus];
 }
@@ -105,12 +109,14 @@ export function placeStatus(
  *
  * - **done** — ≥ 1 Issue and every Issue is `done`.
  * - **in-progress** — any Issue is in-progress or later.
- * - **backlog** — otherwise (all backlog/ready/Unsorted, or zero Issues).
+ * - **backlog** — otherwise (all backlog/ready, or zero Issues).
  *
- * An **Unsorted** Issue (missing/unknown status) counts as pre-in-progress: it
- * never promotes the PRD, and — not being `done` — blocks the all-done check, so
- * a `done` + `Unsorted` PRD derives to in-progress. An unknown-status Issue can
- * therefore never silently advance *or* complete a PRD.
+ * A **malformed-status** Issue (missing/unknown status) folds into the backlog
+ * lane (carrying `malformedStatus`), so it counts as pre-in-progress: it never
+ * promotes the PRD, and — its lane not being `done` — blocks the all-done check,
+ * so a `done` + malformed PRD derives to in-progress. An unknown-status Issue can
+ * therefore never silently advance *or* complete a PRD — exactly as the retired
+ * `unsorted` lane behaved.
  */
 export function derivePrdLane(
   issues: readonly Issue[],
@@ -131,7 +137,6 @@ const IN_PROGRESS_OR_LATER = new Set<Lane>([
 
 /** Human-readable column headings, keyed by lane. */
 export const LANE_LABELS: Readonly<Record<Lane, string>> = {
-  unsorted: "Unsorted",
   backlog: "Backlog",
   ready: "Ready",
   "in-progress": "In Progress",
@@ -217,6 +222,18 @@ export interface Issue {
    * Issue that leaves its `ready-*` lane simply drops the marker.
    */
   readonly suppressed?: boolean;
+  /**
+   * `true` on an Issue whose authored `status` is missing or unrecognised. Such
+   * an Issue folds into the **backlog** lane (so PRD-status derivation treats it
+   * as pre-in-progress exactly as the retired `unsorted` lane did), but carries
+   * this overlay so its card flags a loud warning marker — the status is a *data
+   * error to fix in the frontmatter*, not deliberate backlog parking. Kept in the
+   * yellow "needs a human" warning family (like {@link humanReviewReason} and an
+   * orphaned {@link liveness}), distinct from a plain backlog card and from the
+   * red {@link suppressed} "nothing ran" marker. Absent on every Issue with a
+   * recognised status.
+   */
+  readonly malformedStatus?: boolean;
 }
 
 export interface PRD {

@@ -64,7 +64,7 @@ describe("scanBoard", () => {
   it("does not crash the whole scan when one Issue has malformed frontmatter", () => {
     // A single Issue with invalid YAML (an unquoted ': ' in a value) must not
     // throw out of scanBoard and take down the live board on the next watch
-    // event — it degrades to the Unsorted lane, and siblings still scan.
+    // event — it folds into backlog flagged malformed, and siblings still scan.
     const root = mkdtempSync(join(tmpdir(), "overseer-scan-"));
     const dir = join(root, "feature");
     mkdirSync(dir);
@@ -79,7 +79,9 @@ describe("scanBoard", () => {
     expect(() => (board = scanBoard(root))).not.toThrow();
 
     const prd = prdById(board.prds, "feature");
-    expect(issueById(prd.issues, "001-broken.md").lane).toBe("unsorted");
+    const broken = issueById(prd.issues, "001-broken.md");
+    expect(broken.lane).toBe("backlog");
+    expect(broken.malformedStatus).toBe(true);
     expect(issueById(prd.issues, "002-ok.md").lane).toBe("done");
   });
 
@@ -200,10 +202,14 @@ describe("scanBoard Issues", () => {
     expect(issue.humanReviewReason).toBeUndefined();
   });
 
-  it("falls an Issue with an unrecognized status to the unsorted lane", () => {
+  it("folds an Issue with an unrecognized status into backlog, flagged malformed", () => {
     const issue = issueById(authIssues(), "005-mystery.md");
 
-    expect(issue.lane).toBe("unsorted");
+    // The Unsorted column is gone: a missing/unknown status lands in backlog,
+    // carrying the loud `malformedStatus` overlay so the data error is still
+    // triaged, not silently parked as ordinary backlog.
+    expect(issue.lane).toBe("backlog");
+    expect(issue.malformedStatus).toBe(true);
     expect(issue.readyFor).toBeUndefined();
   });
 

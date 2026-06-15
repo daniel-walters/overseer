@@ -5,8 +5,8 @@ import type { AuthoredStatus } from "../model.js";
  * This is the single source of truth for the dispatch vocabulary so the
  * frontier (which reads them), the status-writer (which writes them), and the
  * orchestration (which transitions between them) can never disagree on a spelling
- * — a typo in one copy would land a card in Unsorted and silently strand the
- * Issue.
+ * — a typo in one copy would land a card in backlog flagged `malformedStatus`
+ * and silently strand the Issue.
  *
  * A *named subset* of the full authored vocabulary in {@link import("../model.js")}:
  * those values are the render columns and the complete set of statuses a card may

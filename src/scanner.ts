@@ -139,9 +139,11 @@ function scanIssue(
 ): Issue {
   const { data } = safeMatter(readFileSync(path, "utf8"));
   const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
-  const { lane, readyFor } = placeOrUnsorted(data[FIELD.status]);
+  const { lane, readyFor, malformedStatus } = placeOrBacklog(data[FIELD.status]);
 
-  const issue: Issue = { id: fileName, title, lane };
+  const issue: Issue = malformedStatus
+    ? { id: fileName, title, lane, malformedStatus }
+    : { id: fileName, title, lane };
   // A routing badge belongs only on a ready card; an escalation reason only on a
   // human-review card. Each rides its own lane so a stale value can't leak onto
   // a card that has moved on.
@@ -193,7 +195,7 @@ function scanIssue(
  * - no recorded handle → **unknown** (a previous session, an empty sidecar, or
  *   the spawn/record gap). Never a false `live`, and never a false `orphaned`.
  *
- * A card outside the two active-agent lanes (ready, done, unsorted) — or any
+ * A card outside the two active-agent lanes (ready, done, backlog) — or any
  * card when no lookup is wired in — is returned unchanged and stays unmarked:
  * no agent owns it, so it has no liveness to report.
  */
@@ -220,8 +222,9 @@ function applyLiveness(
  * Any other lane has no spawn edge and is returned unchanged. Deriving from the
  * validated placement (rather than indexing a status string) means a frontmatter
  * value that collides with an `Object.prototype` name can never reach the lookup —
- * `placeStatus` already folded it to `unsorted`. The marker stays edge-agnostic on
- * the card — the column already implies the edge.
+ * `placeStatus` already folded it into `backlog` (flagged `malformedStatus`), a
+ * non-spawn lane. The marker stays edge-agnostic on the card — the column already
+ * implies the edge.
  *
  * Lane-gating here is what makes a lingering failed-set entry inert: an Issue that
  * has left its `ready-*` lane (re-triaged, hand-edited, completed) simply isn't on
@@ -313,8 +316,14 @@ function slugFromFileName(fileName: string): string {
 /**
  * Place a card by its authored status, applying the scanner's fail-safe: an
  * unknown or missing status (where {@link placeStatus} returns `undefined`)
- * lands the card in the leftmost `unsorted` lane rather than being dropped.
+ * folds into the **backlog** lane carrying `malformedStatus: true` rather than
+ * being dropped. The fold keeps PRD-status derivation unchanged — backlog is
+ * pre-in-progress and not `done`, exactly as the retired `unsorted` lane was —
+ * while the flag drives the card's loud warning marker so the data error is
+ * still triaged, not silently parked as ordinary backlog.
  */
-function placeOrUnsorted(status: unknown): { lane: Lane; readyFor?: ReadyFor } {
-  return placeStatus(status) ?? { lane: "unsorted" };
+function placeOrBacklog(
+  status: unknown,
+): { lane: Lane; readyFor?: ReadyFor; malformedStatus?: boolean } {
+  return placeStatus(status) ?? { lane: "backlog", malformedStatus: true };
 }

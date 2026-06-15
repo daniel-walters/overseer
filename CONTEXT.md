@@ -120,7 +120,7 @@ Canonical values: `backlog`, `ready-for-human`, `ready-for-agent`, `in-progress`
 
 - The board groups **exactly** `ready-for-human` and `ready-for-agent` into the single **ready** column; the suffix drives the card badge. ⚠️ This is an exact-value match, **not** a `ready-for-` prefix match — `ready-for-review` shares the prefix but is its *own* column, never folded into **ready**.
 - Human/agent is a routing signal that only matters while **ready**. Once an Issue moves to `in-progress` it is just `in-progress` — the human/agent distinction is not tracked further.
-- A missing or unrecognized status lands the Issue in a leftmost **Unsorted** column rather than being dropped.
+- A missing or unrecognized status folds the Issue into the **backlog** column rather than being dropped, carrying a loud **`⚠ bad status`** card marker (the "status is missing or unrecognised; fix the frontmatter" signal). There is no separate Unsorted column: a malformed Issue already derives to the backlog lane for [PRD status](#prd-status-derived) purposes, so a marker keeps the data error triageable without splitting "not started" across two visual columns. The marker sits in the yellow "needs a human" warning family alongside [Orphan](#) and the human-review reasons — distinct from a plain backlog card, and from the red `⊘ suppressed` "nothing ran" marker.
 
 ### Status lifecycle {#status-lifecycle}
 
@@ -163,11 +163,11 @@ A PRD has **no stored status** — `prd.md` carries no `status` field. The board
 
 - there is **≥ 1 Issue and every Issue is `done`** → **done**
 - otherwise, **any Issue is `in-progress` or later** (`in-progress`, `ready-for-review`, `in-review`, `human-review`, `done`) → **in-progress**
-- otherwise (all Issues `backlog`/`ready-*`/`Unsorted`, **or zero Issues**) → **backlog**
+- otherwise (all Issues `backlog`/`ready-*`/malformed-status, **or zero Issues**) → **backlog**
 
 A freshly created PRD with no Issues is **backlog** — `done` requires at least one Issue, all done.
 
-An **Unsorted** Issue (missing/unknown status) counts as **pre-in-progress**: it never promotes the PRD to in-progress, and — not being `done` — it blocks the all-done `done` derivation. So a PRD with `done` + `Unsorted` Issues derives to **in-progress**, not done: an unknown-status Issue can never silently advance *or* complete a PRD. (Derivation reads each Issue's resolved **lane**, so an Unsorted Issue is simply not in the in-progress-or-later set and not equal to `done`.) A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never Unsorted**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
+A **malformed-status** Issue (missing/unknown status) folds into the **backlog** lane, so it counts as **pre-in-progress**: it never promotes the PRD to in-progress, and — its lane not being `done` — it blocks the all-done `done` derivation. So a PRD with `done` + malformed-status Issues derives to **in-progress**, not done: an unknown-status Issue can never silently advance *or* complete a PRD. (Derivation reads each Issue's resolved **lane**, and a malformed Issue's lane is `backlog` — simply not in the in-progress-or-later set and not equal to `done`, exactly as the retired Unsorted lane behaved.) A PRD passes through only **backlog → in-progress → done**; it is never in `ready` or `in-review`, and — having no status field to be missing — is **never malformed**. Nobody writes PRD status: not the TUI, not the dispatcher (this reaffirms [ADR 0002](./docs/adr/0002-agents-write-the-root-viewer-stays-readonly.md)).
 
 ## Reactor {#reactor}
 
@@ -204,8 +204,8 @@ The **Reactor** is the in-process automation that drives the pipeline forward wi
 
 Two kanban levels with **different column sets**:
 
-- **Board level** — the cards are **PRDs**. The board collapses to **3 columns — backlog / in-progress / done** — each PRD in its [derived](#prd-status-derived) column. A PRD is never Unsorted (no status field to be missing). This is the default/top view.
-- **PRD level (zoom)** — selecting a PRD zooms into a kanban whose cards are that PRD's **Issues**, across the full **7 columns** (plus a leftmost **Unsorted** column for Issues with missing/unknown status).
+- **Board level** — the cards are **PRDs**. The board collapses to **3 columns — backlog / in-progress / done** — each PRD in its [derived](#prd-status-derived) column. A PRD is never malformed (no status field to be missing). This is the default/top view.
+- **PRD level (zoom)** — selecting a PRD zooms into a kanban whose cards are that PRD's **Issues**, across the full **7 columns**. There is no Unsorted column: an Issue with a missing/unknown status folds into **backlog** carrying the `⚠ bad status` marker.
 
 The **ready** column and its 🧑/🤖 badge (`ready-for-human` / `ready-for-agent`) exist at **Issue level only** — the board level has no `ready` column. Within a column, cards order by the issue filename's `NNN-` prefix (incidental, not priority).
 
