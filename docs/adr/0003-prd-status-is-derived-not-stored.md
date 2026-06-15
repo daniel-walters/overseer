@@ -42,10 +42,17 @@ requires at least one issue, all done. This avoids the vacuous-truth trap where
 an empty issue set reads as "all issues done."
 
 The **board-level kanban collapses to three columns** — backlog / in-progress /
-done — plus **Unsorted**. A PRD is never in `ready` or `in-review`; those are
-Issue-level-only columns. Because a PRD has no status field, a PRD is **never
-Unsorted** — it is always computably one of the three. Unsorted remains an
-**Issue-level** concept (an Issue with a missing/unrecognized status).
+done. A PRD is never in `ready` or `in-review`; those are Issue-level-only
+columns. Because a PRD has no status field, a PRD's status is never missing or
+unrecognised — it is always computably one of the three.
+
+An Issue with a missing/unrecognised status carries no column of its own: it
+**folds into the Issue-level `backlog` lane** flagged with a loud `⚠ bad status`
+card marker (CONTEXT.md → Status, and the marker family there) rather than living
+in a separate leftmost **Unsorted** column. That fold preserves this derivation
+unchanged — a malformed Issue's lane is `backlog`, which is pre-in-progress and
+not `done`, exactly as the retired Unsorted lane behaved — so an unknown-status
+Issue can never silently advance *or* complete a PRD.
 
 The 🧑/🤖 `ready-for-*` badge renders at **Issue level only**, not at board
 level.
