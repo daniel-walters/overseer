@@ -83,7 +83,115 @@ deferred, not forgotten.
 
 ## Ideas
 
-### Per-agent logs from a card *(unlocked by the liveness handle)*
+### Open / link a GitHub PR for a done PRD
+
+A finished PRD currently dead-ends. The whole flow merges Issue worktrees into the
+**PRD feature branch** (e.g. `suppressed-marker`) and stops there — "merging that
+branch to `main` is out of scope for this flow" (CONTEXT.md → Review outcome). So a
+`done` PRD is a feature branch with all its work merged in, sitting unmerged against
+`main`, with no PR. This idea closes that last gap with three keybinds/affordances:
+
+1. **`open PR` keybind on a done PRD.** Board-level action on a PRD in the `done`
+   column: open a GitHub PR from its feature branch into `main` (the default base),
+   titled from the PRD. This is the deliberate human gate the flow intentionally stops
+   short of — the agent never opens PRs (the implementor prompt says so explicitly),
+   so this is a human-triggered, board-level act, sibling to `d`/`r`.
+2. **An icon on PRDs linked to a GH PR.** A card marker (the established marker
+   family — liveness / suppressed / human-review) showing a PRD has an open PR, so the
+   board distinguishes "done, no PR yet" from "done, PR open" at a glance.
+3. **A `go to PR` keybind** that opens the attached PR in the browser, when one exists.
+
+The hard part is the same one every overlay faces: **where does the PR link live?**
+The board is a read-only viewer of files and Overseer-owned operational state, never a
+GitHub client today. Nothing tracks a PR URL. Options, with the now-familiar trade:
+
+- **A sidecar** keyed by PRD (like the liveness handle), recording `prd → pr-url`
+  when `open PR` runs; the icon and `go to PR` read it. Keeps the watched root clean,
+  matches the overlay pattern, but the link is Overseer-local (lost if you inspect from
+  elsewhere).
+- **Query GitHub live** (`gh pr list --head <feature-branch>`): no persistence, always
+  truthful, the icon reflects reality even for a PR opened outside Overseer — but it
+  adds a `gh` subprocess on the board's hot path (bound it like the liveness query) and
+  a hard dependency on `gh` + auth + network.
+- **PRD frontmatter** (`pr: <url>`): durable and portable, but it makes *something*
+  write to the watched root for a PRD — and PRDs deliberately have **no** written
+  fields today (status is derived, ADR 0003); adding a written field to `prd.md` is a
+  real departure worth its own decision.
+
+Open questions: does this assume a GitHub remote (the flow is `gh`-shaped — what about
+non-GitHub repos)? Is the base always `main`, or configurable? Does opening the PR
+change the PRD's board state at all, or is `done` still `done` with just an added icon?
+Note this is the first time the board would *reach out to GitHub* rather than only read
+local files — a genuine new capability class, like the deferred per-agent-logs
+subprocess call, not a keybind on existing data.
+
+### Jump straight to an Issue needing human review
+
+`human-review` is the *one* column in the whole pipeline that requires a human
+(CONTEXT.md → Issue status) — yet the board gives it no special way to *find* it. Today
+navigation is entirely manual and local: move within a column (`hjkl`), zoom into one
+PRD, back out. To reach a `human-review` Issue you must already know which PRD holds it,
+navigate to that PRD's card, zoom in, and move to the Issue. Across many PRDs an
+escalated Issue is a needle you hunt for — and it's the highest-priority thing on the
+board, because the whole automated pipeline is *blocked on you* for it.
+
+The idea: a **one-keypress jump** to the next Issue awaiting human review — select it
+(zooming into its PRD as needed) wherever it lives, so the human attention the board
+exists to direct lands instantly. Pressing it again cycles to the next one (round-robin
+through all `human-review` Issues across all PRDs).
+
+Design questions: ordering when several await (oldest first? by `human_review_reason`
+severity — conflict before deviation? board order?); what it does when there are none
+(no-op, or a "nothing needs you" status-line flash); whether it's purely a *jump* or
+also previews *why* (the `human_review_reason` is already on the card as a marker, so
+the jump may be enough). It pairs with the per-PRD-pause idea's "where's the work"
+question and is a natural member of whatever the "central keybind registry" becomes.
+
+A small generalisation worth noting: this is the first **cross-PRD jump** keybind —
+every nav action today is within the current level/column. The same machinery (find the
+next card matching a predicate, select it, zoom if needed) would also serve "jump to the
+next orphan" or "next suppressed" later, so it may be worth designing as a general
+"jump to next card matching X" rather than a one-off human-review jump.
+
+### (Discussion) Finished agents linger in `claude agents` — clean up, or keep for post-mortem?
+
+*Captured as an open discussion point, not a decided direction.*
+
+Observation: as agents finish, they don't disappear from `claude agents` — they move
+to a **completed** area and stick around. The first instinct is that they should be
+**fully deleted** once done; a growing graveyard of finished sessions is clutter, and
+it interacts with a known liveness quirk — a lingering completed row still counts as
+`live` in the membership test (the "membership is id-only" known limit in
+`liveness.ts`), so an agent that has actually exited can read `live` until its row ages
+out.
+
+But — counter-thought — **a user may want to inspect a finished agent's logs
+post-mortem**: what did the reviewer actually find, why did this implementor deviate,
+what did a failed run print. Hard-deleting on completion destroys exactly the artifact
+the deferred "Per-agent logs from a card" idea wants to surface. So "delete when done"
+and "keep logs around" pull in opposite directions.
+
+The discussion, unresolved:
+
+- **Is cleanup even Overseer's job?** The completed rows are Claude's session
+  registry, not Overseer state. Overseer spawns and forgets (ADR 0002); reaching in to
+  `claude` to delete finished sessions is a new outward action with its own surface.
+- **Retain-then-reap vs. delete-on-done.** Maybe the answer isn't binary: keep
+  completed sessions for some window (or until merge), then reap — so post-mortem is
+  possible *and* the graveyard is bounded. What's the right trigger to reap (merge of
+  the Issue? board reopen? a TTL?)?
+- **Decouple logs from session lifetime.** If `claude logs <handle>` survives session
+  deletion (Claude persists logs independently of the live-session row), then we can
+  delete the row freely and still inspect post-mortem — which would dissolve the
+  tension entirely. **Needs verifying** before any cleanup is built: it decides whether
+  this is even a real trade-off.
+- **The liveness angle is the concrete cost of doing nothing.** Left alone, lingering
+  completed rows keep faking `live` verdicts. Reading the row's `state` to call a
+  completed session dead is the "is it hung?" iteration liveness already defers — so
+  this discussion overlaps that one too.
+
+Resolve the "do logs outlive the session?" question first; it likely collapses the
+whole fork.
 
 Now that the **Liveness** ([ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md))
 sidecar records `issueKey → handle`, drilling into a running agent's output is one join
@@ -107,6 +215,70 @@ liveness PRD (it is in that PRD's Out of Scope). It is more than the one-shot
 
 So: a natural follow-on now that the liveness handle has landed, but its own UI-shaped
 piece of work, not part of the dogfood-minimum set.
+
+This is one of **three pane-shaped ideas** that all want the same missing surface — a
+place to render per-Issue detail. See "View the Issue / PRD body" (next) for the shared
+"design the detail pane once" framing.
+
+### Bundle the `tdd` skill and hard-require it in the implementor prompt
+
+Dispatched work must be test-driven, not test-optional. Today the implementor prompt
+(`buildImplementorPrompt`) says nothing about tests — it leans entirely on the Issue body's
+"Testing Decisions" to imply them, so an agent *may* write tests but is under no disciplined
+test-first loop. The requirement: the implementor prompt **hard-requires the `tdd` skill**
+(red-green-refactor) before parking the Issue at `ready-for-review`.
+
+But naming a skill in the prompt is only safe if the skill is *guaranteed present* on the
+machine the agent runs on. A dispatched `claude --bg` agent is a fresh session; if `tdd`
+lives only in the operator's personal `~/.claude/skills`, the brief references a skill the
+agent can't load. So this idea has two coupled halves:
+
+1. **Bundle `tdd` with the app.** Overseer already ships skills — the four `overseer-*`
+   skills live in `skills/` and `init` installs them into the target ([ADR 0004](./adr/0004-init-silently-overwrites-bundled-skills.md)).
+   Add `tdd` to that bundled set so every Overseer install carries it, and the implementor
+   prompt can reference it by name knowing it exists. (Decide where it installs — alongside
+   the `overseer-*` skills, project-scoped — and whether ADR 0004's silent-overwrite
+   behavior is right for a skill the operator might want to customize.)
+2. **Reference it in the prompt.** Add a step to `buildImplementorPrompt` instructing the
+   agent to drive the implementation with the `tdd` skill. Keep the template's
+   pure/deterministic/auditable property (its docstring's whole point) — a static
+   instruction preserves that.
+
+Open question worth resolving when shaping this: is TDD a *global* mandate baked into the
+prompt for every Issue, or a per-Issue choice the "Testing Decisions" should drive? The hard
+requirement says global — but some Issues (a docs-only or config Issue) have nothing to
+red-green. A global mandate is simplest and is the stated intent; note the docs/config
+exception as a known wrinkle rather than building per-Issue opt-out up front.
+
+### View the Issue / PRD body
+
+Overseer reads every PRD/Issue markdown file but **never shows the body** — the board
+renders only the title, badges, and markers. To read what an Issue actually *says* (its
+`## What to build`, acceptance criteria, the PRD's problem statement) you have to open the
+file outside the app. For a tool whose whole job is surfacing PRD/Issue work as a live
+board, not being able to read the work from inside it is a real gap. The idea: a way to
+view the selected card's full markdown body — its frontmatter-stripped content, ideally
+lightly rendered (headings, lists, checkboxes) rather than raw.
+
+Open questions: where it renders (a side/bottom **detail pane** vs. a full-screen modal vs.
+expand-in-place), and how it scrolls given the alt-screen board already clips on overflow
+(see "Viewport scrolling"). At the board level the body is the PRD's `prd.md`; zoomed, it
+is the selected Issue's file — so one surface serves both levels.
+
+**The shared detail surface.** Three ideas converge on the same unbuilt thing — a pane that
+renders per-Issue/PRD detail:
+
+1. **This one** — the Issue/PRD markdown body.
+2. **"Per-agent logs from a card"** (above) — the selected agent's `claude logs` output.
+3. **"A detail pane / expand-on-select"** (under "more real estate for Issue titles") — full
+   title overflow + body + deviation reason for the selected card.
+
+They are the same rendering surface viewed three ways (static body / live log stream /
+overflow detail). Whoever shapes any one into a PRD should design the pane *once* — its
+placement, scrolling, and how it shares the screen with the clipped board — rather than
+inventing three. The body view is the simplest of the three (static text, no subprocess,
+no live tailing), so it is the natural first cut that establishes the pane the other two
+then reuse.
 
 ### Pause / resume development of a PRD
 
@@ -141,6 +313,75 @@ calibrate against, promote both to `config.toml` knobs — a per-board (or event
 per-PRD) iteration cap and effort level — rather than baking the v1 defaults in
 forever.
 
+### Show the AI-review iteration count on an in-review card (e.g. `2/3`)
+
+While an Issue is `in-review`, surface how many `/code-review` passes it has been
+through and the cap before it escalates to a human — a `2/3`-style marker on the card.
+It answers "is this review nearly out of road?" at a glance: a card at `1/3` is fresh,
+one at `3/3` is about to either pass clean or land in `human-review` for
+non-convergence.
+
+The catch: **that count does not exist anywhere Overseer can read it today.** The
+3-pass loop runs entirely *inside a single reviewer agent's session* — the reviewer
+spawns once, loops `/code-review` up to 3 times in-process, and writes back only a
+*terminal* status (`done`, or `human-review` with a reason like `non-convergence`).
+The iteration number lives in the agent's head, never on the Issue file or a sidecar
+(CONTEXT.md → Review outcome). So this is **not a rendering tweak** — it needs the
+count *exposed* first. Two shapes for that, each with a cost:
+
+- **The reviewer writes its progress to the Issue** (e.g. a `review_pass: 2`
+  frontmatter field, updated each pass). Simplest to read, but it makes the reviewer
+  write to the watched root *mid-loop* — today it writes only the one terminal edit,
+  and per-pass writes would each fire a re-scan and add churn. Stays within ADR 0002
+  (agents write, viewer reads) but increases write frequency.
+- **The reviewer reports progress out-of-band** (a sidecar keyed by Issue, like the
+  liveness handle), and the board overlays it like the other markers. Keeps the Issue
+  file clean and matches the liveness/suppressed overlay pattern, but adds a second
+  thing the reviewer must emit and the board must join.
+
+Pairs tightly with "Configurable AI-review turns and effort" above: the moment the cap
+is a `config.toml` knob, the denominator in `N/cap` must read that config, not a
+hardcoded 3 — so if both are built, build them together (one source of truth for the
+cap, consumed by the loop, the marker, and the config).
+
+### Use a fresh reviewer agent for each review iteration
+
+Today all 3 review passes run in **one reviewer session**: the same agent runs
+`/code-review`, fixes the findings *itself*, then re-runs `/code-review` on its own
+fixes, up to the cap (`reviewerPrompt.ts` → How to review). That's a known reviewer
+bias — an agent grading work it just produced is inclined to bless it. The idea: spawn
+a **separate reviewer agent per iteration**, so each pass is a fresh pair of eyes on
+the current state of the worktree, with no memory of having written the fixes under
+review.
+
+Why it might be better: independence. A clean-slate reviewer that never saw the prior
+fix is more likely to catch a flaw the author-reviewer rationalised away; convergence
+("a pass reports zero findings") means more when the passing reviewer has no stake in
+the code. It also separates the two jobs the single agent currently fuses — *review*
+(find problems) and *fix* (resolve them) — which arguably want different agents
+anyway.
+
+Costs / open questions to weigh:
+
+- **Who fixes?** If each reviewer only *reviews*, something else has to apply fixes
+  between passes — re-dispatch the implementor? a dedicated fixer agent? That's a new
+  loop edge, not just swapping the spawn.
+- **State handoff.** A single session carries context across passes for free; separate
+  agents need the findings/fixes passed between them (via the worktree commits, or an
+  explicit handoff artifact). The worktree *is* the shared state, so a fresh reviewer
+  reading the latest commit may be enough — worth confirming.
+- **Cost & latency.** N spawns instead of 1 per Issue, each paying cold-start +
+  worktree checkout. Wider fan-out against the same shared-checkout concerns dispatch
+  already navigates.
+- **Liveness/iteration tracking interacts.** Each pass becoming its own spawn means
+  each has its own handle — which would actually make the iteration count (the `N/3`
+  idea above) *naturally* visible as distinct spawns, rather than something the single
+  agent must self-report. The two ideas reinforce each other.
+
+This is a meaningful change to the review model (ADR 0005 territory — the review
+reactor), not a prompt tweak; it deserves its own design pass on the review loop's
+shape if pursued.
+
 ### Viewport scrolling (overflow on the alternate screen)
 
 "Always full screen" (UI Polish part 1) renders the board on the terminal's
@@ -167,6 +408,14 @@ part 1):
 - **Bottom bar needs spacing between the `auto` indicator and the `?` keybind.**
   They currently render flush against each other; add separation so they read as
   distinct elements.
+- **Surface the `d` dispatch keybind in the bottom row.** The bottom bar shows
+  the `auto` indicator and the `? help` hint but not the primary action that
+  ignites a PRD. `d` is discoverable only by opening the help modal, so a new
+  user staring at a `backlog` PRD has no on-screen cue for how to start it. Add
+  dispatch (and likely its siblings — `r` review, etc.) as a persistent hint in
+  the bottom row so the ignition gesture is visible without `?`. Pairs naturally
+  with the "Central keybind registry" idea below: a single registry could feed
+  both the bottom-row hints and the help modal.
 
 ### Central keybind registry
 
@@ -176,3 +425,112 @@ copy**, guarded against drift only by a test. A future refactor would lift keybi
 into a single `{key, label, level}` registry that *both* the input handler and the
 help modal consume, eliminating the drift risk — deferred from part 1 to avoid
 dragging an input-architecture refactor into a polish pass.
+
+### Fold the Unsorted column into backlog with a warning marker
+
+The Issue-level board carries a leftmost **Unsorted** column for Issues with a
+missing/unknown `status` (CONTEXT.md → Issue status). It is arguably a column too
+many: an Unsorted Issue already derives to the **backlog lane** for PRD-status
+purposes ("pre-in-progress" — it never promotes a PRD to in-progress and isn't
+`done`, CONTEXT.md → PRD status), so the separate column splits one conceptual
+"not started" lane across two visual columns. The idea: **drop the Unsorted column
+and render those Issues inside `backlog`, flagged with a warning marker** (a card
+marker like the human-review / liveness / suppressed ones — "this Issue's status is
+missing or unrecognised; fix the frontmatter"). It would still be visible and still
+demand attention — the marker is the attention signal — but the board would have one
+fewer column and the "not started" cards would live together.
+
+Open questions before committing: (1) does collapsing lose the *triage* signal that
+a dedicated column gives (an Unsorted Issue is a data error to fix, not a deliberate
+backlog parking — the column makes that loud); (2) does it muddy the clean "backlog =
+deliberately not started yet" reading by mixing in malformed Issues; (3) whether the
+derivation prose in CONTEXT.md simplifies or just moves (the lane logic already treats
+Unsorted as pre-in-progress, so this is mostly a *rendering* change, not a derivation
+one). Pairs with the existing marker family — it's the same "surface a card-level
+condition as a marker instead of a structural column" move as the suppressed marker.
+
+### Rework the selection-highlight design
+
+The current selected-card treatment is `inverse` + `bold` on the title line plus a
+prepended `▶ ` arrow (the `selected` branch in the Card component). Two problems:
+(1) `inverse` (swapped fg/bg) reads as heavy and noisy, and fights the colored
+markers — a selected card with a red `⊘ suppressed` or green `● live` line gets a
+muddy mix of inverse-title + colored-marker; (2) the `▶ ` arrow *consumes two
+columns of the title line itself*, so the one card you're focused on truncates its
+title **two chars earlier** than its neighbours — actively worse legibility on the
+card that matters most. That's the opposite of what selection should do.
+
+Directions to weigh (not yet decided): move the selection signal off the title line
+entirely so it costs the title no width — e.g. lean on the existing cyan
+**border** (`borderColor` already flips to cyan on select) as the *sole* indicator
+and drop both the inverse and the arrow; or a left **gutter** column outside the
+card box that holds the `▶` so it never eats title width; or a background tint on
+the whole card rather than an inverse title. Whatever wins, the constraint is: the
+selected card must show *more* of its title than an unselected one, never less.
+
+### Brainstorm: more real estate for Issue titles
+
+Titles are cramped. A column is a hardcoded `width={24}`, and each card spends that
+budget on a rounded border (−2) + horizontal padding (−2), the ready/liveness badge
+glyph, and (when selected) the `▶ ` arrow (−2) — leaving a `truncate-end` title
+often **~16 chars wide**. For Issue titles like "Share one failed-set across all
+spawn edges" that's near-useless; you read the first two words and guess. Worth a
+dedicated design pass, not a one-line tweak. Candidate directions to brainstorm:
+
+- **Make column width adaptive, not fixed.** Divide the (full-screen, ADR-driven)
+  viewport across the visible columns instead of pinning 24. On a wide terminal
+  titles breathe; on a narrow one they degrade gracefully. Interacts with the
+  clipping/overflow problem already noted under "Viewport scrolling".
+- **Drop per-card chrome.** The rounded border + padding on *every* card is a heavy
+  per-card tax on width and vertical space. A lighter separator (a rule, or just
+  spacing) between cards could reclaim the 2 border + 2 padding columns for the
+  title. Selection could then be the *only* thing that draws a box (ties into the
+  highlight rework above).
+- **Wrap instead of truncate.** Let a long title wrap to two lines (`wrap="wrap"` /
+  truncate at line 2) rather than hard-truncating at one. Costs vertical space —
+  trades against the overflow/clipping limit — but a title you can fully read may be
+  worth a taller card. Possibly only for the *selected* card (expand-on-select).
+- **A detail pane / expand-on-select.** Keep cards terse, but show the full title
+  (and body, deviation reason, etc.) for the selected Issue in a side or bottom
+  pane. The card list stays scannable; the focused Issue gets unlimited room. This
+  is the biggest change and is one of the **three pane-shaped ideas** that share one
+  detail surface — see the "shared detail surface" note under "View the Issue / PRD
+  body" for the design-the-pane-once framing.
+
+These two ideas are coupled: the `▶ ` arrow is both a highlight-design choice and a
+title-width tax, so a selection rework and a real-estate pass should probably be
+designed together rather than as separate polish bullets.
+
+### Fix hjkl navigation to be relative to the board (2-D)
+
+`hjkl` today is fake vim nav: `moveDelta` collapses all four keys into a 1-D ±1 step
+over a flat card list — `h`/`k` both move −1, `j`/`l` both move +1 (the code comment
+admits "treat horizontal moves the same as vertical"). So `h` and `k` are
+indistinguishable, `j` and `l` are indistinguishable, and `l` does **not** move right
+to the next column — it just steps to the next card in flat order. Navigation should
+be **spatial, relative to the board's columns**: `l` → the card to the right (next
+column), `h` → left (previous column), `j` → down within a column, `k` → up. That's
+what a user pressing `l` on a kanban board expects.
+
+This is **not a keybind tweak** — the nav reducer (`navReduce` / `NavState`) has no
+concept of columns or rows. It models selection as a single flat index (`boardIndex`
+/ `issueIndex`) and a single `move` action carrying a `delta` over a flat `count`.
+Making `l`/`h` mean "change column" requires the nav model to become 2-D: track
+*which column* and *which row within it*, and define the cross-column behavior. The
+open design questions are the interesting part:
+
+- **What does `l`/`h` do to the row?** Moving from a column with 5 cards (row 3) to
+  one with 2 cards — clamp to the nearest row (row 1), or remember the original row
+  and restore it if you come back? Vim-style "sticky column" (here, sticky *row*) is
+  the nicer behavior but more state.
+- **Empty columns.** `l` into an empty column — skip to the next non-empty one, or
+  land on the empty column with no selection? A kanban routinely has empty columns
+  (a PRD with nothing `in-review`), so this case is common, not edge.
+- **Which levels.** Both the 7-column Issue level *and* the 3-column board level are
+  grids, so both want 2-D nav — the reducer change covers both.
+- **Arrow keys come along for free** once the model is 2-D (←/→ map to `h`/`l`,
+  ↑/↓ to `j`/`k`), replacing today's arrow→flat-delta mapping.
+
+Pairs with the "Central keybind registry" idea (this touches the same input layer)
+and benefits from being designed alongside the selection-highlight rework, since both
+are about how the *current* card is identified and moved.
