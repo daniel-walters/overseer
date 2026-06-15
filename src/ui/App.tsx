@@ -6,6 +6,7 @@ import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { navReduce, initialNav } from "./navigation.js";
+import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
 import type { Board } from "../model.js";
@@ -174,6 +175,82 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: 
   const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
   const selectedIssue = issues[issueIndex];
 
+  /**
+   * The App-side closures the registry dispatches a matched keypress to. Each is
+   * the body of one former inline `if` branch, including its App-state guards —
+   * the registry has already applied the level gate, so a handler only fires when
+   * its key matched at the right level.
+   */
+  const handlers: KeybindHandlers = {
+    move: (delta) => {
+      const count = nav.level === "board" ? board.prds.length : issues.length;
+      dispatch({ type: "move", delta, count });
+    },
+    zoom: () => dispatch({ type: "zoom", issueCount: issues.length }),
+    back: () => dispatch({ type: "back" }),
+    dispatch: () => {
+      if (dispatcher && selectedPrd) {
+        setModal({
+          kind: "dispatch",
+          prdTitle: selectedPrd.title,
+          frontier: dispatcher.readFrontier(selectedPrd.id),
+        });
+        dispatch({ type: "open-preview" });
+      }
+    },
+    review: () => {
+      if (reviewer && selectedPrd && selectedIssue) {
+        const preview = reviewer.readReview(selectedPrd.id, selectedIssue.id);
+        // A vanished Issue (raced a deletion) yields no preview — open nothing.
+        if (preview) {
+          setModal({ kind: "review", preview });
+          dispatch({ type: "open-review" });
+        }
+      }
+    },
+    redispatch: () => {
+      // Orphan recovery, Issue-level only (the registry gates the level). Gated
+      // further on the card's own `orphaned` liveness marker — the same verdict
+      // the card already renders — so `R` is a no-op on a healthy, unknown, or
+      // non-active card. `readRollback` resolves the orphan once and freezes it on
+      // the modal; a vanished Issue (raced a deletion) yields no preview.
+      if (rollback && selectedPrd && selectedIssue?.liveness === "orphaned") {
+        const preview = rollback.readRollback(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "redispatch", preview });
+          dispatch({ type: "open-review" });
+        }
+      }
+    },
+    kill: () => {
+      // Kill, Issue-level only (the registry gates the level). Gated further on
+      // the card's own `live` liveness marker — only a running agent Overseer
+      // recorded can be stopped — so `K` is a no-op on an orphaned, unknown, or
+      // non-active card. `readKill` freezes the recorded handle on the modal; a
+      // vanished Issue, or a `live` card with no recorded handle (a verdict/sidecar
+      // race), yields no preview (ADR 0010).
+      if (killer && selectedPrd && selectedIssue?.liveness === "live") {
+        const preview = killer.readKill(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "kill", preview });
+          dispatch({ type: "open-review" });
+        } else {
+          // The card read `live` but readKill found no recorded handle (the
+          // verdict/sidecar race, or the Issue vanished). Without this notice the
+          // keypress would do nothing at all — indistinguishable from K being
+          // broken — so say plainly there's nothing to stop.
+          setNotice(`${selectedIssue.id} has no recorded agent to stop — re-check the board.`);
+        }
+      }
+    },
+    toggleAutoRun: () => autoRun?.toggle(),
+    showHelp: () => setShowHelp(true),
+    quit: () => {
+      if (nav.level === "issues") dispatch({ type: "back" });
+      else exit();
+    },
+  };
+
   useInput((input, key) => {
     // Any keypress dismisses a lingering rollback notice — it is a one-shot
     // outcome line, not persistent chrome. Cleared up front so even the keypress
@@ -212,115 +289,15 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: 
       return;
     }
 
-    if (input === "d") {
-      if (nav.level === "board" && dispatcher && selectedPrd) {
-        setModal({
-          kind: "dispatch",
-          prdTitle: selectedPrd.title,
-          frontier: dispatcher.readFrontier(selectedPrd.id),
-        });
-        dispatch({ type: "open-preview" });
-      }
-      return;
-    }
-
-    if (input === "r") {
-      if (nav.level === "issues" && reviewer && selectedPrd && selectedIssue) {
-        const preview = reviewer.readReview(selectedPrd.id, selectedIssue.id);
-        // A vanished Issue (raced a deletion) yields no preview — open nothing.
-        if (preview) {
-          setModal({ kind: "review", preview });
-          dispatch({ type: "open-review" });
-        }
-      }
-      return;
-    }
-
-    if (input === "R") {
-      // Orphan recovery, Issue-level only. Gated on the card's own `orphaned`
-      // liveness marker — the same verdict the card already renders — so `R` is a
-      // no-op on a healthy, unknown, or non-active card. `readRollback` resolves
-      // the orphan once and freezes it on the modal; a vanished Issue (raced a
-      // deletion) yields no preview, so nothing opens.
-      if (
-        nav.level === "issues" &&
-        rollback &&
-        selectedPrd &&
-        selectedIssue?.liveness === "orphaned"
-      ) {
-        const preview = rollback.readRollback(selectedPrd.id, selectedIssue.id);
-        if (preview) {
-          setModal({ kind: "redispatch", preview });
-          dispatch({ type: "open-review" });
-        }
-      }
-      return;
-    }
-
-    if (input === "K") {
-      // Kill, Issue-level only. Gated on the card's own `live` liveness marker —
-      // only a running agent Overseer recorded can be stopped — so `K` is a no-op
-      // on an orphaned, unknown, or non-active card. `readKill` freezes the
-      // recorded handle on the modal; a vanished Issue, or a `live` card with no
-      // recorded handle (a verdict/sidecar race), yields no preview (ADR 0010).
-      if (
-        nav.level === "issues" &&
-        killer &&
-        selectedPrd &&
-        selectedIssue?.liveness === "live"
-      ) {
-        const preview = killer.readKill(selectedPrd.id, selectedIssue.id);
-        if (preview) {
-          setModal({ kind: "kill", preview });
-          dispatch({ type: "open-review" });
-        } else {
-          // The card read `live` but readKill found no recorded handle (the
-          // verdict/sidecar race, or the Issue vanished). Without this notice the
-          // keypress would do nothing at all — indistinguishable from K being
-          // broken — so say plainly there's nothing to stop.
-          setNotice(`${selectedIssue.id} has no recorded agent to stop — re-check the board.`);
-        }
-      }
-      return;
-    }
-
-    if (input === "?") {
-      // Opens the keybind reference, at either level. Reached only past the
-      // nav.confirming guard above, so an open preview suppresses it — help and a
-      // preview are never both up.
-      setShowHelp(true);
-      return;
-    }
-
-    if (input === "a") {
-      // The global auto-run brake. Unlike d/r it is not level-scoped — it acts on
-      // nothing under the cursor, so it works wherever you are. (The modal already
-      // swallowed input above via the nav.confirming guard.)
-      autoRun?.toggle();
-      return;
-    }
-
-    if (input === "q") {
-      if (nav.level === "issues") dispatch({ type: "back" });
-      else exit();
-      return;
-    }
-
-    if (key.return) {
-      dispatch({ type: "zoom", issueCount: issues.length });
-      return;
-    }
-
-    if (key.escape) {
-      dispatch({ type: "back" });
-      return;
-    }
-
-    const delta = moveDelta(input, key);
-    if (delta !== 0) {
-      const count = nav.level === "board" ? board.prds.length : issues.length;
-      dispatch({ type: "move", delta, count });
-    }
+    // Past the modal/help guards, the live board owns input. Dispatch the
+    // keypress off the central registry rather than an inline `if (input === …)`
+    // chain: find the binding for this key at the current level and run its
+    // action against the `handlers` bag above. The registry owns the key→action
+    // map and the level gate (board / issues / both); those handlers own the
+    // App-state gates the registry can't see — a seam being wired, an Issue being
+    // selected, a card's liveness verdict — and stay no-ops when those aren't met.
+    const bind = matchKeybind({ input, key }, nav.level);
+    bind?.action(handlers, { input, key });
   });
 
   /** Act on the frozen modal capture: dispatch a frontier, or review an Issue. */
@@ -465,14 +442,4 @@ function StatusLine({ autoRun }: { autoRun?: AutoRun }) {
       <Text dimColor>{KEY_HINTS.join("  ·  ")}</Text>
     </Box>
   );
-}
-
-/** Translate a keypress into a selection delta: -1 (up), +1 (down), or 0. */
-function moveDelta(input: string, key: { upArrow: boolean; downArrow: boolean }): number {
-  if (key.upArrow || input === "k") return -1;
-  if (key.downArrow || input === "j") return 1;
-  // Treat horizontal moves the same as vertical: one step through the cards.
-  if (input === "h") return -1;
-  if (input === "l") return 1;
-  return 0;
 }

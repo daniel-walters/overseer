@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderForTest as render } from "./renderForTest.js";
 import { App } from "./App.js";
+import { KEYBINDS } from "./keybinds.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
@@ -899,29 +900,29 @@ describe("App help", () => {
     expect(frame).toContain("Keybindings");
   });
 
-  it("lists every keybind the input handler implements", async () => {
+  // The former "lists every keybind the input handler implements" drift-guard
+  // test lived here only because the help modal was a hand-maintained second copy
+  // of App's bindings. With the central `keybinds` registry now the single source
+  // both consume, that property is structural — guaranteed by construction, not by
+  // assertion. The registry's exhaustive key↔level↔label coverage lives in
+  // keybinds.test.ts; the test below proves the modal renders *from* the registry.
+
+  it("renders the help modal straight from the keybind registry", async () => {
     const { stdin, lastFrame } = render(<App board={board} />);
 
     stdin.write("?");
     await tick();
 
     const frame = stripAnsi(lastFrame() ?? "");
-    // A drift guard: the help modal is a hand-maintained second copy of the
-    // bindings App implements. Each binding's *action* phrase must appear, so
-    // deleting a row trips the test — asserting bare keys like "d"/"q" would not,
-    // since those letters appear elsewhere in the modal regardless of the rows.
-    expect(frame).toContain("Move selection"); // h j k l / arrows
-    expect(frame).toContain("Zoom into a PRD's Issues"); // Enter
-    expect(frame).toContain("Back out to the board"); // Esc
-    expect(frame).toContain("Dispatch a wave"); // d
-    expect(frame).toContain("Review the selected Issue"); // r
-    expect(frame).toContain("Re-dispatch an orphaned Issue"); // R
-    expect(frame).toContain("Stop a live Issue's agent"); // K
-    expect(frame).toContain("Toggle auto-run"); // a
-    expect(frame).toContain("Show this help"); // ?
-    expect(frame).toContain("Quit"); // q
-    // The movement keys, and the context labels that tell you where each works.
-    expect(frame).toContain("h j k l");
+    // Every registry entry's key and label appears, proving the modal reads the
+    // registry rather than a separate hand-maintained array. If a row were dropped
+    // from the modal, or the registry diverged from what the handler dispatches
+    // off, this — together with keybinds.test.ts — would catch it.
+    for (const b of KEYBINDS) {
+      expect(frame).toContain(b.key);
+      expect(frame).toContain(b.label);
+    }
+    // The context labels that tell you where each key works.
     expect(frame).toContain("(board)");
     expect(frame).toContain("(issues)");
     expect(frame).toContain("(both)");
