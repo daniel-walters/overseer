@@ -83,6 +83,44 @@ deferred, not forgotten.
 
 ## Ideas
 
+### Create the PRD feature branch up front and commit CONTEXT/ADRs onto it before dispatch
+
+Today the per-PRD **feature branch** is created *lazily, at dispatch time* —
+`gitSetup` ensures it exists and checks it out the moment you press `d` (CONTEXT.md →
+Where the work happens). But the domain docs a PRD depends on — the new `CONTEXT.md`
+glossary terms and ADRs produced during the `grill-with-docs` session — are authored
+*earlier*, before any branch exists for the feature. So they land on whatever branch
+the checkout happened to be on during the grill, **divorced from the branch the agents
+will later build on**. The dispatched implementors then start from a feature branch that
+*doesn't contain the glossary/ADRs that justify their work*.
+
+This actually bit a real dogfood run: the suppressed-marker grill wrote the Suppressed
+glossary entry + ADR 0011 onto a stray branch, while the agents dispatched off a
+separate feature branch with neither — the docs had to be cherry-picked across
+afterward to reunite them. The lazy branch creation is the root cause.
+
+The idea: **create the PRD feature branch early** — at PRD authoring / grill time, not
+dispatch time — and **commit the CONTEXT/ADR changes onto it then**, so that:
+
+- the feature branch is the single home of *both* the feature's docs and its code from
+  the start;
+- every dispatched agent inherits the glossary and ADRs as its base, so an implementor
+  reads the canonical domain language for the work it's doing (today it only gets what's
+  in the Issue/PRD files);
+- there's no post-hoc reconciliation of stranded docs.
+
+Open questions: which skill owns branch creation (`grill-with-docs`? `to-prd`?), given
+those skills currently only touch the Overseer root and domain docs, never git branches
+— this would give them a new git responsibility. How does the branch name get derived
+before dispatch (it's `featureBranchName(prd-dir)` today, derivable from the PRD slug
+the moment the PRD folder is named, so the name is available early). What happens to the
+"created lazily at dispatch, idempotent if present" contract in `gitSetup` — it would
+become "ensure it exists, usually already does." And: does committing docs onto a
+feature branch *before* the work is even dispatched feel right, or should the docs land
+on `main` directly (they're decisions, not feature code) and the feature branch simply
+branch off an up-to-date `main`? That last framing might be the cleaner fix — the real
+bug may be that the docs never reached `main` at all, not that the branch was late.
+
 ### Open / link a GitHub PR for a done PRD
 
 A finished PRD currently dead-ends. The whole flow merges Issue worktrees into the
