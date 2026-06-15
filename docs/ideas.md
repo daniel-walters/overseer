@@ -298,36 +298,6 @@ This is one of **three pane-shaped ideas** that all want the same missing surfac
 place to render per-Issue detail. See "View the Issue / PRD body" (next) for the shared
 "design the detail pane once" framing.
 
-### Bundle the `tdd` skill and hard-require it in the implementor prompt
-
-Dispatched work must be test-driven, not test-optional. Today the implementor prompt
-(`buildImplementorPrompt`) says nothing about tests — it leans entirely on the Issue body's
-"Testing Decisions" to imply them, so an agent *may* write tests but is under no disciplined
-test-first loop. The requirement: the implementor prompt **hard-requires the `tdd` skill**
-(red-green-refactor) before parking the Issue at `ready-for-review`.
-
-But naming a skill in the prompt is only safe if the skill is *guaranteed present* on the
-machine the agent runs on. A dispatched `claude --bg` agent is a fresh session; if `tdd`
-lives only in the operator's personal `~/.claude/skills`, the brief references a skill the
-agent can't load. So this idea has two coupled halves:
-
-1. **Bundle `tdd` with the app.** Overseer already ships skills — the four `overseer-*`
-   skills live in `skills/` and `init` installs them into the target ([ADR 0004](./adr/0004-init-silently-overwrites-bundled-skills.md)).
-   Add `tdd` to that bundled set so every Overseer install carries it, and the implementor
-   prompt can reference it by name knowing it exists. (Decide where it installs — alongside
-   the `overseer-*` skills, project-scoped — and whether ADR 0004's silent-overwrite
-   behavior is right for a skill the operator might want to customize.)
-2. **Reference it in the prompt.** Add a step to `buildImplementorPrompt` instructing the
-   agent to drive the implementation with the `tdd` skill. Keep the template's
-   pure/deterministic/auditable property (its docstring's whole point) — a static
-   instruction preserves that.
-
-Open question worth resolving when shaping this: is TDD a *global* mandate baked into the
-prompt for every Issue, or a per-Issue choice the "Testing Decisions" should drive? The hard
-requirement says global — but some Issues (a docs-only or config Issue) have nothing to
-red-green. A global mandate is simplest and is the stated intent; note the docs/config
-exception as a known wrinkle rather than building per-Issue opt-out up front.
-
 ### View the Issue / PRD body
 
 Overseer reads every PRD/Issue markdown file but **never shows the body** — the board
@@ -365,31 +335,6 @@ should not spawn (or keep spawning) agents for that PRD's issues; resuming picks
 development back up. Open questions: where does the pause state live (PRD frontmatter
 vs. external state, given Overseer is a read-only viewer of the files), how it surfaces
 on the board, and how in-flight agents are handled at the moment of pausing.
-
-### Surface reactor state on the board
-
-The reactor is **visually invisible** in v1 — its only diagnostic surface is the
-durable failure log. Two states that look identical to a healthy board but aren't:
-(1) a spawn-failed Issue that rolled back to its eligible status and is now
-**suppressed** by the session failed-set (looks like a normal `ready-*` card, but the
-reactor is deliberately ignoring it); (2) idle vs. actively-working vs. at-rest. A
-future UI pass would surface these — e.g. a card marker for spawn-failed/suppressed
-Issues (mirroring the `human_review_reason` marker), and/or a board status line. For
-now everything goes to the log; we surface in the UI later.
-
-This also catches **orphan re-dispatch that fails to launch**: orphan reconciliation
-([ADR 0009](./adr/0009-orphan-reconciliation-via-third-liveness-verdict.md)) rolls an
-orphan back to `ready-for-agent` and lets the normal spawn edge re-pick it up, so a
-relaunch that throws lands as a suppressed `ready-*` card exactly like any other spawn
-failure — invisible by the same mechanism, to be fixed here, not in ADR 0009.
-
-### Configurable AI-review turns and effort
-
-The AI review loop ships with a hardcoded cap of **3** `/code-review` passes at
-**medium** effort (see `CONTEXT.md` → Review outcome). Once there are real runs to
-calibrate against, promote both to `config.toml` knobs — a per-board (or eventually
-per-PRD) iteration cap and effort level — rather than baking the v1 defaults in
-forever.
 
 ### Show the AI-review iteration count on an in-review card (e.g. `2/3`)
 
@@ -474,58 +419,6 @@ We **knowingly accepted clipping** for part 1 rather than block full-screen on i
 The follow-up is in-app **viewport scrolling / virtualization** within a column (and
 possibly horizontal paging across columns) so no card is ever unreachable. Until then,
 a small terminal can hide cards with no recourse.
-
-### UI polish follow-ups
-
-Small UI fixes noted against the full-screen board and `?` help modal (UI Polish
-part 1):
-
-- **Help modal should be a true modal, not a screen takeover.** It currently
-  replaces the board; it should overlay it (board visible/dimmed behind) so opening
-  help doesn't lose the user's place.
-- **Bottom bar needs spacing between the `auto` indicator and the `?` keybind.**
-  They currently render flush against each other; add separation so they read as
-  distinct elements.
-- **Surface the `d` dispatch keybind in the bottom row.** The bottom bar shows
-  the `auto` indicator and the `? help` hint but not the primary action that
-  ignites a PRD. `d` is discoverable only by opening the help modal, so a new
-  user staring at a `backlog` PRD has no on-screen cue for how to start it. Add
-  dispatch (and likely its siblings — `r` review, etc.) as a persistent hint in
-  the bottom row so the ignition gesture is visible without `?`. Pairs naturally
-  with the "Central keybind registry" idea below: a single registry could feed
-  both the bottom-row hints and the help modal.
-
-### Central keybind registry
-
-Keybinds are hardcoded inline as `if (input === "…")` branches in `App.tsx`'s
-`useInput`. The `?` help modal (UI Polish part 1) lists them as a **second hardcoded
-copy**, guarded against drift only by a test. A future refactor would lift keybinds
-into a single `{key, label, level}` registry that *both* the input handler and the
-help modal consume, eliminating the drift risk — deferred from part 1 to avoid
-dragging an input-architecture refactor into a polish pass.
-
-### Fold the Unsorted column into backlog with a warning marker
-
-The Issue-level board carries a leftmost **Unsorted** column for Issues with a
-missing/unknown `status` (CONTEXT.md → Issue status). It is arguably a column too
-many: an Unsorted Issue already derives to the **backlog lane** for PRD-status
-purposes ("pre-in-progress" — it never promotes a PRD to in-progress and isn't
-`done`, CONTEXT.md → PRD status), so the separate column splits one conceptual
-"not started" lane across two visual columns. The idea: **drop the Unsorted column
-and render those Issues inside `backlog`, flagged with a warning marker** (a card
-marker like the human-review / liveness / suppressed ones — "this Issue's status is
-missing or unrecognised; fix the frontmatter"). It would still be visible and still
-demand attention — the marker is the attention signal — but the board would have one
-fewer column and the "not started" cards would live together.
-
-Open questions before committing: (1) does collapsing lose the *triage* signal that
-a dedicated column gives (an Unsorted Issue is a data error to fix, not a deliberate
-backlog parking — the column makes that loud); (2) does it muddy the clean "backlog =
-deliberately not started yet" reading by mixing in malformed Issues; (3) whether the
-derivation prose in CONTEXT.md simplifies or just moves (the lane logic already treats
-Unsorted as pre-in-progress, so this is mostly a *rendering* change, not a derivation
-one). Pairs with the existing marker family — it's the same "surface a card-level
-condition as a marker instead of a structural column" move as the suppressed marker.
 
 ### Rework the selection-highlight design
 
