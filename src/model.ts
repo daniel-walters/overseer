@@ -184,6 +184,26 @@ export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
  */
 export type Liveness = "live" | "unknown" | "orphaned";
 
+/**
+ * The two **awaiting** `ready-*` lanes that can carry the suppressed overlay,
+ * paired with the spawn edge each one launches. The scanner derives the
+ * suppressed lookup's `edge` argument from this map (`ready-for-agent →
+ * implementor`, `ready-for-review → reviewer`), so the marker is edge-agnostic on
+ * the card — the column implies the edge.
+ *
+ * These two statuses are the exact opposite set from {@link Liveness}'s two
+ * active lanes (in-progress / in-review), so a card can never carry both a
+ * `suppressed` and a `liveness` overlay (PRD: suppressed-card marker).
+ *
+ * Keyed by authored status, not lane, because both `ready-for-agent` and
+ * `ready-for-human` fold into the single `ready` lane — only the `-agent` half is
+ * a suppressed lane (a `ready-for-human` card is never a spawn target).
+ */
+export const SUPPRESSED_EDGE_BY_STATUS = {
+  "ready-for-agent": "implementor",
+  "ready-for-review": "reviewer",
+} as const satisfies Record<string, "implementor" | "reviewer">;
+
 export interface Issue {
   /** Identity: the Issue filename (e.g. `001-auth.md`). */
   readonly id: string;
@@ -203,6 +223,19 @@ export interface Issue {
    * from a dead one.
    */
   readonly liveness?: Liveness;
+  /**
+   * The suppressed overlay: `true` on an awaiting `ready-for-agent` /
+   * `ready-for-review` card whose last spawn launch failed this session (the
+   * failed-set reports `(path, edge)` suppressed). Set only on those two lanes
+   * (the edge derived from the lane via {@link SUPPRESSED_EDGE_BY_STATUS}), the
+   * opposite set from {@link liveness}'s two active lanes — so the two overlays
+   * are disjoint and can never co-render on one card. Absent on every other lane,
+   * when no lookup is wired in, and when the lookup reports not-suppressed: a
+   * read-only overlay, recomputed on each board open, never written to the Issue
+   * file (ADR 0002). Lane-gating makes a lingering failed-set entry inert — an
+   * Issue that leaves its `ready-*` lane simply drops the marker.
+   */
+  readonly suppressed?: boolean;
 }
 
 export interface PRD {

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { FIELD, readString, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
+  SUPPRESSED_EDGE_BY_STATUS,
   placeStatus,
   derivePrdLane,
   type Board,
@@ -14,6 +15,7 @@ import {
   type Liveness,
 } from "./model.js";
 import type { Absence } from "./dispatch/liveness.js";
+import type { SpawnEdgeKind } from "./dispatch/failureLog.js";
 
 /**
  * Look up the probe's trust-qualified absence ({@link Absence}) for one Issue by
@@ -25,6 +27,20 @@ import type { Absence } from "./dispatch/liveness.js";
  * a *trustworthy* absence (`absent-clean`) the only path to `orphaned` (ADR 0009).
  */
 export type LivenessLookup = (issuePath: string) => Absence | undefined;
+
+/**
+ * Ask whether one Issue's spawn launch failed this session, keyed by its absolute
+ * path *and* the spawn edge the lane implies (`ready-for-agent → implementor`,
+ * `ready-for-review → reviewer`) — the read-only projection over the shared
+ * failed-set (`suppressedSeam`). `true` lands the `⊘ suppressed` marker on the
+ * card. The board can observe suppression through this seam but can never record
+ * into the set (PRD: suppressed-card marker, ADR 0011).
+ *
+ * Mirrors {@link LivenessLookup} as a second optional overlay, gated to the
+ * opposite (awaiting) lanes. Total by construction — an absent or empty set
+ * answers `false` for every pair and never throws out of the board rebuild.
+ */
+export type SuppressedLookup = (path: string, edge: SpawnEdgeKind) => boolean;
 
 /**
  * Scan the root directory into an immutable {@link Board}.
@@ -41,15 +57,25 @@ export type LivenessLookup = (issuePath: string) => Absence | undefined;
  * It is consulted only for `in-progress` / `in-review` Issues (the two lanes a
  * spawned agent owns); every other lane scans with no liveness. Omitting it (the
  * eager first render, board-only tests) simply leaves every card unmarked.
+ *
+ * `lookupSuppressed` is the mirror-image optional overlay, gated to the opposite
+ * (awaiting) `ready-for-agent` / `ready-for-review` lanes — the two an agent has
+ * *not* started on. A second param rather than an `overlays` bag because there are
+ * exactly two and they gate disjoint lanes; the same omit-it-and-cards-are-blank
+ * contract holds. Because the lanes are disjoint, no Issue can carry both overlays.
  */
-export function scanBoard(root: string, lookupLiveness?: LivenessLookup): Board {
+export function scanBoard(
+  root: string,
+  lookupLiveness?: LivenessLookup,
+  lookupSuppressed?: SuppressedLookup,
+): Board {
   const entries = readdirSync(root, { withFileTypes: true });
 
   const prds: PRD[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, entry.name);
-    const prd = scanPrd(dir, entry.name, lookupLiveness);
+    const prd = scanPrd(dir, entry.name, lookupLiveness, lookupSuppressed);
     if (prd) prds.push(prd);
   }
 
@@ -61,6 +87,7 @@ function scanPrd(
   dir: string,
   dirName: string,
   lookupLiveness?: LivenessLookup,
+  lookupSuppressed?: SuppressedLookup,
 ): PRD | null {
   const prdPath = join(dir, "prd.md");
 
@@ -73,7 +100,7 @@ function scanPrd(
 
   const { data } = safeMatter(raw);
   const title = readString(data, FIELD.title) ?? dirName;
-  const issues = scanIssues(dir, lookupLiveness);
+  const issues = scanIssues(dir, lookupLiveness, lookupSuppressed);
   // A PRD carries no stored status (ADR 0003); its lane is derived from its
   // Issues, collapsing to backlog / in-progress / done.
   const lane = derivePrdLane(issues);
@@ -86,13 +113,19 @@ function scanPrd(
  * Issue, ordered by the `NNN-` filename prefix (filename-alpha) so within-lane
  * order is controlled by deliberate file naming.
  */
-function scanIssues(dir: string, lookupLiveness?: LivenessLookup): Issue[] {
+function scanIssues(
+  dir: string,
+  lookupLiveness?: LivenessLookup,
+  lookupSuppressed?: SuppressedLookup,
+): Issue[] {
   const files = readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith(".md") && e.name !== "prd.md")
     .map((e) => e.name)
     .sort();
 
-  return files.map((name) => scanIssue(join(dir, name), name, lookupLiveness));
+  return files.map((name) =>
+    scanIssue(join(dir, name), name, lookupLiveness, lookupSuppressed),
+  );
 }
 
 /** The two lanes an active spawned agent owns, where a liveness marker belongs. */
@@ -103,6 +136,7 @@ function scanIssue(
   path: string,
   fileName: string,
   lookupLiveness?: LivenessLookup,
+  lookupSuppressed?: SuppressedLookup,
 ): Issue {
   const { data } = safeMatter(readFileSync(path, "utf8"));
   const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
@@ -122,11 +156,22 @@ function scanIssue(
   // "unknown" when it has none — the honesty boundary below.
   const withLiveness = applyLiveness(withReadyFor, path, lane, lookupLiveness);
 
-  if (lane !== "human-review") return withLiveness;
+  // The suppressed overlay is the mirror image, gated to the two awaiting
+  // `ready-*` lanes (the opposite set from liveness's active lanes), with the
+  // edge derived from the authored status. Disjoint lanes guarantee it never
+  // co-renders with a liveness verdict on one card.
+  const withSuppressed = applySuppressed(
+    withLiveness,
+    path,
+    data[FIELD.status],
+    lookupSuppressed,
+  );
+
+  if (lane !== "human-review") return withSuppressed;
   const humanReviewReason = parseHumanReviewReason(data[FIELD.humanReviewReason]);
   return humanReviewReason === undefined
-    ? withLiveness
-    : { ...withLiveness, humanReviewReason };
+    ? withSuppressed
+    : { ...withSuppressed, humanReviewReason };
 }
 
 /**
@@ -160,6 +205,48 @@ function applyLiveness(
 ): Issue {
   if (!lookupLiveness || !LIVENESS_LANES.has(lane)) return issue;
   return { ...issue, liveness: livenessFromAbsence(lookupLiveness(path)) };
+}
+
+/**
+ * Add the suppressed overlay to an Issue, but only on an awaiting `ready-for-agent`
+ * / `ready-for-review` card — the mirror image of {@link applyLiveness}, gated to
+ * the opposite (awaiting) lanes (PRD: suppressed-card marker, ADR 0011).
+ *
+ * The edge is derived from the *authored status*, not the lane: `ready-for-agent`
+ * and `ready-for-human` both fold into the single `ready` lane, but only the
+ * `-agent` half is a spawn target, so reading the raw status is the only way to
+ * tell the suppressed lane apart from a `ready-for-human` card and to pick the
+ * right edge (`ready-for-agent → implementor`, `ready-for-review → reviewer`).
+ * The marker stays edge-agnostic on the card — the column already implies the edge.
+ *
+ * Lane-gating here is what makes a lingering failed-set entry inert: an Issue that
+ * has left its `ready-*` lane (re-triaged, hand-edited, completed) simply isn't a
+ * suppressed-lane status, so it drops the marker even though its `(path, edge)`
+ * entry persists in the append-only set. Only `true` stamps the field; a
+ * not-suppressed card stays unmarked (no `suppressed: false` noise).
+ *
+ * A card on any non-suppressed lane — or any card when no lookup is wired in — is
+ * returned unchanged. Because the suppressed lanes are disjoint from the liveness
+ * lanes, this can never overwrite or co-exist with a `liveness` verdict.
+ */
+function applySuppressed(
+  issue: Issue,
+  path: string,
+  status: unknown,
+  lookupSuppressed?: SuppressedLookup,
+): Issue {
+  if (!lookupSuppressed || typeof status !== "string") return issue;
+  // `Object.hasOwn`, not a bare index: a frontmatter status that collides with an
+  // inherited `Object.prototype` name (`toString`, `constructor`, …) would index
+  // a truthy function and pass a non-{@link SpawnEdgeKind} into the lookup. The
+  // own-key guard gates the lane *and* narrows `status` to a real suppressed
+  // status, so the index below needs no `keyof` cast (a cast would silently keep
+  // compiling if the map ever mapped a status to a non-`SpawnEdgeKind` value).
+  if (!Object.hasOwn(SUPPRESSED_EDGE_BY_STATUS, status)) return issue;
+  const edge: SpawnEdgeKind = SUPPRESSED_EDGE_BY_STATUS[
+    status as keyof typeof SUPPRESSED_EDGE_BY_STATUS
+  ];
+  return lookupSuppressed(path, edge) ? { ...issue, suppressed: true } : issue;
 }
 
 /**

@@ -10,6 +10,7 @@ export interface CardItem {
   readonly readyFor?: ReadyFor;
   readonly humanReviewReason?: HumanReviewReason;
   readonly liveness?: Liveness;
+  readonly suppressed?: boolean;
 }
 
 interface ColumnProps {
@@ -31,6 +32,7 @@ export function Column({ heading, cards, selectedId }: ColumnProps) {
           readyFor={card.readyFor}
           humanReviewReason={card.humanReviewReason}
           liveness={card.liveness}
+          suppressed={card.suppressed}
           selected={card.id === selectedId}
         />
       ))}
