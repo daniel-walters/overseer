@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { join } from "node:path";
-import { createFailedSet, recordingLogFailure } from "./failedSet.js";
+import {
+  createFailedSet,
+  recordingLogFailure,
+  suppressedSeam,
+} from "./failedSet.js";
 import type { FailureRecord } from "../dispatch/failureLog.js";
 
 describe("createFailedSet", () => {
@@ -76,5 +80,64 @@ describe("recordingLogFailure", () => {
 
     expect(logged).toEqual([r]);
     expect(failed.has(join("/root/alpha", "001-go.md"), "reviewer")).toBe(true);
+  });
+});
+
+describe("suppressedSeam", () => {
+  it("reports a recorded (path, edge) as suppressed", () => {
+    const failed = createFailedSet();
+    failed.record("/root/alpha/001-go.md", "implementor");
+
+    const isSuppressed = suppressedSeam(failed);
+    expect(isSuppressed("/root/alpha/001-go.md", "implementor")).toBe(true);
+  });
+
+  it("reports an unrecorded (path, edge) as not suppressed", () => {
+    const failed = createFailedSet();
+    failed.record("/root/alpha/001-go.md", "implementor");
+
+    const isSuppressed = suppressedSeam(failed);
+    expect(isSuppressed("/root/alpha/002-other.md", "implementor")).toBe(false);
+  });
+
+  it("does not report the other edge of a recorded path as suppressed", () => {
+    const failed = createFailedSet();
+    failed.record("/root/alpha/001-go.md", "implementor");
+
+    const isSuppressed = suppressedSeam(failed);
+    // A path suppressed on implementor is not reported on reviewer…
+    expect(isSuppressed("/root/alpha/001-go.md", "reviewer")).toBe(false);
+
+    // …and vice versa.
+    failed.record("/root/alpha/001-go.md", "reviewer");
+    failed.record("/root/alpha/003-rev.md", "reviewer");
+    expect(isSuppressed("/root/alpha/003-rev.md", "implementor")).toBe(false);
+    expect(isSuppressed("/root/alpha/003-rev.md", "reviewer")).toBe(true);
+  });
+
+  it("is total: an empty set yields false for every query and never throws", () => {
+    const isSuppressed = suppressedSeam(createFailedSet());
+    expect(isSuppressed("/root/alpha/001-go.md", "implementor")).toBe(false);
+    expect(isSuppressed("/root/alpha/001-go.md", "reviewer")).toBe(false);
+    expect(isSuppressed("", "implementor")).toBe(false);
+  });
+
+  it("reflects records made after the seam was built (it is a live projection)", () => {
+    const failed = createFailedSet();
+    const isSuppressed = suppressedSeam(failed);
+
+    expect(isSuppressed("/root/alpha/001-go.md", "implementor")).toBe(false);
+    failed.record("/root/alpha/001-go.md", "implementor");
+    expect(isSuppressed("/root/alpha/001-go.md", "implementor")).toBe(true);
+  });
+
+  it("does not expose the writable record method on the seam", () => {
+    const isSuppressed = suppressedSeam(createFailedSet());
+    // The seam is a bare function: it carries no `record` (or any) property
+    // through which the board could mutate the failed-set.
+    expect(typeof isSuppressed).toBe("function");
+    expect((isSuppressed as unknown as Record<string, unknown>).record).toBe(
+      undefined,
+    );
   });
 });
