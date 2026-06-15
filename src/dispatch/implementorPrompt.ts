@@ -62,10 +62,14 @@ worktree so that other agents touching the same repo do not collide with you.
 
 ## How to finish
 
-1. Implement the Issue in full.
-2. Commit your work to the worktree. Do NOT open a pull request — the worktree
+1. Drive the implementation with the \`tdd\` skill: work test-first in a
+   red-green-refactor loop — write a failing test, make it pass, then refactor —
+   before parking the Issue at \`ready-for-review\`. (A purely docs-only or
+   config-only Issue with nothing to red-green is the lone exception.)
+2. Implement the Issue in full.
+3. Commit your work to the worktree. Do NOT open a pull request — the worktree
    itself is the review artifact.
-3. When the implementation is complete, park the Issue for review with a single
+4. When the implementation is complete, park the Issue for review with a single
    edit to its frontmatter in the Overseer root. The Issue file to edit is:
 
    ${issue.path}

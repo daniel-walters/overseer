@@ -21,4 +21,19 @@ describe("bundled skills", () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it("installs the tdd skill from the shipped skills/ directory", () => {
+    const target = mkdtempSync(join(tmpdir(), "overseer-bundled-"));
+    try {
+      const installed = installSkills({ source: shippedSkills, target });
+
+      // The implementor prompt names `tdd`, so a fresh `claude --bg` agent can
+      // only load it if `init` ships and installs it alongside the overseer-*
+      // skills.
+      expect(installed).toContain("tdd");
+      expect(existsSync(join(target, "tdd", "SKILL.md"))).toBe(true);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
 });

@@ -52,6 +52,28 @@ describe("buildImplementorPrompt", () => {
     expect(prompt).toContain("feature branch");
   });
 
+  it("instructs the agent to drive implementation with the tdd skill", () => {
+    const prompt = build();
+    // A static instruction must name the bundled `tdd` skill so dispatched work
+    // is test-driven (red-green-refactor) rather than test-optional.
+    expect(prompt).toContain("tdd");
+    expect(prompt.toLowerCase()).toMatch(/red-green-refactor|test-driven|test-first/);
+  });
+
+  it("names the tdd skill in the static template, not just caller-supplied bodies", () => {
+    // Assert over the static template only (empty Issue/PRD), so the tdd mandate
+    // is a property of the prompt itself, not something a caller's body happened
+    // to mention. This preserves the deterministic/auditable template property.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
+    });
+    expect(prompt).toContain("tdd");
+  });
+
   it("instructs the agent to commit to the worktree with no PR", () => {
     const prompt = build().toLowerCase();
     expect(prompt).toContain("commit");
