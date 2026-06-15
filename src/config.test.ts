@@ -87,4 +87,72 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
     expect(() => loadConfig({ configPath, home })).toThrow(/not a directory/i);
   });
+
+  describe("review knobs", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults the review cap to 3 and effort to medium when the table is absent", () => {
+      writeFileSync(configPath, 'root = "~"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.review.cap).toBe(3);
+      expect(config.review.effort).toBe("medium");
+    });
+
+    it("reads the review cap from the [review] table", () => {
+      writeWithRoot("[review]\ncap = 5\n");
+
+      expect(loadConfig({ configPath, home }).review.cap).toBe(5);
+    });
+
+    it("reads the review effort from the [review] table", () => {
+      writeWithRoot('[review]\neffort = "high"\n');
+
+      expect(loadConfig({ configPath, home }).review.effort).toBe("high");
+    });
+
+    it("falls back to the cap default when only effort is set", () => {
+      writeWithRoot('[review]\neffort = "low"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.review.cap).toBe(3);
+      expect(config.review.effort).toBe("low");
+    });
+
+    it("falls back to the effort default when only the cap is set", () => {
+      writeWithRoot("[review]\ncap = 7\n");
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.review.cap).toBe(7);
+      expect(config.review.effort).toBe("medium");
+    });
+
+    it("throws a ConfigError when the cap is not a number", () => {
+      writeWithRoot('[review]\ncap = "lots"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/cap/i);
+    });
+
+    it("throws a ConfigError when the cap is not a positive integer", () => {
+      writeWithRoot("[review]\ncap = 0\n");
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/cap/i);
+    });
+
+    it("throws a ConfigError naming the allowed values for an unknown effort", () => {
+      writeWithRoot('[review]\neffort = "extreme"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
+      expect(() => loadConfig({ configPath, home })).toThrow(/medium/i);
+    });
+  });
 });

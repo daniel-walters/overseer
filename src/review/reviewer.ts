@@ -7,6 +7,7 @@ import { classifyReviewability } from "./eligibility.js";
 import { buildReviewerPrompt } from "./reviewerPrompt.js";
 import { runReview } from "./review.js";
 import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
+import type { ReviewConfig } from "./reviewConfig.js";
 import type { Reviewer } from "../ui/App.js";
 
 /**
@@ -35,6 +36,12 @@ export interface ReviewerDeps {
    * triggered it (ADR 0011). The CLI injects the one shared instance.
    */
   readonly failedSet: FailedSet;
+  /**
+   * The resolved review knobs (pass cap + effort) the reviewer prompt embeds.
+   * The CLI threads {@link import("../config.js").Config.review} here so the
+   * manual `r` reviewer and the Reactor's auto-reviewer build identical briefs.
+   */
+  readonly review: ReviewConfig;
 }
 
 /**
@@ -84,6 +91,7 @@ export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
             prdTitle: preview.prdTitle,
             prdBody: preview.prdBody,
             featureBranch: preview.featureBranch,
+            review: deps.review,
           }),
         spawn: deps.spawn,
         // Route this manual `r` launch's failures through the shared failed-set

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReviewer, type ReviewerDeps } from "./reviewer.js";
 import { createFailedSet } from "../reactor/failedSet.js";
+import { DEFAULT_REVIEW_CONFIG } from "./reviewConfig.js";
 
 const checkoutFlow = fileURLToPath(
   new URL("../dispatch/__fixtures__/dispatch/checkout-flow", import.meta.url),
@@ -30,6 +31,7 @@ function recordingDeps(overrides: Partial<ReviewerDeps> = {}): ReviewerDeps & {
     logFailure: (r) => failures.push(r),
     recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
     failedSet: createFailedSet(),
+    review: DEFAULT_REVIEW_CONFIG,
     ...overrides,
   };
 }
