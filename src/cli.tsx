@@ -5,6 +5,7 @@ import meow from "meow";
 import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig, ConfigError } from "./config.js";
+import type { ReviewConfig } from "./review/reviewConfig.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
@@ -48,8 +49,11 @@ function fail(message: string): never {
  */
 function runBoard(): void {
   let root: string;
+  let review: ReviewConfig;
   try {
-    root = loadConfig().root;
+    const config = loadConfig();
+    root = config.root;
+    review = config.review;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -128,6 +132,7 @@ function runBoard(): void {
     logFailure,
     recordHandle,
     failedSet,
+    review,
   });
   // Orphan recovery (ADR 0009): `R` on an orphaned card rolls its active status
   // back onto its frontier through the same status seam the launch-failure
@@ -151,6 +156,7 @@ function runBoard(): void {
     logFailure,
     recordHandle,
     failedSet,
+    review,
   });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell

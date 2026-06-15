@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildReviewerPrompt } from "./reviewerPrompt.js";
+import { DEFAULT_REVIEW_CONFIG, type ReviewConfig } from "./reviewConfig.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
 
 const issue: DispatchIssue = {
@@ -18,10 +19,20 @@ const issue: DispatchIssue = {
 const prdTitle = "Authentication System";
 const prdBody = "## Problem\nUsers cannot sign in.\n\n## Solution\nBuild auth.";
 
-const context = { prdTitle, prdBody, featureBranch: "auth-system" };
+const context = {
+  prdTitle,
+  prdBody,
+  featureBranch: "auth-system",
+  review: DEFAULT_REVIEW_CONFIG,
+};
 
 function build(overrides: Partial<DispatchIssue> = {}): string {
   return buildReviewerPrompt({ issue: { ...issue, ...overrides }, ...context });
+}
+
+/** Build with the given review config, defaults otherwise. */
+function buildWithReview(review: ReviewConfig): string {
+  return buildReviewerPrompt({ issue, ...context, review });
 }
 
 describe("buildReviewerPrompt", () => {
@@ -45,11 +56,32 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain(issue.worktree!);
   });
 
-  it("encodes the /code-review loop at medium effort with a cap of 3 passes", () => {
+  it("encodes the /code-review loop at the default medium effort with a cap of 3 passes", () => {
     const prompt = build();
     expect(prompt).toContain("/code-review");
     expect(prompt.toLowerCase()).toContain("medium");
     expect(prompt).toContain("3");
+  });
+
+  it("uses the configured cap in the loop instructions, not a hardcoded 3", () => {
+    const prompt = buildWithReview({ cap: 5, effort: "medium" });
+    // The configured cap appears; the old hardcoded literal does not leak in.
+    expect(prompt).toContain("5");
+    expect(prompt).not.toMatch(/capped at 3 passes|within 3 passes|in 3 passes/);
+  });
+
+  it("uses the configured effort in the loop instructions, not a hardcoded medium", () => {
+    const prompt = buildWithReview({ cap: 3, effort: "high" });
+    expect(prompt.toLowerCase()).toContain("high");
+    // The loop instruction names HIGH effort, not the old MEDIUM literal.
+    expect(prompt).toContain("HIGH effort");
+    expect(prompt).not.toContain("MEDIUM effort");
+  });
+
+  it("threads cap and effort together when both are configured", () => {
+    const prompt = buildWithReview({ cap: 2, effort: "low" });
+    expect(prompt.toLowerCase()).toContain("low");
+    expect(prompt).toContain("2");
   });
 
   it("defines convergence as a pass that reports zero findings", () => {
@@ -132,6 +164,7 @@ describe("buildReviewerPrompt", () => {
       prdTitle: "",
       prdBody: "",
       featureBranch: "fb",
+      review: DEFAULT_REVIEW_CONFIG,
     });
     expect(prompt).not.toContain("in-review");
   });

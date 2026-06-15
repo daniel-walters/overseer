@@ -27,6 +27,19 @@ root = "~/work/prds"
 
 A leading `~` is expanded to your home directory. The `root` must exist.
 
+Optionally tune the AI-review loop with a `[review]` table. Both fields are
+optional; omitting either (or the whole table) keeps the defaults — a hard cap of
+**3** `/code-review` passes at **medium** effort — so existing boards are
+unchanged:
+
+```toml
+root = "~/work/prds"
+
+[review]
+cap = 3         # max /code-review passes before escalating to human-review (positive integer)
+effort = "medium"  # /code-review effort per pass: low | medium | high
+```
+
 ## Layout it expects
 
 Folder-per-PRD under the root. A directory containing a `prd.md` **is** a PRD;

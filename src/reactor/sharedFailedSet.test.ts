@@ -6,6 +6,7 @@ import { createReactor, type ReactorDeps } from "./reactor.js";
 import { createFailedSet } from "./failedSet.js";
 import { createDispatcher, type DispatcherDeps } from "../dispatch/dispatcher.js";
 import { createReviewer, type ReviewerDeps } from "../review/reviewer.js";
+import { DEFAULT_REVIEW_CONFIG } from "../review/reviewConfig.js";
 import type { GitSeam } from "../dispatch/gitSetup.js";
 
 /** A git seam that treats every repo as valid with the branch already present. */
@@ -96,6 +97,7 @@ describe("shared failed-set across spawn edges", () => {
       logFailure: () => {},
       recordHandle: () => {},
       failedSet,
+      review: DEFAULT_REVIEW_CONFIG,
     };
   }
 

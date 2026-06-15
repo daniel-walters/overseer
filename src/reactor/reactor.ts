@@ -6,6 +6,10 @@ import { featureBranchName, type GitSeam } from "../dispatch/gitSetup.js";
 import { buildImplementorPrompt } from "../dispatch/implementorPrompt.js";
 import { runReview } from "../review/review.js";
 import { buildReviewerPrompt } from "../review/reviewerPrompt.js";
+import {
+  DEFAULT_REVIEW_CONFIG,
+  type ReviewConfig,
+} from "../review/reviewConfig.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import { enumeratePrdDirs } from "./prds.js";
 import { sweepFrontier, type PrdInput, type SweptPrd } from "./sweep.js";
@@ -47,6 +51,15 @@ export interface ReactorDeps {
    * observe the suppression in isolation.
    */
   readonly failedSet?: FailedSet;
+  /**
+   * The resolved review knobs (pass cap + effort) the reviewer prompt embeds.
+   * The CLI threads {@link import("../config.js").Config.review} here, the *same*
+   * value it gives the manual `r` reviewer, so an auto-reviewer's brief is
+   * identical to a manual one. Optional: when omitted, the current-behaviour
+   * defaults (cap 3, medium) apply, which is what the Reactor's own unit tests
+   * (focused on spawn-edge wiring, not prompt contents) rely on.
+   */
+  readonly review?: ReviewConfig;
 }
 
 /** The in-process automation the live loop drives after every board rebuild. */
@@ -130,6 +143,10 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // retries. The fallback is for the Reactor's own unit tests, which exercise it
   // in isolation with a recording fake — never the production path.
   const failed = deps.failedSet ?? createFailedSet();
+  // The review knobs the reviewer prompt reads; defaults preserve current
+  // behaviour (cap 3, medium) when the CLI does not inject config — the path the
+  // Reactor's own unit tests take.
+  const review = deps.review ?? DEFAULT_REVIEW_CONFIG;
 
   return {
     setEnabled(next: boolean): void {
@@ -152,7 +169,7 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
           // edges, so the two can't drift on how it's computed.
           const featureBranch = featureBranchName(basename(swept.prdDir));
           dispatchEligible(swept, featureBranch, deps, failed);
-          reviewEligible(swept, featureBranch, deps, failed);
+          reviewEligible(swept, featureBranch, deps, failed, review);
         }
       } finally {
         // Always release the guard, even if a path we believed total threw, so a
@@ -250,6 +267,7 @@ function reviewEligible(
   featureBranch: string,
   deps: ReactorDeps,
   failed: FailedSet,
+  review: ReviewConfig,
 ): void {
   for (const issue of reviewers) {
     if (failed.has(issue.path, "reviewer")) continue; // suppressed this session
@@ -261,6 +279,7 @@ function reviewEligible(
           prdTitle: view.prdTitle,
           prdBody: view.prdBody,
           featureBranch,
+          review,
         }),
       spawn: deps.spawn,
       logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),

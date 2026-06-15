@@ -3,24 +3,28 @@ import {
   HUMAN_REVIEW_REASONS,
   type HumanReviewReason,
 } from "../model.js";
+import type { ReviewConfig } from "./reviewConfig.js";
 
 /**
  * One-line guidance per escalation reason, keyed by the single-sourced
  * {@link HumanReviewReason} vocabulary so the prompt's reason tokens can never
  * drift from what the scanner accepts. A new reason is a compile error here
- * until it is given guidance.
+ * until it is given guidance. The non-convergence guidance names the configured
+ * pass `cap` (see {@link ReviewConfig}) so it always matches the loop's own cap.
  */
-const REASON_GUIDANCE: Record<HumanReviewReason, string> = {
-  deviation: "a deviation was recorded",
-  "non-convergence": "the loop did not converge in 3 passes",
-  conflict: "the merge hit a conflict",
-};
+function reasonGuidance(cap: number): Record<HumanReviewReason, string> {
+  return {
+    deviation: "a deviation was recorded",
+    "non-convergence": `the loop did not converge in ${cap} passes`,
+    conflict: "the merge hit a conflict",
+  };
+}
 
 /**
  * The inputs to a single reviewer-prompt build: the Issue to review (as the
  * dispatch reader produced it, carrying the implementor's recorded worktree,
  * branch, and any deviation), its parent PRD's display title and body, and the
- * PRD feature branch the clean path merges into.
+ * PRD feature branch the clean path merges into, and the resolved review knobs.
  *
  * The Issue is guaranteed `ready-for-review` with a worktree and branch by the
  * eligibility classifier, and the review trigger has *already* flipped it to
@@ -35,6 +39,13 @@ export interface ReviewerPromptInput {
   readonly prdBody: string;
   /** The PRD feature branch the clean path merges the worktree into. */
   readonly featureBranch: string;
+  /**
+   * The resolved review knobs (pass cap + effort) from {@link import("../config.js").Config}.
+   * The cap is the single value both the loop instruction and the non-convergence
+   * guidance read, so a later iteration-count marker can read the same number
+   * rather than a duplicated literal.
+   */
+  readonly review: ReviewConfig;
 }
 
 /**
@@ -45,8 +56,9 @@ export interface ReviewerPromptInput {
  * auto-permission reviewer's brief is auditable on every run.
  *
  * The brief encodes the whole review outcome (CONTEXT.md, "Review outcome"):
- * check out the recorded worktree; loop `/code-review` at medium effort up to a
- * hard cap of 3 passes, fixing findings as it goes, where convergence is a pass
+ * check out the recorded worktree; loop `/code-review` at the configured effort
+ * (default medium) up to the configured hard cap (default 3 passes), fixing
+ * findings as it goes, where convergence is a pass
  * that reports zero findings; on a converged clean pass with no recorded
  * deviation, merge the worktree branch into the PRD feature branch and set
  * `done`; on a recorded deviation, non-convergence after the cap, or a merge
@@ -59,10 +71,15 @@ export interface ReviewerPromptInput {
  * clean auto-merge path entirely.
  */
 export function buildReviewerPrompt(input: ReviewerPromptInput): string {
-  const { issue, prdTitle, prdBody, featureBranch } = input;
+  const { issue, prdTitle, prdBody, featureBranch, review } = input;
+  const { cap, effort } = review;
+  // The /code-review skill names effort in lowercase; the prompt has long
+  // written it in caps for emphasis, so uppercase the configured value to match.
+  const effortLabel = effort.toUpperCase();
 
+  const guidance = reasonGuidance(cap);
   const reasonBullets = HUMAN_REVIEW_REASONS.map(
-    (reason) => `  - \`human_review_reason: ${reason}\` — ${REASON_GUIDANCE[reason]}`,
+    (reason) => `  - \`human_review_reason: ${reason}\` — ${guidance[reason]}`,
   ).join("\n");
 
   const deviationNote =
@@ -106,12 +123,13 @@ ${deviationNote}
 
 1. Check out the recorded worktree (${issue.worktree}) so you are reviewing the
    implementor's actual code.
-2. Run the \`/code-review\` skill at MEDIUM effort and fix the findings it
+2. Run the \`/code-review\` skill at ${effortLabel} effort and fix the findings it
    reports, committing the fixes to the worktree as you go. Then run it again.
    Repeat this loop. One iteration is a single \`/code-review\` pass plus its
    fixes; the loop CONVERGES when a pass reports zero findings.
-3. The loop is capped at 3 passes. If a 3rd pass still reports findings, the
-   review has NOT converged — stop looping and take the human-review exit below.
+3. The loop is capped at ${cap} passes. If pass number ${cap} still reports
+   findings, the review has NOT converged — stop looping and take the
+   human-review exit below.
 
 ## How to finish
 
@@ -137,7 +155,7 @@ Take exactly one of two exits:
   human reconciles it).
 
 - HUMAN-REVIEW EXIT — any of: a deviation was recorded, the loop did not
-  converge within 3 passes, or the merge hit a conflict. Do NOT merge. Set
+  converge within ${cap} passes, or the merge hit a conflict. Do NOT merge. Set
   \`status: human-review\` on the Issue AND record \`human_review_reason\` so a
   human knows what attention it needs before opening it. Use exactly one of:
 ${reasonBullets}
