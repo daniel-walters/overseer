@@ -529,4 +529,25 @@ describe("scanBoard suppressed overlay", () => {
     expect(issueById(issues, "001-queued.md").suppressed).toBe(true);
     expect(issueById(issues, "001-queued.md").liveness).toBeUndefined();
   });
+
+  it("never marks a card whose status collides with an Object.prototype name", () => {
+    // A status of `toString` / `constructor` is a real string and not an own key of
+    // the status→edge map, so it is not a suppressed lane. The overlay must read the
+    // map with an own-key check, never a bare index that would resolve the inherited
+    // prototype member to a truthy function and pass a non-edge into the lookup. The
+    // lookup asserts it is only ever handed a real edge, so a bare index would trip
+    // it; an unconditional `true` lookup proves the card still stays unmarked.
+    const root = mkdtempSync(join(tmpdir(), "overseer-suppressed-proto-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-proto.md"), "---\nstatus: toString\n---\nbody\n");
+
+    const board = scanBoard(root, undefined, (_path, edge) => {
+      expect(edge === "implementor" || edge === "reviewer").toBe(true);
+      return true;
+    });
+
+    expect(issueById(featureIssues(board), "001-proto.md").suppressed).toBeUndefined();
+  });
 });
