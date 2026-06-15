@@ -203,6 +203,20 @@ export interface Issue {
    * from a dead one.
    */
   readonly liveness?: Liveness;
+  /**
+   * The suppressed overlay: `true` on an awaiting `ready-for-agent` /
+   * `ready-for-review` card whose last spawn launch failed this session (the
+   * failed-set reports `(path, edge)` suppressed). Set only on those two lanes
+   * (the edge derived from the lane: `ready-for-agent → implementor`,
+   * `ready-for-review → reviewer`), the
+   * opposite set from {@link liveness}'s two active lanes — so the two overlays
+   * are disjoint and can never co-render on one card. Absent on every other lane,
+   * when no lookup is wired in, and when the lookup reports not-suppressed: a
+   * read-only overlay, recomputed on each board open, never written to the Issue
+   * file (ADR 0002). Lane-gating makes a lingering failed-set entry inert — an
+   * Issue that leaves its `ready-*` lane simply drops the marker.
+   */
+  readonly suppressed?: boolean;
 }
 
 export interface PRD {

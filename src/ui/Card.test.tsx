@@ -84,3 +84,51 @@ describe("Card liveness marker", () => {
     expect(frame).toContain("Plain");
   });
 });
+
+describe("Card suppressed marker", () => {
+  it("marks a suppressed card with the suppressed marker", () => {
+    const frame = frameOf(<Card title="Queued" suppressed />);
+
+    expect(frame).toContain("⊘ suppressed");
+    expect(frame).toContain("Queued");
+  });
+
+  it("shows no suppressed marker on a card that is not suppressed", () => {
+    const frame = frameOf(<Card title="Healthy" />);
+
+    expect(frame).not.toContain("suppressed");
+    expect(frame).toContain("Healthy");
+  });
+
+  it("renders the suppressed marker as distinct from the liveness family", () => {
+    // The suppressed marker reads apart from the yellow liveness family by glyph:
+    // `⊘` vs `●`/`○`/`⚠`.
+    const suppressed = frameOf(<Card title="Parked" suppressed />);
+
+    expect(suppressed).toContain("⊘ suppressed");
+    expect(suppressed).not.toMatch(/● live|○ unknown|⚠ orphaned/);
+  });
+
+  it("never renders a liveness marker alongside the suppressed marker", () => {
+    // Disjoint lanes mean the scanner never sets both fields (see the scanner's
+    // disjointness test), but the Card is the last line of defence: even handed
+    // both, it must read as one coherent state — suppressed wins, no liveness
+    // marker leaks through.
+    const both = frameOf(<Card title="Parked" suppressed liveness="live" />);
+
+    expect(both).toContain("⊘ suppressed");
+    expect(both).not.toMatch(/● live|○ unknown|⚠ orphaned/);
+  });
+
+  it("never renders a human-review marker alongside the suppressed marker", () => {
+    // The same last-line-of-defence guard covers the human-review marker, not just
+    // liveness: disjoint lanes mean the scanner never co-sets them, but even handed
+    // both, suppressed wins and the yellow reason line never leaks through.
+    const both = frameOf(
+      <Card title="Parked" suppressed humanReviewReason="conflict" />,
+    );
+
+    expect(both).toContain("⊘ suppressed");
+    expect(both).not.toMatch(/⚠ deviation|↻ non-convergence|✗ conflict/);
+  });
+});

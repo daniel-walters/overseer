@@ -384,3 +384,170 @@ describe("scanBoard liveness overlay", () => {
     expect(issueById(issues, "004-shipped.md").liveness).toBeUndefined();
   });
 });
+
+describe("scanBoard suppressed overlay", () => {
+  /**
+   * A throwaway root with one Issue in each lane that matters to the suppressed
+   * overlay: the two awaiting `ready-*` lanes it applies to (ready-for-agent →
+   * implementor edge, ready-for-review → reviewer edge), the `ready-for-human`
+   * card that shares the `ready` lane but is *not* a spawn target, and the four
+   * lanes a lingering failed-set entry must stay inert on (in-progress, in-review,
+   * done, backlog). The suppressed lookup is keyed by the Issue's absolute path
+   * and the spawn edge the lane implies.
+   */
+  function suppressedRoot(): { root: string; pathOf: (file: string) => string } {
+    const root = mkdtempSync(join(tmpdir(), "overseer-suppressed-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-queued.md"), "---\nstatus: ready-for-agent\n---\nbody\n");
+    writeFileSync(join(dir, "002-toreview.md"), "---\nstatus: ready-for-review\n---\nbody\n");
+    writeFileSync(join(dir, "003-forhuman.md"), "---\nstatus: ready-for-human\n---\nbody\n");
+    writeFileSync(join(dir, "004-working.md"), "---\nstatus: in-progress\n---\nbody\n");
+    writeFileSync(join(dir, "005-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
+    writeFileSync(join(dir, "006-shipped.md"), "---\nstatus: done\n---\nbody\n");
+    writeFileSync(join(dir, "007-parked.md"), "---\nstatus: backlog\n---\nbody\n");
+    return { root, pathOf: (file) => join(dir, file) };
+  }
+
+  function featureIssues(board: ReturnType<typeof scanBoard>): readonly Issue[] {
+    return prdById(board.prds, "feature").issues;
+  }
+
+  it("stamps suppressed on a ready-for-agent card the lookup reports suppressed", () => {
+    const { root, pathOf } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("001-queued.md") && edge === "implementor",
+    );
+
+    expect(issueById(featureIssues(board), "001-queued.md").suppressed).toBe(true);
+  });
+
+  it("stamps suppressed on a ready-for-review card the lookup reports suppressed", () => {
+    const { root, pathOf } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("002-toreview.md") && edge === "reviewer",
+    );
+
+    expect(issueById(featureIssues(board), "002-toreview.md").suppressed).toBe(true);
+  });
+
+  it("derives the edge from the lane: ready-for-agent asks the implementor edge", () => {
+    // The lookup says the implementor edge is suppressed but the reviewer edge is
+    // not. A ready-for-agent card must be marked (it asks `implementor`); were the
+    // scanner to ask the wrong edge it would read not-suppressed.
+    const { root, pathOf } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("001-queued.md") && edge === "implementor",
+    );
+
+    expect(issueById(featureIssues(board), "001-queued.md").suppressed).toBe(true);
+  });
+
+  it("does not mark a card when only the other edge for its path is suppressed", () => {
+    // The reviewer edge is suppressed for the ready-for-agent card's path, but the
+    // card asks the implementor edge — one failing edge can't mask the other.
+    const { root, pathOf } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("001-queued.md") && edge === "reviewer",
+    );
+
+    expect(issueById(featureIssues(board), "001-queued.md").suppressed).toBeUndefined();
+  });
+
+  it("never marks a ready-for-human card — it is not a spawn target", () => {
+    // ready-for-human shares the `ready` lane with ready-for-agent but launches no
+    // agent, so it has no suppressed edge. A lookup that claims every pair is
+    // suppressed must leave it blank.
+    const { root } = suppressedRoot();
+    const board = scanBoard(root, undefined, () => true);
+
+    expect(issueById(featureIssues(board), "003-forhuman.md").suppressed).toBeUndefined();
+  });
+
+  it("lane-gates: a lingering entry on a non-ready lane never marks the card", () => {
+    // The lookup claims every (path, edge) is suppressed; only the two awaiting
+    // ready-* lanes may carry the marker. An in-progress / in-review / done /
+    // backlog card with a matching stale entry stays blank — lane-gating is what
+    // makes the append-only set's stale entries inert.
+    const { root } = suppressedRoot();
+    const board = scanBoard(root, undefined, () => true);
+    const issues = featureIssues(board);
+
+    expect(issueById(issues, "004-working.md").suppressed).toBeUndefined();
+    expect(issueById(issues, "005-reviewing.md").suppressed).toBeUndefined();
+    expect(issueById(issues, "006-shipped.md").suppressed).toBeUndefined();
+    expect(issueById(issues, "007-parked.md").suppressed).toBeUndefined();
+  });
+
+  it("leaves suppressed unset when no lookup is provided", () => {
+    // The default scan (board-only tests, the eager first render) carries no
+    // suppressed overlay — every card is blank even on the ready-* lanes.
+    const { root } = suppressedRoot();
+    const issues = featureIssues(scanBoard(root));
+
+    expect(issueById(issues, "001-queued.md").suppressed).toBeUndefined();
+    expect(issueById(issues, "002-toreview.md").suppressed).toBeUndefined();
+  });
+
+  it("leaves suppressed unset on a ready-* card the lookup reports not-suppressed", () => {
+    // A lookup wired in but answering false stamps nothing — no `suppressed: false`
+    // noise, only a positive true marks the card.
+    const { root } = suppressedRoot();
+    const board = scanBoard(root, undefined, () => false);
+
+    expect(issueById(featureIssues(board), "001-queued.md").suppressed).toBeUndefined();
+  });
+
+  it("never carries both a suppressed and a liveness field (disjoint lanes)", () => {
+    // Both overlays wired in and claiming everything: liveness gates to the active
+    // lanes, suppressed to the awaiting ready-* lanes. No single card can satisfy
+    // both gates, so none carries both fields.
+    const { root } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      () => "live",
+      () => true,
+    );
+
+    for (const issue of featureIssues(board)) {
+      expect(issue.suppressed && issue.liveness).toBeFalsy();
+    }
+    // And positively: the active-lane card carries only liveness, the awaiting one
+    // only suppressed.
+    const issues = featureIssues(board);
+    expect(issueById(issues, "004-working.md").liveness).toBe("live");
+    expect(issueById(issues, "004-working.md").suppressed).toBeUndefined();
+    expect(issueById(issues, "001-queued.md").suppressed).toBe(true);
+    expect(issueById(issues, "001-queued.md").liveness).toBeUndefined();
+  });
+
+  it("never marks a card whose status collides with an Object.prototype name", () => {
+    // A status of `toString` / `constructor` is a real string but not a recognised
+    // authored status, so `placeStatus` folds it to `unsorted` — never a suppressed
+    // lane. Because the edge is derived from the validated lane (not by indexing a
+    // raw-status map), such a card can never reach the lookup at all: the lookup
+    // here asserts it is only ever handed a real edge, and an unconditional `true`
+    // return proves the card still stays unmarked.
+    const root = mkdtempSync(join(tmpdir(), "overseer-suppressed-proto-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-proto.md"), "---\nstatus: toString\n---\nbody\n");
+
+    const board = scanBoard(root, undefined, (_path, edge) => {
+      expect(edge === "implementor" || edge === "reviewer").toBe(true);
+      return true;
+    });
+
+    expect(issueById(featureIssues(board), "001-proto.md").suppressed).toBeUndefined();
+  });
+});

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { createDispatcher, type DispatcherDeps } from "./dispatcher.js";
 import { createSpawnEdge } from "./spawn.js";
 import { createAgentSidecar } from "./agentSidecar.js";
+import { createFailedSet } from "../reactor/failedSet.js";
 import type { GitSeam } from "./gitSetup.js";
 
 const checkoutFlow = fileURLToPath(
@@ -44,6 +45,7 @@ function recordingDeps(overrides: Partial<DispatcherDeps> = {}): DispatcherDeps 
     },
     logFailure: (r) => failures.push(r),
     recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
+    failedSet: createFailedSet(),
     ...overrides,
   };
 }
@@ -132,6 +134,7 @@ describe("createDispatcher", () => {
         spawn,
         logFailure,
         recordHandle,
+        failedSet: createFailedSet(),
       });
 
       dispatcher.dispatch(dispatcher.readFrontier("checkout-flow"));
@@ -195,6 +198,40 @@ describe("createDispatcher", () => {
           edge: "implementor",
         },
       ]);
+    });
+
+    it("records a failed manual d launch into the shared failed-set under the implementor edge", () => {
+      // The behaviour change (ADR 0011): a manual `d` launch failure now lands in
+      // the same session-scoped failed-set the Reactor reads, keyed by the Issue's
+      // full path (prdDir/filename) under the implementor edge — so the next
+      // reconcile suppresses it exactly as it would an automated failure.
+      const failedSet = createFailedSet();
+      const deps = recordingDeps({
+        failedSet,
+        spawn: () => {
+          throw new Error("claude: command not found");
+        },
+      });
+      const dispatcher = createDispatcher(root, deps);
+
+      dispatcher.dispatch(dispatcher.readFrontier("checkout-flow"));
+
+      const path = join(root, "checkout-flow", "002-payment-intent.md");
+      expect(failedSet.has(path, "implementor")).toBe(true);
+      // The other edge for the same Issue is untouched: a failed `d` does not
+      // suppress that Issue's reviewer edge.
+      expect(failedSet.has(path, "reviewer")).toBe(false);
+    });
+
+    it("does not touch the failed-set when a manual d launch succeeds", () => {
+      const failedSet = createFailedSet();
+      const deps = recordingDeps({ failedSet });
+      const dispatcher = createDispatcher(root, deps);
+
+      dispatcher.dispatch(dispatcher.readFrontier("checkout-flow"));
+
+      const path = join(root, "checkout-flow", "002-payment-intent.md");
+      expect(failedSet.has(path, "implementor")).toBe(false);
     });
 
     it("skips a candidate whose repo fails validation: not flipped, not spawned", () => {

@@ -1,0 +1,23 @@
+# The suppressed overlay sources from in-memory Reactor state, not a sidecar
+
+## Status
+
+accepted
+
+## Context
+
+A spawn that fails to launch is rolled back to its awaiting `ready-*` status and recorded in a session-scoped **failed-set**, keyed by `(Issue, edge)`, so the level-triggered loop does not re-pick it up and retry forever (CONTEXT.md → Reactor → Terminal failure). The set is **shared across all three spawn triggers** — the Reactor's auto-spawn and the manual `d`/`r` edges (lifted out of `createReactor` to a single instance the CLI wires into all of them) — so a launch failure is recorded and suppressed identically whoever triggered it; a manual `d` that fails to launch is as visible, and as un-retried this session, as an automated one. On disk such an Issue is indistinguishable from a healthy `ready-*` card: the suppression is purely in-memory session state. The **Suppressed** marker (CONTEXT.md) surfaces it so the board stops looking dispatchable while silently being ignored — the dogfooding pain the failed-set otherwise hides.
+
+To render that marker, the suppressed state has to reach the card. The board model is built by a pure `scan(root)` over the files, and **every overlay the board has today — Liveness and Orphan (ADR 0008, 0009) — reads an on-disk sidecar**, so the obvious, pattern-matching move is to persist the failed-set to a sidecar in `~/.local/state/overseer/` (beside the liveness handle and `dispatch.log`) and have the scan read it like the others. That would keep the overlay a pure file-read and the board uniformly file-sourced.
+
+## Decision
+
+The suppressed overlay reads the failed-set **live, from in-memory session state**, through a small read seam — it is **not** persisted to a sidecar. The shared failed-set is held by the CLI (the single instance it wires into the Reactor and the `d`/`r` edges), exposed read-only via an `isSuppressed(path, edge)` projection; the board joins the current set onto the scanned model at overlay time, exactly where Liveness joins its sidecar. The join reflects whatever the set holds *now*; on the pass where a spawn first fails the set is populated *after* the board renders, so the marker lands on the next rebuild — which the rollback's own file write guarantees fires within one debounce (~150ms). We deliberately do **not** reorder the `scan → reconcile` sequence to close that window (see ADR 0005 / `useLiveBoard`).
+
+## Consequences
+
+- **Reopen-to-retry is preserved.** The failed-set is session-scoped precisely so that reopening the board clears it and retries — the natural "I fixed my environment, try again" gesture (ADR 0007). Persisting it to a sidecar would make suppression *survive a reopen*, destroying that semantic and leaving a card falsely suppressed against a now-healthy environment. The ephemerality is the point; a durable source would defeat it.
+- **The board gains its first non-file overlay source.** Every other overlay reads a file; this one reaches into a live object. Recorded here so a future reader does not read it as an oversight or "fix" it back to a sidecar without re-breaking ADR 0007. The seam is read-only and total (an absent/empty set yields no markers), so it does not compromise the read-only viewer (ADR 0002) — it reads Overseer's *own* operational state, never the watched root.
+- **One-debounce lag is accepted, not engineered away.** The marker can be absent for ~150ms after a spawn fails. The rollback write self-triggers the rebuild that closes the gap, so the marker can never be *permanently* missed — the same eventual-consistency the Liveness overlay already accepts. Reordering `scan → reconcile` to erase the window would fight that sequence's deliberate rationale for a cosmetic win, and the reconcile's own writes would stale a pre-reconcile scan anyway.
+- **Manual failures now suppress reactor retry too.** Sharing one set across triggers means a failed manual `d`/`r` launch is subtracted from the Reactor's frontier this session, not just marked. This is a deliberate behavior change beyond "surface existing state": a failed launch is a failed launch regardless of who triggered it, so the marker means "a spawn launch failed here this session," edge- and trigger-uniform, with no invisible manual-path hole. The alternative (a reactor-private set) left a failed manual `d` unmarked and silently retried by the next reconcile — reintroducing the exact invisibility this feature kills.
+- **Rejected: persist the failed-set to a sidecar.** It would make the overlay a uniform pure file-read like Liveness/Orphan — but at the cost of reopen-to-retry (above). The uniformity is not worth the semantic.

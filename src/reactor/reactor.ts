@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename } from "node:path";
 import { writeStatus } from "../issueFile.js";
 import { readDispatchView } from "../dispatch/reader.js";
 import { runDispatch, type FailureRecord } from "../dispatch/dispatch.js";
@@ -9,7 +9,11 @@ import { buildReviewerPrompt } from "../review/reviewerPrompt.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import { enumeratePrdDirs } from "./prds.js";
 import { sweepFrontier, type PrdInput, type SweptPrd } from "./sweep.js";
-import { createFailedSet, type FailedSet } from "./failedSet.js";
+import {
+  createFailedSet,
+  recordingLogFailure,
+  type FailedSet,
+} from "./failedSet.js";
 
 /**
  * The I/O seams the Reactor injects into both spawn edges — the *same* the
@@ -34,10 +38,13 @@ export interface ReactorDeps {
   readonly recordHandle: (issueKey: string, handle: string) => void;
   /**
    * The session-scoped failed-set the Reactor subtracts from each frontier and
-   * records spawn failures into. Optional: the production caller omits it and
-   * each `createReactor` builds its own, which is what makes the set
-   * session-scoped (reopen ⇒ fresh set ⇒ failed spawns retried). Tests inject a
-   * recording fake to observe the suppression.
+   * records spawn failures into. The CLI constructs one shared instance and
+   * injects the *same* set here and into the manual `d`/`r` edges, so a failed
+   * launch on any edge suppresses the next reconcile identically (ADR 0011).
+   * Optional: when omitted, `createReactor` builds its own — which still makes
+   * the set session-scoped (reopen ⇒ fresh set ⇒ failed spawns retried) and is
+   * what the Reactor's own unit tests rely on, injecting a recording fake to
+   * observe the suppression in isolation.
    */
   readonly failedSet?: FailedSet;
 }
@@ -117,8 +124,11 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // Auto-run state: on by default, in-memory, dies with the instance (ADR 0007).
   // While false, reconcile() early-returns so nothing auto-spawns.
   let enabled = true;
-  // Session-scoped: one set per Reactor instance. The production caller omits
-  // `deps.failedSet`, so reopening the board builds a fresh set and retries.
+  // Session-scoped. In production the CLI injects the one shared set so a failed
+  // launch on any edge (Reactor auto-spawn or manual `d`/`r`) suppresses the next
+  // reconcile identically (ADR 0011); reopening the board builds a fresh set and
+  // retries. The fallback is for the Reactor's own unit tests, which exercise it
+  // in isolation with a recording fake — never the production path.
   const failed = deps.failedSet ?? createFailedSet();
 
   return {
@@ -209,7 +219,7 @@ function dispatchEligible(
         featureBranch,
       }),
     spawn: deps.spawn,
-    logFailure: recordingLogFailure(prdDir, deps, failed),
+    logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),
     recordHandle: deps.recordHandle,
   });
 }
@@ -253,30 +263,10 @@ function reviewEligible(
           featureBranch,
         }),
       spawn: deps.spawn,
-      logFailure: recordingLogFailure(prdDir, deps, failed),
+      logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),
       recordHandle: deps.recordHandle,
     });
   }
-}
-
-/**
- * Wrap `deps.logFailure` so the same record the spawn edge appends to the
- * durable log also lands in the failed-set, keyed by the Issue's full path
- * (`prdDir/filename`) and the failing edge. The record carries only the bare
- * filename, so we re-join it with this PRD's `prdDir` — which is exactly
- * `issue.path` (the reader builds `path` as `prdDir/filename`), so the record
- * and subtract sides agree on the key. Records first, then delegates; both are
- * best-effort and the delegate already never throws.
- */
-function recordingLogFailure(
-  prdDir: string,
-  deps: ReactorDeps,
-  failed: FailedSet,
-): (record: FailureRecord) => void {
-  return (record) => {
-    failed.record(join(prdDir, record.issueId), record.edge);
-    deps.logFailure(record);
-  };
 }
 
 /**

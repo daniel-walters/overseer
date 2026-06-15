@@ -44,7 +44,13 @@ const prd: PRD = {
   lane: "in-progress",
   issues: [
     { id: "010-login", title: "Login", lane: "in-progress", liveness: "live" },
-    { id: "020-oauth", title: "OAuth", lane: "ready", readyFor: "agent" },
+    {
+      id: "020-oauth",
+      title: "OAuth",
+      lane: "ready",
+      readyFor: "agent",
+      suppressed: true,
+    },
     { id: "030-review", title: "Review", lane: "ready", readyFor: "human" },
     { id: "005-mystery", title: "Mystery", lane: "unsorted" },
     {
@@ -97,6 +103,13 @@ describe("IssueBoard", () => {
 
     expect(columnOf(frame, "Reviewing")).toBe("In Review");
     expect(columnOf(frame, "unknown")).toBe("In Review");
+  });
+
+  it("surfaces the suppressed marker on a launch-failed ready Issue's card", () => {
+    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+
+    expect(columnOf(frame, "OAuth")).toBe("Ready");
+    expect(columnOf(frame, "suppressed")).toBe("Ready");
   });
 
   it("marks the selected Issue with a pointer and no other", () => {
