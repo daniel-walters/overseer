@@ -5,8 +5,8 @@ import { render as inkRender } from "ink";
 /**
  * A render helper for Ink component tests, mirroring `ink-testing-library` but
  * with a configurable terminal width. The library hardcodes 100 columns, which
- * is too narrow for the Issue-level board's eight lanes (Unsorted + seven status
- * columns at width 24): the columns flex-shrink and truncate card titles. These
+ * is too narrow for the Issue-level board's seven status columns (at width 24):
+ * the columns flex-shrink and truncate card titles. These
  * layout tests assert on full, untruncated titles and headings, so they need a
  * viewport wide enough to hold the real design — wider than any real terminal a
  * user would run the board in, which is the point.

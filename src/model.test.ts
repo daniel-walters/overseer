@@ -7,6 +7,16 @@ function issue(lane: Lane): Issue {
 }
 
 /**
+ * Build the Issue a missing/unrecognised status now produces: folded into the
+ * backlog lane carrying the `malformedStatus` overlay. The retired `unsorted`
+ * lane's PRD-derivation behaviour (pre-in-progress, blocks all-done) must be
+ * preserved by this fold.
+ */
+function malformedIssue(): Issue {
+  return { id: "malformed.md", title: "malformed", lane: "backlog", malformedStatus: true };
+}
+
+/**
  * `placeStatus` is the single derived status→lane mapping every reader shares.
  * The scanner wraps it with the unsorted fail-safe; these tests pin the raw
  * mapping (and its `undefined` for unknown input) directly.
@@ -97,14 +107,16 @@ describe("derivePrdLane", () => {
     expect(derivePrdLane([issue("backlog"), issue("ready")])).toBe("backlog");
   });
 
-  it("treats an Unsorted Issue as pre-in-progress, never advancing the PRD", () => {
-    // Unsorted (unknown status) does not promote to in-progress on its own...
-    expect(derivePrdLane([issue("backlog"), issue("unsorted")])).toBe("backlog");
+  it("treats a malformed-status Issue as pre-in-progress, never advancing the PRD", () => {
+    // A missing/unknown status (now folded into backlog + malformedStatus) does
+    // not promote the PRD to in-progress on its own — the retired Unsorted lane's
+    // pre-in-progress behaviour is preserved by the fold.
+    expect(derivePrdLane([issue("backlog"), malformedIssue()])).toBe("backlog");
   });
 
-  it("treats an Unsorted Issue as not-done, blocking the all-done derivation", () => {
-    // ...and a done + Unsorted PRD is in-progress, not done: an unknown-status
-    // Issue can never silently complete a PRD.
-    expect(derivePrdLane([issue("done"), issue("unsorted")])).toBe("in-progress");
+  it("treats a malformed-status Issue as not-done, blocking the all-done derivation", () => {
+    // ...and a done + malformed PRD is in-progress, not done: an unknown-status
+    // Issue can never silently complete a PRD, exactly as Unsorted blocked it.
+    expect(derivePrdLane([issue("done"), malformedIssue()])).toBe("in-progress");
   });
 });

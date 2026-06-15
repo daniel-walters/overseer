@@ -20,6 +20,15 @@ interface CardProps {
    * the two markers can never co-render on one card.
    */
   suppressed?: boolean;
+  /**
+   * Malformed-status marker, present only on a backlog card the scanner folded
+   * there because its authored `status` was missing or unrecognised (CONTEXT.md,
+   * ADR 0003). The loud marker keeps the data error triageable now that the
+   * Unsorted column is gone — distinct from an ordinary backlog card. In the
+   * yellow "needs a human" warning family (a frontmatter fix), never co-occurring
+   * with the other markers (it rides the backlog lane, they ride other lanes).
+   */
+  malformedStatus?: boolean;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -67,6 +76,16 @@ const LIVENESS_MARKER: Record<Liveness, { text: string; color: string }> = {
  */
 const SUPPRESSED_MARKER = "⊘ suppressed";
 
+/**
+ * The malformed-status marker, following the same own-line idiom as the other
+ * markers. Yellow and `⚠` place it in the "needs a human" warning family (like
+ * orphaned and the human-review reasons): the Issue's `status` frontmatter is
+ * missing or unrecognised and a human must fix it — a data error, not the red
+ * `⊘ suppressed` "nothing ran" category. Folding the Unsorted column into backlog
+ * must not lose this triage signal, so the marker stays loud (CONTEXT.md, ADR 0003).
+ */
+const MALFORMED_STATUS_MARKER = "⚠ bad status";
+
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
@@ -74,6 +93,7 @@ export function Card({
   humanReviewReason,
   liveness,
   suppressed,
+  malformedStatus,
   selected = false,
 }: CardProps) {
   return (
@@ -115,6 +135,14 @@ export function Card({
         // marker (ADR 0011).
         <Text wrap="truncate-end" color="red">
           {SUPPRESSED_MARKER}
+        </Text>
+      )}
+      {malformedStatus && (
+        // Its own truncating line, yellow — a backlog card whose status frontmatter
+        // is missing or unrecognised. Rides the backlog lane, disjoint from every
+        // other marker's lane, so it never co-renders with one (ADR 0003).
+        <Text wrap="truncate-end" color="yellow">
+          {MALFORMED_STATUS_MARKER}
         </Text>
       )}
     </Box>

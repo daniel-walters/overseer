@@ -12,7 +12,11 @@ interface IssueBoardProps {
   selectedIndex: number;
 }
 
-/** The Issue-level kanban: one PRD's Issues across Unsorted + the seven columns. */
+/**
+ * The Issue-level kanban: one PRD's Issues across the seven status columns. There
+ * is no Unsorted column — a missing/unknown status folds into Backlog flagged with
+ * the `⚠ bad status` marker (CONTEXT.md, ADR 0003).
+ */
 export function IssueBoard({ prd, selectedIndex }: IssueBoardProps) {
   const byLane = groupByLane(prd.issues);
   const selectedId = prd.issues[selectedIndex]?.id;

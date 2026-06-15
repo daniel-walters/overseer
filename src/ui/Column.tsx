@@ -11,6 +11,7 @@ export interface CardItem {
   readonly humanReviewReason?: HumanReviewReason;
   readonly liveness?: Liveness;
   readonly suppressed?: boolean;
+  readonly malformedStatus?: boolean;
 }
 
 interface ColumnProps {
@@ -33,6 +34,7 @@ export function Column({ heading, cards, selectedId }: ColumnProps) {
           humanReviewReason={card.humanReviewReason}
           liveness={card.liveness}
           suppressed={card.suppressed}
+          malformedStatus={card.malformedStatus}
           selected={card.id === selectedId}
         />
       ))}

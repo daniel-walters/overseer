@@ -85,6 +85,33 @@ describe("Card liveness marker", () => {
   });
 });
 
+describe("Card malformed-status marker", () => {
+  it("flags a malformed-status card with a warning marker reading 'bad status'", () => {
+    const frame = frameOf(<Card title="Mystery" malformedStatus />);
+
+    expect(frame).toContain("⚠ bad status");
+    expect(frame).toContain("Mystery");
+  });
+
+  it("shows no malformed-status marker on a card with a recognised status", () => {
+    const frame = frameOf(<Card title="Healthy" />);
+
+    expect(frame).not.toContain("bad status");
+    expect(frame).toContain("Healthy");
+  });
+
+  it("renders a malformed backlog card distinct from a plain backlog card", () => {
+    // A folded malformed-status Issue and an ordinary backlog Issue both sit in
+    // the backlog column; the marker is the only thing that tells them apart, so a
+    // data error stays loud and triageable rather than silently parked.
+    const malformed = frameOf(<Card title="Mystery" malformedStatus />);
+    const plain = frameOf(<Card title="Real backlog" />);
+
+    expect(malformed).toContain("⚠ bad status");
+    expect(plain).not.toContain("bad status");
+  });
+});
+
 describe("Card suppressed marker", () => {
   it("marks a suppressed card with the suppressed marker", () => {
     const frame = frameOf(<Card title="Queued" suppressed />);
