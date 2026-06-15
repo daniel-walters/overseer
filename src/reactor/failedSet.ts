@@ -59,32 +59,23 @@ export function createFailedSet(): FailedSet {
 }
 
 /**
- * A narrow, read-only projection over the shared {@link FailedSet}: answer
- * "is `(path, edge)` suppressed?" and nothing else. This is the seam the board's
- * suppressed overlay queries (next slice) to decide whether a card carries the
- * `⊘ suppressed` marker.
+ * Project a {@link FailedSet} to its {@link SuppressedLookup} — the narrow,
+ * read-only seam handed to the board: answer "is `(path, edge)` suppressed?" and
+ * nothing else, to decide whether a card carries the `⊘ suppressed` marker.
  *
  * It deliberately exposes *only* the read. Only the spawn edges write the set;
  * the board only observes it (ADR 0011), so the board must never receive the raw
- * {@link FailedSet} (which carries the writable `record`) — it gets this function
- * instead and so can observe suppression but can never cause it.
+ * {@link FailedSet} (which carries the writable `record`). It gets this function
+ * instead, which closes over only the set's `has`, so the writable `record` is
+ * unreachable through the returned function — the board can ask whether a
+ * `(path, edge)` is suppressed but holds no reference that lets it record one.
  *
  * Total by construction — it is just a `boolean` query over a `Set`, so an absent
- * or empty set yields `false` for every pair and nothing here can throw.
- *
- * The seam's shape is the scanner's published overlay contract
- * ({@link SuppressedLookup}, the sibling of `LivenessLookup`); `suppressedSeam`
- * conforms to it so the projection drops straight into `scanBoard`'s suppressed
- * lookup. Imported rather than re-declared so the contract lives in exactly one
- * place — the consumer that defines it.
- */
-
-/**
- * Project a {@link FailedSet} to its {@link SuppressedLookup} — the read-only
- * seam handed to the board. Closes over only the set's `has`, so the writable
- * `record` is unreachable through the returned function: the board can ask
- * whether a `(path, edge)` is suppressed but holds no reference that lets it
- * record one.
+ * or empty set yields `false` for every pair and nothing here can throw. The
+ * seam's shape is the scanner's published overlay contract ({@link
+ * SuppressedLookup}, the sibling of `LivenessLookup`), imported rather than
+ * re-declared so the contract lives in exactly one place — the consumer that
+ * defines it.
  */
 export function suppressedSeam(failed: FailedSet): SuppressedLookup {
   return (path, edge) => failed.has(path, edge);
