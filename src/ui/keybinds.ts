@@ -7,11 +7,15 @@
  * structural fact, not a property a guard test had to assert.
  */
 
-/** The two board zoom levels a binding can be gated to (`both` = either). */
-export type NavLevel = "board" | "issues";
+import type { Level } from "./navigation.js";
 
-/** A binding's level gate: a single level, or `both` (works at either). */
-export type BindLevel = NavLevel | "both";
+/**
+ * A binding's level gate: a single nav {@link Level} (`board` / `issues`), or
+ * `both` (works at either). Built on the reducer's own `Level` rather than a
+ * second copy, so the level vocabulary stays single-sourced — the same single-
+ * source-of-truth discipline this registry brings to the keybinds themselves.
+ */
+export type BindLevel = Level | "both";
 
 /**
  * A keypress as Ink's `useInput` hands it over: the typed character plus the
@@ -160,7 +164,7 @@ export const KEYBINDS: readonly Keybind[] = [
 ];
 
 /** True if a binding gated to `level` is active at the current nav `at`. */
-function levelActive(level: BindLevel, at: NavLevel): boolean {
+function levelActive(level: BindLevel, at: Level): boolean {
   return level === "both" || level === at;
 }
 
@@ -169,6 +173,6 @@ function levelActive(level: BindLevel, at: NavLevel): boolean {
  * if none. The first entry whose `matches` fires and whose level gate is open
  * wins — the same precedence the old inline `if` chain had, now data-driven.
  */
-export function matchKeybind(press: KeyPress, at: NavLevel): Keybind | undefined {
+export function matchKeybind(press: KeyPress, at: Level): Keybind | undefined {
   return KEYBINDS.find((b) => levelActive(b.level, at) && b.matches(press));
 }
