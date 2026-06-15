@@ -20,6 +20,7 @@ import type {
   KillPreview as KillPreviewData,
   KillOutcome,
 } from "../dispatch/kill.js";
+import type { ReactorActivity } from "../reactor/reactorActivity.js";
 
 /**
  * The dispatch seams the App drives, injected so the keypress → preview →
@@ -128,6 +129,15 @@ interface AppProps {
   killer?: Killer;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
+  /**
+   * The board-level reactor-activity signal (working / idle / at-rest), derived
+   * from in-memory Reactor state and recomputed on each rebuild (Issue: surface
+   * reactor state). A second, distinct status-line indicator beside the auto-run
+   * on/off one: auto-run answers "is the brake released?", this answers "given
+   * that, is the Reactor moving?". Absent in board-only tests (and when no Reactor
+   * is wired), where its half of the status line is simply empty.
+   */
+  activity?: ReactorActivity;
 }
 
 /**
@@ -137,7 +147,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, activity }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -394,11 +404,30 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: 
         </Box>
       )}
       <Box flexShrink={0}>
-        <StatusLine autoRun={autoRun} />
+        <StatusLine autoRun={autoRun} activity={activity} />
       </Box>
     </Box>
   );
 }
+
+/**
+ * The display text and colour for the board-level reactor-activity indicator,
+ * keyed by {@link ReactorActivity}. Each rides a glyph + word so the three states
+ * read at a glance, and the colour grades the urgency: **working** green (the
+ * Reactor is moving), **idle** dim (on, but quietly waiting — not an alarm),
+ * **at-rest** dim (braked, expected stillness). Deliberately quiet overall: an
+ * actively-spawning board is the "good" state, and the loud colours are reserved
+ * for the per-card markers (suppressed red, orphan yellow) where attention is
+ * actually needed.
+ */
+const ACTIVITY_INDICATOR: Record<
+  ReactorActivity,
+  { text: string; color?: string; dim?: boolean }
+> = {
+  working: { text: "⚙ working", color: "green" },
+  idle: { text: "… idle", dim: true },
+  "at-rest": { text: "□ at-rest", dim: true },
+};
 
 /**
  * The persistent bottom-row keybind hints, surfacing the primary gestures so they
@@ -415,24 +444,42 @@ const KEY_HINTS: readonly string[] = [
 ];
 
 /**
- * The persistent board status line: the auto-run indicator on the left, the
- * keybind hints pushed to the right by a {@link Spacer}, with explicit spacing
- * between the two so they read as distinct elements even when the bar is narrow
- * and the Spacer collapses.
+ * The persistent board status line: the auto-run indicator and the reactor
+ * activity signal on the left, the keybind hints pushed to the right by a
+ * {@link Spacer}, with explicit spacing between the two so they read as distinct
+ * elements even when the bar is narrow and the Spacer collapses.
  *
  * The auto-run indicator is always shown when its seam is wired — an idle
  * on-Reactor and an off one both leave the board still, so the off state must be
- * legible (ADR 0007). When no seam is wired (board-only tests) its half is empty.
- * The hints, by contrast, are *always* shown regardless of the auto-run seam:
- * they are what make the keybinds discoverable, so they must not hinge on a
- * Reactor being present. "auto-run", never "reactor".
+ * legible (ADR 0007). The **activity** signal sits beside it as a *distinct*
+ * element (Issue: surface reactor state): auto-run on/off is the brake; activity
+ * is whether the Reactor is moving — working / idle / at-rest. Both are absent in
+ * board-only tests (their halves of the line simply empty), derived from
+ * in-memory Reactor state, never written to disk (ADR 0002).
+ *
+ * The hints, by contrast, are *always* shown regardless of either seam: they are
+ * what make the keybinds discoverable, so they must not hinge on a Reactor being
+ * present. "auto-run"/"working"/"idle"/"at-rest" — never "reactor".
  */
-function StatusLine({ autoRun }: { autoRun?: AutoRun }) {
+function StatusLine({
+  autoRun,
+  activity,
+}: {
+  autoRun?: AutoRun;
+  activity?: ReactorActivity;
+}) {
+  const indicator = activity ? ACTIVITY_INDICATOR[activity] : undefined;
   return (
     <Box>
       {autoRun ? (
         <Text dimColor>
           {autoRun.enabled ? "▶ auto-run on" : "⏸ auto-run off"}
+        </Text>
+      ) : null}
+      {indicator ? (
+        <Text dimColor={indicator.dim} color={indicator.color}>
+          {autoRun ? "  " : ""}
+          {indicator.text}
         </Text>
       ) : null}
       <Spacer />

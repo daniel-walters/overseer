@@ -86,6 +86,7 @@ describe("LiveApp", () => {
     const reactor: Reactor = {
       reconcile: vi.fn(),
       setEnabled: vi.fn(),
+      activity: vi.fn(() => "idle" as const),
     };
 
     const { stdin, lastFrame } = render(
@@ -114,5 +115,60 @@ describe("LiveApp", () => {
     // Toggling back on re-enables the Reactor (which itself catch-up reconciles).
     expect(reactor.setEnabled).toHaveBeenCalledWith(true);
     expect(stripAnsi(lastFrame() ?? "")).toContain("auto-run on");
+  });
+
+  it("surfaces the Reactor's activity signal on the status line", async () => {
+    // The board-level idle/working/at-rest signal is read off the live Reactor and
+    // threaded to the status line beside the auto-run indicator (Issue: surface
+    // reactor state). It reflects the Reactor's current in-memory state on each
+    // render, so it updates as the Reactor's activity changes.
+    let current: "idle" | "working" = "idle";
+    const reactor: Reactor = {
+      reconcile: vi.fn(),
+      setEnabled: vi.fn(),
+      activity: vi.fn(() => current),
+    };
+
+    let onChange = () => {};
+    const { lastFrame } = render(
+      <LiveApp
+        root="/root"
+        initialBoard={makeBoard()}
+        scan={() => makeBoard()}
+        watch={(_r, cb) => {
+          onChange = cb;
+          return () => {};
+        }}
+        reactor={reactor}
+      />,
+    );
+
+    // Idle to begin with: on, nothing spawning.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("idle");
+
+    // A rebuild reconciles the Reactor, which now reports working; the next render
+    // reflects the new signal.
+    current = "working";
+    onChange();
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("working");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("idle");
+  });
+
+  it("renders no activity signal when no Reactor is wired", () => {
+    // Board-only render (no reactor): the activity half of the status line is
+    // empty, just like the auto-run indicator, never a phantom default.
+    const { lastFrame } = render(
+      <LiveApp
+        root="/root"
+        initialBoard={makeBoard()}
+        scan={() => makeBoard()}
+        watch={() => () => {}}
+      />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("working");
+    expect(frame).not.toContain("idle");
+    expect(frame).not.toContain("at-rest");
   });
 });

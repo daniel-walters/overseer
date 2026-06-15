@@ -1169,3 +1169,54 @@ describe("App auto-run", () => {
     expect(autoRun.toggle).not.toHaveBeenCalled();
   });
 });
+
+describe("App reactor activity", () => {
+  /** An auto-run seam whose toggle is a spy, defaulting to enabled. */
+  function spyAutoRun(enabled = true) {
+    return { enabled, toggle: vi.fn<() => void>() };
+  }
+
+  it("shows the working indicator when the Reactor is actively spawning", () => {
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(true)} activity="working" />,
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toContain("working");
+  });
+
+  it("shows the idle indicator when auto-run is on but nothing is eligible", () => {
+    // The signal an idle on-Reactor needs: a still board that is on, not braked.
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(true)} activity="idle" />,
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toContain("idle");
+  });
+
+  it("shows the at-rest indicator when auto-run is off", () => {
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(false)} activity="at-rest" />,
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toContain("at-rest");
+  });
+
+  it("renders the activity signal alongside the auto-run indicator, not replacing it", () => {
+    // The two are distinct status-line elements (the Issue's acceptance criterion):
+    // auto-run on/off is the brake, activity is whether it's moving. Both show.
+    const { lastFrame } = render(
+      <App board={board} autoRun={spyAutoRun(true)} activity="idle" />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("auto-run on");
+    expect(frame).toContain("idle");
+    expect(frame).toContain("? help");
+  });
+
+  it("shows no activity indicator when none is wired (board-only tests)", () => {
+    // Like the auto-run seam, the activity signal is absent in board-only renders;
+    // its half of the status line is simply empty, never a phantom default.
+    const { lastFrame } = render(<App board={board} />);
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("working");
+    expect(frame).not.toContain("idle");
+    expect(frame).not.toContain("at-rest");
+  });
+});

@@ -11,8 +11,8 @@ const board = (title: string): Board => ({
 
 /** A tiny probe component that renders the live board's first PRD title. */
 function Probe(props: Parameters<typeof useLiveBoard>[0]) {
-  const live = useLiveBoard(props);
-  return <Text>{live.prds[0]?.title ?? "(empty)"}</Text>;
+  const board = useLiveBoard(props);
+  return <Text>{board.prds[0]?.title ?? "(empty)"}</Text>;
 }
 
 const tick = () => new Promise((r) => setTimeout(r, 20));
@@ -70,6 +70,7 @@ describe("useLiveBoard", () => {
     const reactor = {
       reconcile: vi.fn(() => order.push("reconcile")),
       setEnabled: vi.fn(),
+      activity: vi.fn(() => "idle" as const),
     };
 
     render(
@@ -88,6 +89,44 @@ describe("useLiveBoard", () => {
     // The reactor reconciles, and only after the board has been re-scanned.
     expect(reactor.reconcile).toHaveBeenCalledTimes(1);
     expect(order).toEqual(["scan", "reconcile"]);
+  });
+
+  it("fires onReconciled after each post-rebuild reconcile, in order", async () => {
+    // The activity signal is owned by the caller (LiveApp), which re-reads the
+    // Reactor in this callback. The hook's contract is just that it fires it after
+    // the scan and reconcile, so the caller's read sees the fresh tally.
+    let onChange = () => {};
+    const order: string[] = [];
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+    const reactor = {
+      reconcile: vi.fn(() => order.push("reconcile")),
+      setEnabled: vi.fn(),
+      activity: vi.fn(() => "idle" as const),
+    };
+    const onReconciled = vi.fn(() => order.push("onReconciled"));
+
+    render(
+      <Probe
+        root="/root"
+        initialBoard={board("First")}
+        scan={() => {
+          order.push("scan");
+          return board("Updated");
+        }}
+        watch={watch}
+        reactor={reactor}
+        onReconciled={onReconciled}
+      />,
+    );
+
+    onChange();
+    await tick();
+
+    expect(onReconciled).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(["scan", "reconcile", "onReconciled"]);
   });
 
   it("works with no reactor wired (board-only tests)", async () => {

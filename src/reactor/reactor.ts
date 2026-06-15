@@ -18,6 +18,12 @@ import {
   recordingLogFailure,
   type FailedSet,
 } from "./failedSet.js";
+import { deriveActivity, type ReactorActivity } from "./reactorActivity.js";
+
+// Re-exported so a consumer threading the activity signal through the UI (the
+// live loop, the status line) imports the type from the Reactor it reads it off,
+// not a second hop through the derivation module.
+export type { ReactorActivity } from "./reactorActivity.js";
 
 /**
  * The I/O seams the Reactor injects into both spawn edges — the *same* the
@@ -81,6 +87,16 @@ export interface Reactor {
    * event. In-memory and on by default; not persisted (ADR 0007).
    */
   setEnabled(enabled: boolean): void;
+  /**
+   * The board-level activity signal — **working** / **idle** / **at-rest** —
+   * derived from the Reactor's in-memory state (auto-run on/off plus whether the
+   * most recent reconcile spawned). The second surfaced reactor-state overlay,
+   * distinct from the auto-run on/off indicator and, like the suppressed marker,
+   * never written to the watched root (ADR 0002, ADR 0011). Read by the live loop
+   * after each reconcile to drive the status-line indicator. Total: it is a
+   * mapping over two in-memory booleans and never throws.
+   */
+  activity(): ReactorActivity;
 }
 
 /**
@@ -147,6 +163,11 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // behaviour (cap 3, medium) when the CLI does not inject config — the path the
   // Reactor's own unit tests take.
   const review = deps.review ?? DEFAULT_REVIEW_CONFIG;
+  // Whether the most recent reconcile attempted any spawn — the second input
+  // (beside `enabled`) to the board-level activity signal. Starts false so a
+  // freshly-opened board with nothing eligible reads `idle` (on, but quiet)
+  // rather than a phantom `working` before it has reconciled at all.
+  let spawnedLastReconcile = false;
 
   return {
     setEnabled(next: boolean): void {
@@ -158,22 +179,42 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
       if (next && wasOff) this.reconcile();
     },
 
+    activity(): ReactorActivity {
+      return deriveActivity({ enabled, spawnedLastReconcile });
+    },
+
     reconcile(): void {
       if (!enabled) return; // auto-run off ⇒ no-op (the user drives with d/r)
       if (reconciling) return; // a reconcile is already running ⇒ no-op
       reconciling = true;
+      // Tally spawn *attempts* for this pass: any candidate that reaches the
+      // `claude --bg` tip means the Reactor found eligible work and acted, so it
+      // is "working" even if that one launch then throws (a failed launch is
+      // already surfaced per-card by the suppressed marker — ADR 0011). The
+      // counting wrapper sits over `deps.spawn` for the duration of this pass so
+      // every edge (`runDispatch`/`runReview`) is counted through one seam.
+      let spawnedThisReconcile = false;
+      const countingDeps: ReactorDeps = {
+        ...deps,
+        spawn: (repo, prompt) => {
+          spawnedThisReconcile = true;
+          return deps.spawn(repo, prompt);
+        },
+      };
       try {
         for (const swept of sweepFrontier(readPrds(root))) {
           // The PRD's feature branch — the implementor's worktree base and the
           // reviewer's merge target — is derived once here and shared by both
           // edges, so the two can't drift on how it's computed.
           const featureBranch = featureBranchName(basename(swept.prdDir));
-          dispatchEligible(swept, featureBranch, deps, failed);
-          reviewEligible(swept, featureBranch, deps, failed, review);
+          dispatchEligible(swept, featureBranch, countingDeps, failed);
+          reviewEligible(swept, featureBranch, countingDeps, failed, review);
         }
       } finally {
-        // Always release the guard, even if a path we believed total threw, so a
-        // single bad pass can never wedge the Reactor shut for the session.
+        // Publish this pass's tally and always release the guard, even if a path
+        // we believed total threw, so a single bad pass can never wedge the
+        // Reactor shut or strand a stale activity signal for the session.
+        spawnedLastReconcile = spawnedThisReconcile;
         reconciling = false;
       }
     },
