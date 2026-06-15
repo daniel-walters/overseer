@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReviewer, type ReviewerDeps } from "./reviewer.js";
+import { createFailedSet } from "../reactor/failedSet.js";
 
 const checkoutFlow = fileURLToPath(
   new URL("../dispatch/__fixtures__/dispatch/checkout-flow", import.meta.url),
@@ -28,6 +29,7 @@ function recordingDeps(overrides: Partial<ReviewerDeps> = {}): ReviewerDeps & {
     },
     logFailure: (r) => failures.push(r),
     recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
+    failedSet: createFailedSet(),
     ...overrides,
   };
 }
@@ -141,6 +143,43 @@ describe("createReviewer", () => {
           edge: "reviewer",
         },
       ]);
+    });
+
+    it("records a failed manual r launch into the shared failed-set under the reviewer edge", () => {
+      // The behaviour change (ADR 0011): a manual `r` launch failure lands in the
+      // same session-scoped failed-set the Reactor reads, keyed by the Issue's
+      // full path under the reviewer edge — so the next reconcile suppresses its
+      // reviewer spawn exactly as it would an automated failure.
+      const failedSet = createFailedSet();
+      const deps = recordingDeps({
+        failedSet,
+        spawn: () => {
+          throw new Error("claude: command not found");
+        },
+      });
+      const reviewer = createReviewer(root, deps);
+
+      const preview = reviewer.readReview("checkout-flow", "004-receipt-email.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      const path = join(root, "checkout-flow", "004-receipt-email.md");
+      expect(failedSet.has(path, "reviewer")).toBe(true);
+      // The implementor edge for the same Issue is untouched.
+      expect(failedSet.has(path, "implementor")).toBe(false);
+    });
+
+    it("does not touch the failed-set when a manual r launch succeeds", () => {
+      const failedSet = createFailedSet();
+      const deps = recordingDeps({ failedSet });
+      const reviewer = createReviewer(root, deps);
+
+      const preview = reviewer.readReview("checkout-flow", "004-receipt-email.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      const path = join(root, "checkout-flow", "004-receipt-email.md");
+      expect(failedSet.has(path, "reviewer")).toBe(false);
     });
 
     it("does not spawn an ineligible Issue even if review is called", () => {

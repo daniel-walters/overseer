@@ -13,6 +13,7 @@ import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
 import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
+import { createFailedSet } from "./reactor/failedSet.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
@@ -95,16 +96,29 @@ function runBoard(): void {
     });
   };
   const initialBoard = scanWithLiveness(root);
+  // The one session-scoped failed-set, constructed per board run and shared
+  // across all three spawn triggers below — the Reactor's auto-spawn and the
+  // manual `d`/`r` edges. A launch failure on any edge records into this single
+  // set, so a failed manual `d`/`r` is suppressed from the next reconcile exactly
+  // as an automated failure is (ADR 0011). It is never persisted: reopening the
+  // board builds a fresh set and retries every previously-failed spawn (ADR 0007).
+  const failedSet = createFailedSet();
   const dispatcher = createDispatcher(root, {
     git: realGitSeam,
     spawn,
     logFailure,
     recordHandle,
+    failedSet,
   });
   // The reviewer reuses the very same `claude --bg` spawn edge — a reviewer is
   // just another background agent — flipping ready-for-review → in-review and
   // launching the reviewer in the Issue's repo.
-  const reviewer = createReviewer(root, { spawn, logFailure, recordHandle });
+  const reviewer = createReviewer(root, {
+    spawn,
+    logFailure,
+    recordHandle,
+    failedSet,
+  });
   // Orphan recovery (ADR 0009): `R` on an orphaned card rolls its active status
   // back onto its frontier through the same status seam the launch-failure
   // rollback uses. It spawns nothing — the normal spawn edge (the Reactor below
@@ -126,6 +140,7 @@ function runBoard(): void {
     spawn,
     logFailure,
     recordHandle,
+    failedSet,
   });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell

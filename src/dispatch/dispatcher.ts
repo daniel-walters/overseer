@@ -5,6 +5,7 @@ import { writeStatus } from "../issueFile.js";
 import { runDispatch, type FailureRecord } from "./dispatch.js";
 import { featureBranchName, type GitSeam } from "./gitSetup.js";
 import { buildImplementorPrompt } from "./implementorPrompt.js";
+import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
 import type { Dispatcher } from "../ui/App.js";
 
 /**
@@ -26,6 +27,14 @@ export interface DispatcherDeps {
   readonly logFailure: (record: FailureRecord) => void;
   /** Record a launched agent's handle against its Issue key in the sidecar. */
   readonly recordHandle: (issueKey: string, handle: string) => void;
+  /**
+   * The session-scoped failed-set shared with the Reactor and the reviewer. A
+   * manual `d` launch that fails records `(path, implementor)` here, so the next
+   * Reactor reconcile subtracts that Issue and does not re-spawn it this session
+   * — a failed launch is a failed launch regardless of who triggered it (ADR
+   * 0011). The CLI injects the one shared instance.
+   */
+  readonly failedSet: FailedSet;
 }
 
 /**
@@ -86,7 +95,11 @@ export function createDispatcher(
             featureBranch,
           }),
         spawn: deps.spawn,
-        logFailure: deps.logFailure,
+        // Route this manual `d` launch's failures through the shared failed-set
+        // (keyed by the Issue's full path, prdDir/filename) before the durable
+        // log, so a failed manual dispatch is suppressed from the next Reactor
+        // reconcile exactly as an automated one is.
+        logFailure: recordingLogFailure(deps.failedSet, prdDir, deps.logFailure),
         recordHandle: deps.recordHandle,
       });
     },
