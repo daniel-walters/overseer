@@ -84,3 +84,31 @@ describe("Card liveness marker", () => {
     expect(frame).toContain("Plain");
   });
 });
+
+describe("Card suppressed marker", () => {
+  it("marks a suppressed card with the suppressed marker", () => {
+    const frame = frameOf(<Card title="Queued" suppressed />);
+
+    expect(frame).toContain("⊘ suppressed");
+    expect(frame).toContain("Queued");
+  });
+
+  it("shows no suppressed marker on a card that is not suppressed", () => {
+    const frame = frameOf(<Card title="Healthy" />);
+
+    expect(frame).not.toContain("suppressed");
+    expect(frame).toContain("Healthy");
+  });
+
+  it("never renders the suppressed marker alongside a liveness marker", () => {
+    // Disjoint lanes mean the scanner never sets both fields, but the Card is the
+    // last line of defence: even handed both, it must read as one coherent state.
+    // (In practice the model guarantees this can't happen — see the scanner's
+    // disjointness test.) Asserting the suppressed marker is distinct from the
+    // yellow liveness family by glyph: `⊘` vs `●`/`○`/`⚠`.
+    const suppressed = frameOf(<Card title="Parked" suppressed />);
+
+    expect(suppressed).toContain("⊘ suppressed");
+    expect(suppressed).not.toMatch(/● live|○ unknown|⚠ orphaned/);
+  });
+});

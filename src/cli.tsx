@@ -13,7 +13,7 @@ import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
 import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
-import { createFailedSet } from "./reactor/failedSet.js";
+import { createFailedSet, suppressedSeam } from "./reactor/failedSet.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
@@ -78,31 +78,41 @@ function runBoard(): void {
   // the active-lane gate. Wrapping `scanBoard` so the overlay is recomputed on
   // every rebuild keeps liveness a derived overlay, never persisted into the
   // Issue files (ADR 0002) — a handle that drops out flips to absent on the next
-  // scan. `scanWithLiveness` is used for both the eager first render and the live
-  // re-scan, so the board carries liveness from the very first frame.
+  // scan. `scanWithOverlays` (below) applies both the liveness and the suppressed
+  // overlay, and is used for both the eager first render and the live re-scan, so
+  // the board carries both overlays from the very first frame.
   const probe = createLivenessProbe({
     query: realLivenessQuery,
     readHandles,
   });
-  const scanWithLiveness = (r: string): Board => {
-    // Run the probe *lazily*, memoised for this scan: `scanBoard` only calls the
-    // lookup for an in-progress / in-review card (LIVENESS_LANES), so a board
-    // with no active-agent card never forks `claude agents --json` at all — the
-    // subprocess is deferred to the first active card and reused for the rest.
-    let verdicts: Record<string, Absence> | undefined;
-    return scanBoard(r, (issuePath) => {
-      verdicts ??= probe();
-      return verdicts[issuePath];
-    });
-  };
-  const initialBoard = scanWithLiveness(root);
   // The one session-scoped failed-set, constructed per board run and shared
   // across all three spawn triggers below — the Reactor's auto-spawn and the
   // manual `d`/`r` edges. A launch failure on any edge records into this single
   // set, so a failed manual `d`/`r` is suppressed from the next reconcile exactly
   // as an automated failure is (ADR 0011). It is never persisted: reopening the
   // board builds a fresh set and retries every previously-failed spawn (ADR 0007).
+  // Constructed before the scan callback so the read-only `suppressedSeam` over it
+  // can drive the board's suppressed overlay (the spawn edges only ever write it).
   const failedSet = createFailedSet();
+  const isSuppressed = suppressedSeam(failedSet);
+  const scanWithOverlays = (r: string): Board => {
+    // Run the probe *lazily*, memoised for this scan: `scanBoard` only calls the
+    // liveness lookup for an in-progress / in-review card (LIVENESS_LANES), so a
+    // board with no active-agent card never forks `claude agents --json` at all —
+    // the subprocess is deferred to the first active card and reused for the rest.
+    // The suppressed lookup is a pure in-memory `Set` read, so it needs no such
+    // deferral. The two overlays gate disjoint lanes, so no card carries both.
+    let verdicts: Record<string, Absence> | undefined;
+    return scanBoard(
+      r,
+      (issuePath) => {
+        verdicts ??= probe();
+        return verdicts[issuePath];
+      },
+      isSuppressed,
+    );
+  };
+  const initialBoard = scanWithOverlays(root);
   const dispatcher = createDispatcher(root, {
     git: realGitSeam,
     spawn,
@@ -145,7 +155,7 @@ function runBoard(): void {
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
-  // Every fail-fast check above (loadConfig, the eager scanWithLiveness) runs
+  // Every fail-fast check above (loadConfig, the eager scanWithOverlays) runs
   // *before* this call, so a config/scan error still prints on the normal screen
   // rather than onto the alt buffer, where it would be wiped on restore. The
   // liveness query inside that eager scan is bounded (timeout + maxBuffer) and
@@ -155,7 +165,7 @@ function runBoard(): void {
     <LiveApp
       root={root}
       initialBoard={initialBoard}
-      scan={scanWithLiveness}
+      scan={scanWithOverlays}
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}

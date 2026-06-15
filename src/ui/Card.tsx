@@ -13,6 +13,13 @@ interface CardProps {
    * (CONTEXT.md, ADR 0008): whether its agent is still in Claude's live set.
    */
   liveness?: Liveness;
+  /**
+   * Suppressed marker, present only on an awaiting `ready-for-agent` /
+   * `ready-for-review` card whose last spawn launch failed this session
+   * (CONTEXT.md, ADR 0011). Disjoint from {@link liveness} (opposite lanes), so
+   * the two markers can never co-render on one card.
+   */
+  suppressed?: boolean;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -50,12 +57,23 @@ const LIVENESS_MARKER: Record<Liveness, { text: string; color: string }> = {
   orphaned: { text: "⚠ orphaned", color: "yellow" },
 };
 
+/**
+ * The suppressed marker, following the same own-line idiom as the liveness and
+ * human-review markers. Red and `⊘` deliberately set it apart from the yellow
+ * "needs a human" warning family (orphaned, deviation, conflict, non-convergence):
+ * this is "nothing ran — fix the environment and reopen", not "an agent's work
+ * needs your judgment" (ADR 0011). Edge-agnostic by design — the column already
+ * tells you whether it is the implementor or reviewer edge.
+ */
+const SUPPRESSED_MARKER = "⊘ suppressed";
+
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
   readyFor,
   humanReviewReason,
   liveness,
+  suppressed,
   selected = false,
 }: CardProps) {
   return (
@@ -83,6 +101,14 @@ export function Card({
         // title, so the overlay never displaces the card's identity.
         <Text wrap="truncate-end" color={LIVENESS_MARKER[liveness].color}>
           {LIVENESS_MARKER[liveness].text}
+        </Text>
+      )}
+      {suppressed && (
+        // Its own truncating line, red — a launch-failed card parked this
+        // session. Disjoint lanes mean this never renders alongside a liveness
+        // marker (ADR 0011).
+        <Text wrap="truncate-end" color="red">
+          {SUPPRESSED_MARKER}
         </Text>
       )}
     </Box>
