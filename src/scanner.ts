@@ -239,9 +239,11 @@ function applySuppressed(
   // `Object.hasOwn`, not a bare index: a frontmatter status that collides with an
   // inherited `Object.prototype` name (`toString`, `constructor`, …) would index
   // a truthy function and pass a non-{@link SpawnEdgeKind} into the lookup. The
-  // own-key guard gates the lane *and* narrows `status` to a real suppressed
-  // status, so the index below needs no `keyof` cast (a cast would silently keep
-  // compiling if the map ever mapped a status to a non-`SpawnEdgeKind` value).
+  // own-key guard gates the lane to a real suppressed status; `Object.hasOwn`
+  // doesn't narrow `status` in TS, so the `keyof` cast on the index is still
+  // required. The payoff is the explicit `: SpawnEdgeKind` annotation below
+  // (rather than an `as SpawnEdgeKind`): it fails to compile if the map ever
+  // maps a status to a non-`SpawnEdgeKind` value, which a value cast would not.
   if (!Object.hasOwn(SUPPRESSED_EDGE_BY_STATUS, status)) return issue;
   const edge: SpawnEdgeKind = SUPPRESSED_EDGE_BY_STATUS[
     status as keyof typeof SUPPRESSED_EDGE_BY_STATUS
