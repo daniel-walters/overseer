@@ -96,9 +96,12 @@ export function Card({
           {REASON_MARKER[humanReviewReason]}
         </Text>
       )}
-      {liveness && (
+      {liveness && !suppressed && (
         // Mirrors the human-review marker: its own truncating line under the
-        // title, so the overlay never displaces the card's identity.
+        // title, so the overlay never displaces the card's identity. Disjoint
+        // lanes mean the scanner never sets both (ADR 0011); the `!suppressed`
+        // guard is the Card's own last line of defence — if both fields ever
+        // arrive, the card still reads as one coherent state (suppressed wins).
         <Text wrap="truncate-end" color={LIVENESS_MARKER[liveness].color}>
           {LIVENESS_MARKER[liveness].text}
         </Text>
