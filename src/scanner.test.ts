@@ -531,12 +531,12 @@ describe("scanBoard suppressed overlay", () => {
   });
 
   it("never marks a card whose status collides with an Object.prototype name", () => {
-    // A status of `toString` / `constructor` is a real string and not an own key of
-    // the status→edge map, so it is not a suppressed lane. The overlay must read the
-    // map with an own-key check, never a bare index that would resolve the inherited
-    // prototype member to a truthy function and pass a non-edge into the lookup. The
-    // lookup asserts it is only ever handed a real edge, so a bare index would trip
-    // it; an unconditional `true` lookup proves the card still stays unmarked.
+    // A status of `toString` / `constructor` is a real string but not a recognised
+    // authored status, so `placeStatus` folds it to `unsorted` — never a suppressed
+    // lane. Because the edge is derived from the validated lane (not by indexing a
+    // raw-status map), such a card can never reach the lookup at all: the lookup
+    // here asserts it is only ever handed a real edge, and an unconditional `true`
+    // return proves the card still stays unmarked.
     const root = mkdtempSync(join(tmpdir(), "overseer-suppressed-proto-"));
     const dir = join(root, "feature");
     mkdirSync(dir);

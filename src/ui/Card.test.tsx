@@ -119,4 +119,16 @@ describe("Card suppressed marker", () => {
     expect(both).toContain("⊘ suppressed");
     expect(both).not.toMatch(/● live|○ unknown|⚠ orphaned/);
   });
+
+  it("never renders a human-review marker alongside the suppressed marker", () => {
+    // The same last-line-of-defence guard covers the human-review marker, not just
+    // liveness: disjoint lanes mean the scanner never co-sets them, but even handed
+    // both, suppressed wins and the yellow reason line never leaks through.
+    const both = frameOf(
+      <Card title="Parked" suppressed humanReviewReason="conflict" />,
+    );
+
+    expect(both).toContain("⊘ suppressed");
+    expect(both).not.toMatch(/⚠ deviation|↻ non-convergence|✗ conflict/);
+  });
 });

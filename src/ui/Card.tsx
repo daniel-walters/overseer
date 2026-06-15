@@ -89,19 +89,22 @@ export function Card({
         {readyFor ? `${BADGE[readyFor]} ` : ""}
         {title}
       </Text>
-      {humanReviewReason && (
+      {humanReviewReason && !suppressed && (
         // The marker rides its own line so it never crowds the title out of the
-        // narrow card under truncation — the title still identifies the card.
+        // narrow card under truncation — the title still identifies the card. The
+        // `!suppressed` guard is the Card's last line of defence, applied to every
+        // marker uniformly (see liveness below): disjoint lanes mean the scanner
+        // never co-sets it (ADR 0011), but if both fields ever arrive the card
+        // still reads as one coherent state — suppressed wins.
         <Text wrap="truncate-end" color="yellow">
           {REASON_MARKER[humanReviewReason]}
         </Text>
       )}
       {liveness && !suppressed && (
         // Mirrors the human-review marker: its own truncating line under the
-        // title, so the overlay never displaces the card's identity. Disjoint
-        // lanes mean the scanner never sets both (ADR 0011); the `!suppressed`
-        // guard is the Card's own last line of defence — if both fields ever
-        // arrive, the card still reads as one coherent state (suppressed wins).
+        // title, so the overlay never displaces the card's identity. Same
+        // `!suppressed` last-line-of-defence guard — if both fields ever arrive,
+        // the card still reads as one coherent state (suppressed wins).
         <Text wrap="truncate-end" color={LIVENESS_MARKER[liveness].color}>
           {LIVENESS_MARKER[liveness].text}
         </Text>

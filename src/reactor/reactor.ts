@@ -124,8 +124,11 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // Auto-run state: on by default, in-memory, dies with the instance (ADR 0007).
   // While false, reconcile() early-returns so nothing auto-spawns.
   let enabled = true;
-  // Session-scoped: one set per Reactor instance. The production caller omits
-  // `deps.failedSet`, so reopening the board builds a fresh set and retries.
+  // Session-scoped. In production the CLI injects the one shared set so a failed
+  // launch on any edge (Reactor auto-spawn or manual `d`/`r`) suppresses the next
+  // reconcile identically (ADR 0011); reopening the board builds a fresh set and
+  // retries. The fallback is for the Reactor's own unit tests, which exercise it
+  // in isolation with a recording fake — never the production path.
   const failed = deps.failedSet ?? createFailedSet();
 
   return {

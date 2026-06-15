@@ -3,7 +3,6 @@ import { join } from "node:path";
 import { FIELD, readString, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
-  SUPPRESSED_EDGE_BY_STATUS,
   placeStatus,
   derivePrdLane,
   type Board,
@@ -158,12 +157,13 @@ function scanIssue(
 
   // The suppressed overlay is the mirror image, gated to the two awaiting
   // `ready-*` lanes (the opposite set from liveness's active lanes), with the
-  // edge derived from the authored status. Disjoint lanes guarantee it never
+  // edge derived from the same placement. Disjoint lanes guarantee it never
   // co-renders with a liveness verdict on one card.
   const withSuppressed = applySuppressed(
     withLiveness,
     path,
-    data[FIELD.status],
+    lane,
+    readyFor,
     lookupSuppressed,
   );
 
@@ -212,18 +212,22 @@ function applyLiveness(
  * / `ready-for-review` card — the mirror image of {@link applyLiveness}, gated to
  * the opposite (awaiting) lanes (PRD: suppressed-card marker, ADR 0011).
  *
- * The edge is derived from the *authored status*, not the lane: `ready-for-agent`
- * and `ready-for-human` both fold into the single `ready` lane, but only the
- * `-agent` half is a spawn target, so reading the raw status is the only way to
- * tell the suppressed lane apart from a `ready-for-human` card and to pick the
- * right edge (`ready-for-agent → implementor`, `ready-for-review → reviewer`).
- * The marker stays edge-agnostic on the card — the column already implies the edge.
+ * The edge is read straight off the already-derived `{lane, readyFor}` — the same
+ * placement {@link applyLiveness} consumes — not re-parsed from the raw status:
+ * `ready-for-agent → implementor` is the one card on the `ready` lane carrying the
+ * `agent` badge (a `ready-for-human` card shares the lane but carries `human`, so
+ * launches nothing), and `ready-for-review → reviewer` is its own dedicated lane.
+ * Any other lane has no spawn edge and is returned unchanged. Deriving from the
+ * validated placement (rather than indexing a status string) means a frontmatter
+ * value that collides with an `Object.prototype` name can never reach the lookup —
+ * `placeStatus` already folded it to `unsorted`. The marker stays edge-agnostic on
+ * the card — the column already implies the edge.
  *
  * Lane-gating here is what makes a lingering failed-set entry inert: an Issue that
- * has left its `ready-*` lane (re-triaged, hand-edited, completed) simply isn't a
- * suppressed-lane status, so it drops the marker even though its `(path, edge)`
- * entry persists in the append-only set. Only `true` stamps the field; a
- * not-suppressed card stays unmarked (no `suppressed: false` noise).
+ * has left its `ready-*` lane (re-triaged, hand-edited, completed) simply isn't on
+ * a suppressed lane, so it drops the marker even though its `(path, edge)` entry
+ * persists in the append-only set. Only `true` stamps the field; a not-suppressed
+ * card stays unmarked (no `suppressed: false` noise).
  *
  * A card on any non-suppressed lane — or any card when no lookup is wired in — is
  * returned unchanged. Because the suppressed lanes are disjoint from the liveness
@@ -232,23 +236,29 @@ function applyLiveness(
 function applySuppressed(
   issue: Issue,
   path: string,
-  status: unknown,
+  lane: Lane,
+  readyFor: ReadyFor | undefined,
   lookupSuppressed?: SuppressedLookup,
 ): Issue {
-  if (!lookupSuppressed || typeof status !== "string") return issue;
-  // `Object.hasOwn`, not a bare index: a frontmatter status that collides with an
-  // inherited `Object.prototype` name (`toString`, `constructor`, …) would index
-  // a truthy function and pass a non-{@link SpawnEdgeKind} into the lookup. The
-  // own-key guard gates the lane to a real suppressed status; `Object.hasOwn`
-  // doesn't narrow `status` in TS, so the `keyof` cast on the index is still
-  // required. The payoff is the explicit `: SpawnEdgeKind` annotation below
-  // (rather than an `as SpawnEdgeKind`): it fails to compile if the map ever
-  // maps a status to a non-`SpawnEdgeKind` value, which a value cast would not.
-  if (!Object.hasOwn(SUPPRESSED_EDGE_BY_STATUS, status)) return issue;
-  const edge: SpawnEdgeKind = SUPPRESSED_EDGE_BY_STATUS[
-    status as keyof typeof SUPPRESSED_EDGE_BY_STATUS
-  ];
+  if (!lookupSuppressed) return issue;
+  const edge = suppressedEdgeForLane(lane, readyFor);
+  if (edge === undefined) return issue;
   return lookupSuppressed(path, edge) ? { ...issue, suppressed: true } : issue;
+}
+
+/**
+ * The spawn edge an awaiting lane implies, or `undefined` if the lane is not a
+ * spawn target. Reads the derived placement, so the two suppressed lanes map to
+ * their edge and every other lane (including a `ready-for-human` card, which
+ * shares the `ready` lane but launches no agent) yields no edge.
+ */
+function suppressedEdgeForLane(
+  lane: Lane,
+  readyFor: ReadyFor | undefined,
+): SpawnEdgeKind | undefined {
+  if (lane === "ready" && readyFor === "agent") return "implementor";
+  if (lane === "ready-for-review") return "reviewer";
+  return undefined;
 }
 
 /**
