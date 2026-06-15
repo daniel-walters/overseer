@@ -236,8 +236,14 @@ function applySuppressed(
   lookupSuppressed?: SuppressedLookup,
 ): Issue {
   if (!lookupSuppressed || typeof status !== "string") return issue;
-  if (!Object.hasOwn(SUPPRESSED_EDGE_BY_STATUS, status)) return issue;
-  const edge = SUPPRESSED_EDGE_BY_STATUS[status as keyof typeof SUPPRESSED_EDGE_BY_STATUS];
+  // Index the map directly: a non-suppressed status reads `undefined` and drops
+  // the overlay, so this folds the lane gate and the edge derivation into one
+  // typed lookup — no `keyof` cast (a cast would keep compiling if the map ever
+  // mapped a status to a non-{@link SpawnEdgeKind} value; this form would not).
+  const edge: SpawnEdgeKind | undefined = (
+    SUPPRESSED_EDGE_BY_STATUS as Record<string, SpawnEdgeKind | undefined>
+  )[status];
+  if (!edge) return issue;
   return lookupSuppressed(path, edge) ? { ...issue, suppressed: true } : issue;
 }
 

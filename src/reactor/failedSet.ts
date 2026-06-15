@@ -1,5 +1,6 @@
 import { join } from "node:path";
 import type { FailureRecord, SpawnEdgeKind } from "../dispatch/failureLog.js";
+import type { SuppressedLookup } from "../scanner.js";
 
 /**
  * A session-scoped record of `(issueKey, edge)` spawns that failed to launch, so
@@ -70,8 +71,13 @@ export function createFailedSet(): FailedSet {
  *
  * Total by construction — it is just a `boolean` query over a `Set`, so an absent
  * or empty set yields `false` for every pair and nothing here can throw.
+ *
+ * The seam's shape is the scanner's published overlay contract
+ * ({@link SuppressedLookup}, the sibling of `LivenessLookup`); `suppressedSeam`
+ * conforms to it so the projection drops straight into `scanBoard`'s suppressed
+ * lookup. Imported rather than re-declared so the contract lives in exactly one
+ * place — the consumer that defines it.
  */
-export type SuppressedLookup = (path: string, edge: SpawnEdgeKind) => boolean;
 
 /**
  * Project a {@link FailedSet} to its {@link SuppressedLookup} — the read-only
