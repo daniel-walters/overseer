@@ -381,12 +381,6 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: 
   if (modal?.kind === "kill") {
     return <KillPreview preview={modal.preview} />;
   }
-  // The help modal is a full-screen takeover like the previews above. It can only
-  // be open when no preview is (the nav.confirming guard blocks `?` under one), so
-  // ordering against the preview returns is moot — at most one is ever set.
-  if (showHelp) {
-    return <HelpModal />;
-  }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)
   const view =
@@ -406,6 +400,17 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: 
         {view}
       </Box>
       <Spacer />
+      {/* Help is an overlay, not a takeover: the board above stays mounted and
+          visible behind it (the surrounding columns and the bottom bar show
+          through — a terminal can't z-layer or dim a whole subtree) so the user
+          keeps their place, with the help card composited over the lower region.
+          It can only be open when no preview is (the nav.confirming guard blocks
+          `?` under one), so at most one modal is ever on screen. */}
+      {showHelp && (
+        <Box flexShrink={0}>
+          <HelpModal />
+        </Box>
+      )}
       {notice !== undefined && (
         <Box flexShrink={0}>
           <Text color="yellow">{notice}</Text>
@@ -419,15 +424,31 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun }: 
 }
 
 /**
+ * The persistent bottom-row keybind hints, surfacing the primary gestures so they
+ * are discoverable without opening `?`. The `d` dispatch ignition leads, followed
+ * by its siblings and the `? help` pointer to the full map. A hardcoded copy of
+ * the bindings the {@link App} input handler implements — a central keybind
+ * registry that would feed both this and {@link HelpModal} is a logged follow-up
+ * (docs/ideas.md), and this Issue does not depend on it.
+ */
+const KEY_HINTS: readonly string[] = [
+  "d dispatch",
+  "r review",
+  "? help",
+];
+
+/**
  * The persistent board status line: the auto-run indicator on the left, the
- * `? help` discovery hint pushed to the right by a {@link Spacer}.
+ * keybind hints pushed to the right by a {@link Spacer}, with explicit spacing
+ * between the two so they read as distinct elements even when the bar is narrow
+ * and the Spacer collapses.
  *
  * The auto-run indicator is always shown when its seam is wired — an idle
  * on-Reactor and an off one both leave the board still, so the off state must be
  * legible (ADR 0007). When no seam is wired (board-only tests) its half is empty.
- * The `? help` hint, by contrast, is *always* shown regardless of the auto-run
- * seam: it is what makes `?` discoverable, so it must not hinge on a Reactor being
- * present. "auto-run", never "reactor".
+ * The hints, by contrast, are *always* shown regardless of the auto-run seam:
+ * they are what make the keybinds discoverable, so they must not hinge on a
+ * Reactor being present. "auto-run", never "reactor".
  */
 function StatusLine({ autoRun }: { autoRun?: AutoRun }) {
   return (
@@ -438,7 +459,10 @@ function StatusLine({ autoRun }: { autoRun?: AutoRun }) {
         </Text>
       ) : null}
       <Spacer />
-      <Text dimColor>? help</Text>
+      {/* A fixed gap guarantees separation from the auto-run indicator even when
+          the content-sized bar leaves the Spacer with nothing to push apart. */}
+      {autoRun ? <Text>{"   "}</Text> : null}
+      <Text dimColor>{KEY_HINTS.join("  ·  ")}</Text>
     </Box>
   );
 }
