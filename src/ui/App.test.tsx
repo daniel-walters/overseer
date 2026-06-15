@@ -1022,6 +1022,80 @@ describe("App help", () => {
     const { lastFrame } = render(<App board={board} />);
     expect(stripAnsi(lastFrame() ?? "")).toContain("? help");
   });
+
+  it("overlays the help on the board (board still visible) rather than replacing it", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("?");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    // Help is up...
+    expect(frame).toContain("Keybindings");
+    // ...but the board behind it is still rendered (not a screen takeover): the
+    // selected PRD's card is still on screen so the user keeps their place.
+    expect(frame).toContain("AuthPRD");
+    expect(frame).toContain("BillPRD");
+  });
+
+  it("preserves the zoomed Issue level behind the help overlay", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("?");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Keybindings");
+    // Still zoomed into the Issues behind the overlay — the place is preserved.
+    expect(frame).toContain("Login");
+  });
+});
+
+describe("App bottom-row keybind hints", () => {
+  it("surfaces the d dispatch keybind as a persistent bottom-row hint, without opening help", () => {
+    // The primary ignition gesture must be discoverable on the board itself, not
+    // only behind `?`. The hint shows whenever the board is up.
+    const { lastFrame } = render(<App board={board} />);
+    const frame = stripAnsi(lastFrame() ?? "");
+
+    // The bottom row carries the dispatch binding and its siblings — visible
+    // without ever opening the help modal.
+    expect(frame).toContain("d dispatch");
+    expect(frame).not.toContain("Keybindings"); // help is not open
+  });
+
+  it("includes the sibling review keybind in the bottom-row hint", () => {
+    const { lastFrame } = render(<App board={board} />);
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("r review");
+  });
+
+  it("keeps the bottom-row hints at the Issue level too", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("d dispatch");
+  });
+
+  it("separates the auto-run indicator from the keybind hints with spacing", () => {
+    // The auto indicator and the `? help` hint used to render flush; they must
+    // read as distinct elements. With both on the bottom bar there is visible
+    // whitespace between the indicator text and the first hint.
+    const { lastFrame } = render(
+      <App board={board} autoRun={{ enabled: true, toggle: () => {} }} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    const barLine = frame.split("\n").find((l) => l.includes("auto-run on"));
+    expect(barLine).toBeDefined();
+    // The indicator and the hints are not jammed together — there is whitespace
+    // between the end of "auto-run on" and the start of the keybind hints.
+    expect(barLine).toMatch(/auto-run on\s{2,}.*\? help/);
+  });
 });
 
 describe("App auto-run", () => {
