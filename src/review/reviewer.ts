@@ -1,4 +1,4 @@
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { writeStatus } from "../issueFile.js";
 import { featureBranchName } from "../dispatch/gitSetup.js";
 import type { FailureRecord } from "../dispatch/dispatch.js";
@@ -6,6 +6,7 @@ import { readReviewTarget, type ReviewPreview } from "./reviewReader.js";
 import { classifyReviewability } from "./eligibility.js";
 import { buildReviewerPrompt } from "./reviewerPrompt.js";
 import { runReview } from "./review.js";
+import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
 import type { Reviewer } from "../ui/App.js";
 
 /**
@@ -26,6 +27,14 @@ export interface ReviewerDeps {
   readonly logFailure: (record: FailureRecord) => void;
   /** Record a launched reviewer's handle against its Issue key in the sidecar. */
   readonly recordHandle: (issueKey: string, handle: string) => void;
+  /**
+   * The session-scoped failed-set shared with the Reactor and the dispatcher. A
+   * manual `r` launch that fails records `(path, reviewer)` here, so the next
+   * Reactor reconcile subtracts that Issue and does not re-spawn its reviewer
+   * this session — a failed launch is a failed launch regardless of who
+   * triggered it (ADR 0011). The CLI injects the one shared instance.
+   */
+  readonly failedSet: FailedSet;
 }
 
 /**
@@ -77,7 +86,16 @@ export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
             featureBranch: preview.featureBranch,
           }),
         spawn: deps.spawn,
-        logFailure: deps.logFailure,
+        // Route this manual `r` launch's failures through the shared failed-set
+        // before the durable log. The Issue's `path` is `prdDir/filename`, so its
+        // directory is the `prdDir` the helper re-joins the bare filename with —
+        // the same full-path key the Reactor reads, so a failed manual review is
+        // suppressed from the next reconcile under the reviewer edge.
+        logFailure: recordingLogFailure(
+          deps.failedSet,
+          dirname(preview.issue.path),
+          deps.logFailure,
+        ),
         recordHandle: deps.recordHandle,
       });
     },
