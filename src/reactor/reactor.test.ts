@@ -649,3 +649,105 @@ describe("createReactor", () => {
     expect(readFileSync(file, "utf8")).toContain("status: in-review");
   });
 });
+
+/**
+ * The board-level activity signal the Reactor exposes (Issue: surface reactor
+ * state) — the second surfaced reactor-state overlay, distinct from the auto-run
+ * on/off indicator. It reports whether the Reactor is **working** (the last
+ * reconcile spawned), **idle** (on but nothing eligible last reconcile), or
+ * **at-rest** (auto-run off). Derived from in-memory state only, never disk.
+ */
+describe("createReactor activity", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "overseer-reactor-activity-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  it("starts idle: on by default, nothing reconciled yet", () => {
+    const reactor = createReactor(root, recordingDeps());
+    expect(reactor.activity()).toBe("idle");
+  });
+
+  it("reports working after a reconcile that spawns", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+
+    expect(deps.spawns).toHaveLength(1);
+    expect(reactor.activity()).toBe("working");
+  });
+
+  it("reports idle after a reconcile that spawns nothing", () => {
+    // Everything is done — nothing eligible — so the reconcile spawns nothing and
+    // the board is still because there's no work, not because it's braked.
+    writePrd(root, "alpha", {
+      "001-done.md": fm({ status: "done", repo: "/repos/alpha" }),
+    });
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+
+    expect(deps.spawns).toHaveLength(0);
+    expect(reactor.activity()).toBe("idle");
+  });
+
+  it("falls back to idle once a working pass is followed by an empty one", () => {
+    // The signal reflects the *most recent* reconcile, not a sticky high-water
+    // mark: once the spawn wave drains, the Reactor reads idle again.
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile(); // spawns 001 → working
+    expect(reactor.activity()).toBe("working");
+
+    // 001 is now in-progress (flipped before spawn); a second reconcile finds
+    // nothing eligible.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+    expect(reactor.activity()).toBe("idle");
+  });
+
+  it("reports at-rest whenever auto-run is off, regardless of the last spawn", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile(); // working
+    expect(reactor.activity()).toBe("working");
+
+    reactor.setEnabled(false);
+    expect(reactor.activity()).toBe("at-rest");
+  });
+
+  it("returns to working when auto-run is re-enabled and the catch-up reconcile spawns", () => {
+    writePrd(root, "alpha", {
+      "001-go.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+    });
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+    reactor.setEnabled(false);
+    expect(reactor.activity()).toBe("at-rest");
+
+    // Re-enabling runs an immediate catch-up reconcile that spawns the eligible
+    // Issue, so the signal flips at-rest → working off that pass.
+    reactor.setEnabled(true);
+
+    expect(deps.spawns).toHaveLength(1);
+    expect(reactor.activity()).toBe("working");
+  });
+});

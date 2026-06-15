@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { App, type Dispatcher, type Reviewer, type Rollback, type Killer } from "./App.js";
 import { useLiveBoard, type UseLiveBoardOptions } from "./useLiveBoard.js";
 
@@ -23,7 +23,22 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  * loses their place. The dispatcher and reviewer are threaded straight through.
  */
 export function LiveApp({ dispatcher, reviewer, rollback, killer, ...options }: LiveAppProps) {
-  const board = useLiveBoard(options);
+  const reactor = options.reactor;
+  // The board-level reactor-activity signal shown beside the auto-run indicator
+  // (Issue: surface reactor state). LiveApp owns it as a single source of truth,
+  // seeded from the Reactor's current state (a fresh on-Reactor reads idle), and
+  // re-reads `reactor.activity()` on each of its two drivers: a post-rebuild
+  // reconcile (via the live loop's onReconciled below) and the auto-run toggle
+  // (which flips the Reactor on/off with no filesystem event). Absent when no
+  // Reactor is wired (board-only tests) — its status-line half stays empty.
+  const [activity, setActivity] = useState(() => reactor?.activity());
+  // Stable so it can be a useLiveBoard effect dependency without re-subscribing
+  // the watcher every render. Fires after each reconcile to publish the fresh
+  // signal in the same tick the board rebuilt.
+  const onReconciled = useCallback(() => {
+    setActivity(reactor?.activity());
+  }, [reactor]);
+  const board = useLiveBoard({ ...options, onReconciled });
   // Auto-run state lives here, beside the live loop that owns the Reactor — on by
   // default, in-memory, dies on unmount (ADR 0007). The `a` keybind flips it; the
   // flip drives both the indicator (this state) and the Reactor (setEnabled, whose
@@ -40,7 +55,12 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, ...options }: 
       // lockstep on every flip.
       setAutoRunOn((prev) => {
         const next = !prev;
-        options.reactor?.setEnabled(next);
+        reactor?.setEnabled(next);
+        // Re-read the Reactor's activity after the flip: disabling makes it report
+        // at-rest immediately, and re-enabling runs a catch-up reconcile that may
+        // flip it to working — neither involves a filesystem event, so the
+        // indicator would otherwise lag until the next board rebuild.
+        setActivity(reactor?.activity());
         return next;
       });
     },
@@ -53,6 +73,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, ...options }: 
       rollback={rollback}
       killer={killer}
       autoRun={autoRun}
+      activity={activity}
     />
   );
 }
