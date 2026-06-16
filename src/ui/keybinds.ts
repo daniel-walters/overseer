@@ -41,7 +41,7 @@ export interface KeyPress {
  *
  * - `move` steps the selection by a signed delta (movement keys derive it).
  * - `zoom` / `back` drive the level reducer (Enter zooms in, Esc backs out).
- * - `dispatch` / `review` / `redispatch` / `kill` open the matching preview.
+ * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` open the matching preview.
  * - `toggleAutoRun` flips the global auto-run brake.
  * - `showHelp` opens the keybind reference; `quit` backs out or exits.
  */
@@ -53,6 +53,7 @@ export interface KeybindHandlers {
   readonly review: () => void;
   readonly redispatch: () => void;
   readonly kill: () => void;
+  readonly openPr: () => void;
   readonly toggleAutoRun: () => void;
   readonly showHelp: () => void;
   readonly quit: () => void;
@@ -118,6 +119,13 @@ export const KEYBINDS: readonly Keybind[] = [
     level: "board",
     matches: (p) => p.input === "d",
     action: (h) => h.dispatch(),
+  },
+  {
+    key: "P",
+    label: "Open a PR for a done PRD",
+    level: "board",
+    matches: (p) => p.input === "P",
+    action: (h) => h.openPr(),
   },
   {
     key: "r",

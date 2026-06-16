@@ -24,6 +24,7 @@ import {
   type Absence,
 } from "./dispatch/liveness.js";
 import { realLinkedPrLookup } from "./dispatch/linkedPr.js";
+import { createOpenPr, realOpenPrDeps } from "./dispatch/openPr.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
@@ -155,6 +156,14 @@ function runBoard(): void {
   // rollback above recovers it — so like the rollback it needs no spawn or log
   // seam, only the `claude stop` edge (realStop) and the sidecar read.
   const killer = createKiller(root, readHandles, realStop);
+  // Open PR (CONTEXT.md, ADR 0013): `P` on a `done` PRD pushes its derived feature
+  // branch and opens a GitHub PR from it into the repo's resolved default base —
+  // the board's first outward GitHub writes, behind a confirm preview. It reuses
+  // the same `gh`/`git` PrSeam the Linked PR overlay queries through (the write
+  // methods sit beside the query) and `gitSetup`'s `defaultBase`, so the PR targets
+  // the same base the feature branch was created from. A `gh`/`git` failure surfaces
+  // loudly in the status line; the new PR shows via the overlay on the next scan.
+  const openPr = createOpenPr(root, realOpenPrDeps());
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
@@ -186,6 +195,7 @@ function runBoard(): void {
       reviewer={reviewer}
       rollback={rollback}
       killer={killer}
+      openPr={openPr}
       reactor={reactor}
     />,
     { alternateScreen: true },

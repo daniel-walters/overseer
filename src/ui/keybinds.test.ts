@@ -24,6 +24,7 @@ function spyHandlers(): KeybindHandlers {
     review: vi.fn(),
     redispatch: vi.fn(),
     kill: vi.fn(),
+    openPr: vi.fn(),
     toggleAutoRun: vi.fn(),
     showHelp: vi.fn(),
     quit: vi.fn(),
@@ -62,6 +63,20 @@ describe("keybind registry", () => {
   it("matches an issue-level binding only at the issue level", () => {
     expect(matchKeybind(press("r"), "issues")?.label).toContain("Review");
     expect(matchKeybind(press("r"), "board")).toBeUndefined();
+  });
+
+  it("matches the open-PR binding only at the board level (sibling to dispatch)", () => {
+    // Open PR is a board-level, `done`-gated action like dispatch's `d`; the
+    // registry gates only the level, the App-side handler gates the `done` column.
+    expect(matchKeybind(press("P"), "board")?.label).toContain("PR");
+    expect(matchKeybind(press("P"), "issues")).toBeUndefined();
+  });
+
+  it("routes the open-PR binding to the openPr handler", () => {
+    const handlers = spyHandlers();
+    const p = press("P");
+    matchKeybind(p, "board")?.action(handlers, p);
+    expect(handlers.openPr).toHaveBeenCalledTimes(1);
   });
 
   it("matches a 'both'-level binding at either level", () => {

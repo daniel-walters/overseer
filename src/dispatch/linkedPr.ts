@@ -44,11 +44,18 @@ export interface PrQueryResult {
 }
 
 /**
- * The injectable `gh` seam, mirroring the dispatch {@link import("./gitSetup.js").GitSeam}.
- * This slice (the read path) introduces only its *query* method; the Open-PR
- * write methods (push a branch, create a PR) land beside it in a later slice. A
- * test fake answers from in-memory state; the {@link realPrSeam} shells out to
- * `gh`.
+ * The injectable `gh`/`git` seam, mirroring the dispatch {@link import("./gitSetup.js").GitSeam}.
+ * The read path uses only {@link PrSeam.query}; the Open-PR write path adds
+ * {@link PrSeam.push} + {@link PrSeam.create} — the board's first outward GitHub
+ * writes. A test fake answers from in-memory state and records the writes; the
+ * {@link realPrSeam} shells out to `git`/`gh`.
+ *
+ * The query is *total* (a `gh` failure resolves to *no PR*, never throws, ADR
+ * 0013) because it runs on the scan's hot path. The two writes, by contrast,
+ * **throw** on failure: they fire only behind the confirmed, human-gated Open PR
+ * action, where a failure must surface loudly in the status line (like a spawn
+ * failure) rather than be silently swallowed — so the orchestration catches the
+ * throw and reports it.
  */
 export interface PrSeam {
   /**
@@ -58,6 +65,19 @@ export interface PrSeam {
    * out of the scan path (ADR 0013).
    */
   query(repo: string, branch: string): PrQueryResult | undefined;
+  /**
+   * Push `branch` to `origin` in `repo`. The normal case is a feature branch that
+   * only ever lived locally (review merges into it locally, nothing pushes it), so
+   * Open PR pushes before it creates. Throws on failure (no remote, no auth,
+   * network) so the orchestration can surface it loudly.
+   */
+  push(repo: string, branch: string): void;
+  /**
+   * Open a GitHub PR from `branch` into `base` in `repo`, returning the new PR's
+   * url. The board's first `gh pr create`. Throws on failure (no `gh`, unauthed,
+   * non-GitHub remote, network) so the orchestration can surface it loudly.
+   */
+  create(repo: string, branch: string, base: string): string;
 }
 
 /**
@@ -236,5 +256,28 @@ export const realPrSeam: PrSeam = {
       // a `done` PRD simply shows no PR, the board degrades honestly (ADR 0013).
       return undefined;
     }
+  },
+
+  // The two Open-PR writes — the board's first outward GitHub actions. Unlike the
+  // query they are *not* bounded by the scan timeout and they let failures throw:
+  // they run only behind the confirmed `open PR` keybind, where the orchestration
+  // catches the throw and surfaces it loudly in the status line (like a spawn
+  // failure), and a push/create can legitimately take longer than a list. They are
+  // the un-fakeable shell-out boundary, kept thin and excluded from unit tests
+  // exactly as `realGitSeam`'s git calls and the query above are.
+  push(repo: string, branch: string): void {
+    execFileSync("git", ["-C", repo, "push", "--set-upstream", "origin", branch], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+  },
+
+  create(repo: string, branch: string, base: string): string {
+    const out = execFileSync(
+      "gh",
+      ["pr", "create", "--head", branch, "--base", base, "--fill"],
+      { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+    );
+    // `gh pr create` prints the new PR's url as its last non-empty output line.
+    return out.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
   },
 };
