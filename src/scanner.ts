@@ -76,9 +76,10 @@ export type LinkedPrLookup = (prdDir: string) => LinkedPr | undefined;
  *
  * `lookupSuppressed` is the mirror-image optional overlay, gated to the opposite
  * (awaiting) `ready-for-agent` / `ready-for-review` lanes — the two an agent has
- * *not* started on. A second param rather than an `overlays` bag because there are
- * exactly two and they gate disjoint lanes; the same omit-it-and-cards-are-blank
- * contract holds. Because the lanes are disjoint, no Issue can carry both overlays.
+ * *not* started on. Positional params rather than an `overlays` bag because each
+ * gates a disjoint slice of the board; the same omit-it-and-cards-are-blank
+ * contract holds for all of them. Because the two Issue-level lanes are disjoint,
+ * no Issue can carry both the liveness and the suppressed overlay.
  *
  * `lookupPr` is the PRD-level Linked PR overlay (ADR 0013), the board's third
  * derived overlay — joined onto a PRD (not an Issue) and consulted only for a
