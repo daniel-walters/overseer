@@ -24,11 +24,14 @@
     "chokidar": "^4.0.3",
     "gray-matter": "^4.0.3",
     "ink": "^7.0.5",
+    "marked": "^9.1.6",
+    "marked-terminal": "^6.2.0",
     "meow": "^14.1.0",
     "react": "^19.2.7",
     "smol-toml": "^1.6.1"
   },
   "devDependencies": {
+    "@types/marked-terminal": "^6.1.1",
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.0",
     "ink-testing-library": "^4.0.0",
