@@ -159,3 +159,49 @@ describe("Card suppressed marker", () => {
     expect(both).not.toMatch(/⚠ deviation|↻ non-convergence|✗ conflict/);
   });
 });
+
+describe("Card linked-PR marker", () => {
+  it("marks a done PRD with an open PR with a 'PR open' marker", () => {
+    const frame = frameOf(
+      <Card title="Shipped" linkedPr={{ state: "open", url: "https://gh/1" }} />,
+    );
+
+    expect(frame).toContain("PR open");
+    expect(frame).toContain("Shipped");
+  });
+
+  it("marks a done PRD with a merged PR with a 'PR merged' marker — the end-of-lifecycle signal", () => {
+    const frame = frameOf(
+      <Card title="Landed" linkedPr={{ state: "merged", url: "https://gh/2" }} />,
+    );
+
+    expect(frame).toContain("PR merged");
+    expect(frame).toContain("Landed");
+  });
+
+  it("renders the open and merged markers distinctly (the three-state distinction)", () => {
+    // The two PR states must read apart — *merged* is the real end-of-lifecycle
+    // signal, distinct from a still-open PR awaiting merge — so each carries its
+    // own glyph + word and neither can be mistaken for the other.
+    const open = frameOf(
+      <Card title="A" linkedPr={{ state: "open", url: "https://gh/1" }} />,
+    );
+    const merged = frameOf(
+      <Card title="B" linkedPr={{ state: "merged", url: "https://gh/2" }} />,
+    );
+
+    expect(open).toContain("PR open");
+    expect(open).not.toContain("PR merged");
+    expect(merged).toContain("PR merged");
+    expect(merged).not.toContain("PR open");
+  });
+
+  it("shows no PR marker on a card with no linked PR (the third, no-PR state)", () => {
+    // *No PR* is the marker's absence — a finished PRD still needing one looks
+    // distinct from one that has it precisely because it carries no PR line.
+    const frame = frameOf(<Card title="Unopened" />);
+
+    expect(frame).not.toMatch(/PR open|PR merged/);
+    expect(frame).toContain("Unopened");
+  });
+});

@@ -14,6 +14,8 @@ import type {
   KillPreview as KillPreviewData,
   KillOutcome,
 } from "../dispatch/kill.js";
+import type { OpenPrPreviewData } from "./OpenPrPreview.js";
+import type { OpenPrResult } from "../dispatch/openPr.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -835,6 +837,330 @@ describe("App kill (K on a live card)", () => {
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop ");
   });
 });
+
+describe("App go to PR (g on a done PRD)", () => {
+  /** A board whose first PRD is `done` with an open PR, the second with no PR. */
+  const prBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+        linkedPr: { state: "open", url: "https://github.com/o/r/pull/7" },
+      },
+      {
+        id: "billing",
+        title: "BillPRD",
+        lane: "done",
+        issues: [{ id: "010-invoice", title: "Invoice", lane: "done" }],
+      },
+    ],
+  };
+
+  /** A board with one `done` PRD whose PR is merged. */
+  const mergedBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+        linkedPr: { state: "merged", url: "https://github.com/o/r/pull/9" },
+      },
+    ],
+  };
+
+  /** A URL opener whose open method is a spy. */
+  function spyOpener() {
+    return { open: vi.fn<(url: string) => void>() };
+  }
+
+  it("opens the selected PRD's PR url on g when its overlay reports an open PR", async () => {
+    const opener = spyOpener();
+    const { stdin } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/7");
+  });
+
+  it("opens the PR url for a merged PR too (a merged PR's discussion stays reachable)", async () => {
+    const opener = spyOpener();
+    const { stdin } = render(<App board={mergedBoard} urlOpener={opener} />);
+
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
+  });
+
+  it("is a no-op (no open, no error) on a PRD with no linked PR, flashing a 'no PR' notice", async () => {
+    const opener = spyOpener();
+    const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write(ARROW_DOWN); // move to BillPRD, which has no linked PR
+    await tick();
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
+  });
+
+  it("does nothing on g at the Issue level (go to PR is board-level only)", async () => {
+    const opener = spyOpener();
+    const { stdin } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on g when no url opener is wired", async () => {
+    // No opener seam: the keybind degrades to a silent no-op rather than crashing.
+    const { stdin, lastFrame } = render(<App board={prBoard} />);
+
+    stdin.write("g");
+    await tick();
+
+    // The board is still up and unchanged (no crash, no notice).
+    expect(stripAnsi(lastFrame() ?? "")).toContain("AuthPRD");
+  });
+
+  it("clears the 'no PR' notice on the next keypress", async () => {
+    const opener = spyOpener();
+    const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write(ARROW_DOWN); // BillPRD, no PR
+    await tick();
+    stdin.write("g"); // flashes the notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
+
+    stdin.write("k"); // any keypress dismisses the one-shot notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("no PR");
+  });
+});
+
+
+describe("App open PR (P on a done PRD)", () => {
+  // A board whose first PRD is `done` (the only column Open PR is offered on) and
+  // whose second is in-progress, so we can assert the `done` gate.
+  const doneBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+      },
+      {
+        id: "billing",
+        title: "BillPRD",
+        lane: "in-progress",
+        issues: [{ id: "010-invoice", title: "Invoice", lane: "in-progress" }],
+      },
+    ],
+  };
+
+  function eligiblePreview(prdId: string): OpenPrPreviewData {
+    return {
+      prdTitle: prdId,
+      branch: `${prdId}-branch`,
+      base: "origin/main",
+      eligibility: { canOpen: true },
+    };
+  }
+
+  function refusedPreview(prdId: string, reason: string): OpenPrPreviewData {
+    return {
+      prdTitle: prdId,
+      branch: `${prdId}-branch`,
+      base: "origin/main",
+      eligibility: { canOpen: false, reason },
+    };
+  }
+
+  function spyOpenPr(
+    openPr: (p: OpenPrPreviewData) => OpenPrResult = () => ({
+      ok: true,
+      url: "https://gh/pr/new",
+    }),
+    readOpenPr: (prdId: string) => OpenPrPreviewData | undefined = (id) =>
+      eligiblePreview(id),
+  ) {
+    return {
+      readOpenPr: vi.fn(readOpenPr),
+      openPr: vi.fn(openPr),
+    };
+  }
+
+  it("opens a confirm preview on P at the board level for a done PRD", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    // Both outward actions are previewed: push the branch, open the PR into base.
+    expect(frame).toContain("Open PR");
+    expect(frame).toContain("auth-branch");
+    expect(frame).toContain("origin/main");
+    expect(opener.readOpenPr).toHaveBeenCalledWith("auth");
+  });
+
+  it("does nothing on P for a non-done PRD (the action is done-gated)", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write(ARROW_DOWN); // move to the in-progress BillPRD
+    await tick();
+    stdin.write("P");
+    await tick();
+
+    expect(opener.readOpenPr).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Open PR");
+  });
+
+  it("does nothing on P at the issue (zoomed) level", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("P");
+    await tick();
+
+    expect(opener.readOpenPr).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Open PR");
+  });
+
+  it("pushes and creates on confirm, then closes the modal with a success notice", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(opener.openPr).toHaveBeenCalledTimes(1);
+    expect(opener.openPr).toHaveBeenCalledWith(eligiblePreview("auth"));
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("Open PR"); // modal closed
+    expect(frame).toContain("https://gh/pr/new"); // the new PR url surfaced
+  });
+
+  it("surfaces a gh/git failure loudly in the status line, opening no PR notice", async () => {
+    const opener = spyOpenPr(() => ({ ok: false, error: "gh: not authenticated" }));
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("not authenticated");
+  });
+
+  it("shows the refusal in the preview for a multi-repo PRD, confirming opens nothing", async () => {
+    const opener = spyOpenPr(undefined, (id) =>
+      refusedPreview(id, "this PRD spans 2 repos — open a PR per repo manually"),
+    );
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("spans 2 repos");
+
+    // Confirming a refused preview opens no PR — there is nothing to confirm.
+    stdin.write(ENTER);
+    await tick();
+    expect(opener.openPr).not.toHaveBeenCalled();
+  });
+
+  it("shows the refusal for a branch that already has a PR (no duplicate)", async () => {
+    const opener = spyOpenPr(undefined, (id) =>
+      refusedPreview(id, "a PR already exists for this branch"),
+    );
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("already exists");
+  });
+
+  it("cancels on Esc without opening a PR", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(opener.openPr).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Open PR");
+  });
+
+  it("clears the open-PR notice on the next keypress", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
+
+    stdin.write("P");
+    await tick();
+    stdin.write(ENTER); // confirm → notice shown
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("https://gh/pr/new");
+
+    stdin.write(ARROW_DOWN); // any keypress dismisses the one-shot notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("https://gh/pr/new");
+  });
+
+  it("does nothing on P when no openPr seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={doneBoard} />);
+
+    stdin.write("P");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Open PR");
+  });
+
+  it("keeps the modal labelled from the open-time capture if a re-scan removes its PRD", async () => {
+    const opener = spyOpenPr();
+    const { stdin, lastFrame, rerender } = render(
+      <App board={doneBoard} openPr={opener} />,
+    );
+
+    stdin.write("P"); // open the preview on AuthPRD (first, done)
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auth-branch");
+
+    // A live re-scan removes AuthPRD from under the open modal.
+    const withoutAuth: Board = {
+      prds: doneBoard.prds.filter((p) => p.id !== "auth"),
+    };
+    rerender(<App board={withoutAuth} openPr={opener} />);
+    await tick();
+
+    // Still labelled from the frozen capture, and a confirm acts on AuthPRD's PR.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auth-branch");
+    stdin.write(ENTER);
+    await tick();
+    expect(opener.openPr).toHaveBeenCalledWith(eligiblePreview("auth"));
+  });
+});
+
 
 describe("App full screen", () => {
   /** Count the rendered rows in a frame (Ink emits one line per terminal row). */

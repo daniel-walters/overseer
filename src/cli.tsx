@@ -9,6 +9,7 @@ import type { ReviewConfig } from "./review/reviewConfig.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
+import { realUrlOpener } from "./ui/urlOpener.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
@@ -23,6 +24,8 @@ import {
   realLivenessQuery,
   type Absence,
 } from "./dispatch/liveness.js";
+import { realLinkedPrLookup } from "./dispatch/linkedPr.js";
+import { createOpenPr, realOpenPrDeps } from "./dispatch/openPr.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
@@ -99,6 +102,13 @@ function runBoard(): void {
   // can drive the board's suppressed overlay (the spawn edges only ever write it).
   const failedSet = createFailedSet();
   const isSuppressed = suppressedSeam(failedSet);
+  // The Linked PR overlay (ADR 0013): a live `gh pr list` per `done` PRD for its
+  // derived feature branch, joined onto the PRD at overlay time and stored nowhere
+  // — recomputed each scan exactly like Liveness, so a PR opened/merged/closed
+  // outside Overseer is reflected on the next rebuild. `scanBoard` only calls it
+  // for `done` PRDs (the only ones with a feature-branch PR), so the per-scan `gh`
+  // query is bounded to finished work; a `gh` failure degrades to no marker.
+  const lookupPr = realLinkedPrLookup();
   const scanWithOverlays = (r: string): Board => {
     // Run the probe *lazily*, memoised for this scan: `scanBoard` only calls the
     // liveness lookup for an in-progress / in-review card (LIVENESS_LANES), so a
@@ -114,6 +124,7 @@ function runBoard(): void {
         return verdicts[issuePath];
       },
       isSuppressed,
+      lookupPr,
     );
   };
   const initialBoard = scanWithOverlays(root);
@@ -146,6 +157,14 @@ function runBoard(): void {
   // rollback above recovers it — so like the rollback it needs no spawn or log
   // seam, only the `claude stop` edge (realStop) and the sidecar read.
   const killer = createKiller(root, readHandles, realStop);
+  // Open PR (CONTEXT.md, ADR 0013): `P` on a `done` PRD pushes its derived feature
+  // branch and opens a GitHub PR from it into the repo's resolved default base —
+  // the board's first outward GitHub writes, behind a confirm preview. It reuses
+  // the same `gh`/`git` PrSeam the Linked PR overlay queries through (the write
+  // methods sit beside the query) and `gitSetup`'s `defaultBase`, so the PR targets
+  // the same base the feature branch was created from. A `gh`/`git` failure surfaces
+  // loudly in the status line; the new PR shows via the overlay on the next scan.
+  const openPr = createOpenPr(root, realOpenPrDeps());
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
@@ -163,10 +182,10 @@ function runBoard(): void {
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
   // Every fail-fast check above (loadConfig, the eager scanWithOverlays) runs
   // *before* this call, so a config/scan error still prints on the normal screen
-  // rather than onto the alt buffer, where it would be wiped on restore. The
-  // liveness query inside that eager scan is bounded (timeout + maxBuffer) and
-  // degrades to unknown on any failure, so it neither hangs startup nor throws
-  // here.
+  // rather than onto the alt buffer, where it would be wiped on restore. Both
+  // subprocess overlays inside that eager scan are bounded (timeout + maxBuffer)
+  // and degrade on any failure — the liveness query to unknown, the per-`done`
+  // Linked PR query to no marker — so neither hangs startup nor throws here.
   render(
     <LiveApp
       root={root}
@@ -177,6 +196,8 @@ function runBoard(): void {
       reviewer={reviewer}
       rollback={rollback}
       killer={killer}
+      openPr={openPr}
+      urlOpener={realUrlOpener}
       reactor={reactor}
     />,
     { alternateScreen: true },

@@ -24,6 +24,8 @@ function spyHandlers(): KeybindHandlers {
     review: vi.fn(),
     redispatch: vi.fn(),
     kill: vi.fn(),
+    openPr: vi.fn(),
+    goToPr: vi.fn(),
     toggleAutoRun: vi.fn(),
     showHelp: vi.fn(),
     quit: vi.fn(),
@@ -62,6 +64,34 @@ describe("keybind registry", () => {
   it("matches an issue-level binding only at the issue level", () => {
     expect(matchKeybind(press("r"), "issues")?.label).toContain("Review");
     expect(matchKeybind(press("r"), "board")).toBeUndefined();
+  });
+
+  it("matches the go-to-PR binding only at the board level (PRDs carry the PR)", () => {
+    // The Linked PR overlay lives on the PRD card, so `go to PR` is a board-level
+    // gesture, the navigation sibling to `d`/`r` — never an Issue-level one.
+    expect(matchKeybind(press("g"), "board")?.label).toContain("PR");
+    expect(matchKeybind(press("g"), "issues")).toBeUndefined();
+  });
+
+  it("routes the go-to-PR binding to the goToPr handler", () => {
+    const handlers = spyHandlers();
+    const p = press("g");
+    matchKeybind(p, "board")?.action(handlers, p);
+    expect(handlers.goToPr).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches the open-PR binding only at the board level (sibling to dispatch)", () => {
+    // Open PR is a board-level, `done`-gated action like dispatch's `d`; the
+    // registry gates only the level, the App-side handler gates the `done` column.
+    expect(matchKeybind(press("P"), "board")?.label).toContain("PR");
+    expect(matchKeybind(press("P"), "issues")).toBeUndefined();
+  });
+
+  it("routes the open-PR binding to the openPr handler", () => {
+    const handlers = spyHandlers();
+    const p = press("P");
+    matchKeybind(p, "board")?.action(handlers, p);
+    expect(handlers.openPr).toHaveBeenCalledTimes(1);
   });
 
   it("matches a 'both'-level binding at either level", () => {
