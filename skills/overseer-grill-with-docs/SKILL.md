@@ -84,3 +84,9 @@ Only offer to create an ADR (in the owning repo's `docs/adr/`) when all three ar
 3. **The result of a real trade-off** — there were genuine alternatives and you picked one for specific reasons
 
 If any of the three is missing, skip the ADR. Use the format in [ADR-FORMAT.md](./ADR-FORMAT.md).
+
+## When you're done
+
+An interview has no fixed end — stop when the shared understanding feels solid and the open branches are resolved. At that natural close, point the user onward:
+
+Next: `/overseer-to-prd` when you're ready to synthesize this conversation into a PRD.
