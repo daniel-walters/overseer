@@ -12,6 +12,14 @@ interface BoardViewProps {
    * — if any. The PRD card at that coordinate is highlighted (ADR 0015).
    */
   selected?: { readonly laneIndex: number; readonly rowIndex: number };
+  /**
+   * The card-row height each lane has to render in, from the environmental-read
+   * hook (terminal rows minus chrome). Threaded to every Column so an overflowing
+   * lane renders only its visible window and scrolls to follow the selection
+   * (ADR 0015). Absent in tests that don't exercise vertical overflow, where the
+   * lanes render unbounded as before.
+   */
+  laneHeight?: number;
 }
 
 /**
@@ -20,18 +28,26 @@ interface BoardViewProps {
  * derives its lane from its Issues — so this level has no Unsorted, ready, or
  * review columns (ADR 0003).
  */
-export function BoardView({ board, selected }: BoardViewProps) {
+export function BoardView({ board, selected, laneHeight }: BoardViewProps) {
   const byLane = groupByLane(board.prds);
   const selectedId = cardAtCoord(board.prds, BOARD_LANES, selected)?.id;
 
   return (
     <Box flexDirection="row">
-      {BOARD_LANES.map((lane) => (
+      {BOARD_LANES.map((lane, laneIndex) => (
         <Column
           key={lane}
           heading={LANE_LABELS[lane]}
           cards={byLane[lane]}
           selectedId={selectedId}
+          availableHeight={laneHeight}
+          // Only the lane the selection sits in anchors its window on a row; the
+          // others window from the top. Matching by the lane's render-order index
+          // is exactly how `selected.laneIndex` is defined (an index into
+          // BOARD_LANES), so this targets the right column.
+          selectedRow={
+            selected?.laneIndex === laneIndex ? selected.rowIndex : undefined
+          }
         />
       ))}
     </Box>

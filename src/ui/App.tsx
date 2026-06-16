@@ -7,6 +7,7 @@ import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
+import { laneHeight } from "./laneHeight.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
@@ -190,8 +191,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
   // pinned to the window height with the status line pushed to the bottom row.
-  // Overflow beyond the viewport clips — the alt screen has no scrollback, and
-  // in-app scrolling is a logged follow-up (docs/ideas.md).
+  // The same reactive read drives the vertical viewport scroll: each lane's
+  // available card-row height is `rows` minus the chrome, recomputed on every
+  // resize, so an overflowing lane scrolls to keep the selection in view rather
+  // than clipping unreachable cards (ADR 0015). Horizontal overflow still clips —
+  // the alt screen has no scrollback (ADR 0001) and horizontal paging is a logged
+  // follow-up (docs/ideas.md).
   const { rows } = useWindowSize();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
   // The plan captured when a preview opened — the dispatch frontier / review
@@ -464,11 +469,23 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)
+  // Each lane's available card-row height is the terminal height minus the chrome
+  // for the level on screen (the Issue level carries an extra title row); it feeds
+  // the columns' vertical scroll window. Recomputed here from the reactive `rows`,
+  // so a resize reflows the window for free.
   const view =
     nav.level === "issues" && selectedPrd ? (
-      <IssueBoard prd={selectedPrd} selected={issueSel} />
+      <IssueBoard
+        prd={selectedPrd}
+        selected={issueSel}
+        laneHeight={laneHeight(rows, "issues")}
+      />
     ) : (
-      <BoardView board={board} selected={boardSel} />
+      <BoardView
+        board={board}
+        selected={boardSel}
+        laneHeight={laneHeight(rows, "board")}
+      />
     );
   // The view sits in a flex-shrinking region that clips under overflow; the
   // status line is held at fixed size (flexShrink={0}) so it is never the thing

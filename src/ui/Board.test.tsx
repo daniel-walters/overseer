@@ -114,6 +114,66 @@ describe("BoardView", () => {
     expect(columnOf(frame, "PR merged")).toBe("Done");
   });
 
+  it("renders only the visible window of an overflowing lane", () => {
+    // A backlog lane far taller than the available height: with `laneHeight`
+    // wired the board renders only the lane's window, not every card (ADR 0015).
+    const prds = Array.from({ length: 20 }, (_, i) =>
+      prd({ id: `b${i}`, title: `Backlog-${i}`, lane: "backlog" }),
+    );
+
+    const frame =
+      render(
+        <BoardView
+          board={{ prds }}
+          selected={{ laneIndex: 0, rowIndex: 0 }}
+          laneHeight={5}
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame).toContain("Backlog-0");
+    expect(frame).not.toContain("Backlog-19");
+  });
+
+  it("scrolls a tall lane to keep the selected card in view", () => {
+    // Selecting a card past the window's bottom scrolls it into view, so no card
+    // is unreachable on a short terminal.
+    const prds = Array.from({ length: 20 }, (_, i) =>
+      prd({ id: `b${i}`, title: `Backlog-${i}`, lane: "backlog" }),
+    );
+
+    const frame =
+      render(
+        <BoardView
+          board={{ prds }}
+          selected={{ laneIndex: 0, rowIndex: 18 }}
+          laneHeight={5}
+        />,
+      ).lastFrame() ?? "";
+    const flat = stripAnsi(frame);
+
+    expect(flat).toMatch(/▶ Backlog-18/);
+    expect(flat).not.toContain("Backlog-0");
+  });
+
+  it("renders every card of a lane that fits the available height", () => {
+    const prds = Array.from({ length: 3 }, (_, i) =>
+      prd({ id: `b${i}`, title: `Backlog-${i}`, lane: "backlog" }),
+    );
+
+    const frame =
+      render(
+        <BoardView
+          board={{ prds }}
+          selected={{ laneIndex: 0, rowIndex: 0 }}
+          laneHeight={10}
+        />,
+      ).lastFrame() ?? "";
+
+    for (let i = 0; i < 3; i++) {
+      expect(frame).toContain(`Backlog-${i}`);
+    }
+  });
+
   it("renders no PR marker on a done PRD without a linked PR", () => {
     const board: Board = {
       prds: [prd({ id: "shipped", title: "Unopened", lane: "done" })],
