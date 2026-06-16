@@ -62,7 +62,7 @@ worktree so that other agents touching the same repo do not collide with you.
 
 ## How to finish
 
-1. Drive the implementation with the \`tdd\` skill: work test-first in a
+1. Drive the implementation with the \`overseer-tdd\` skill: work test-first in a
    red-green-refactor loop — write a failing test, make it pass, then refactor —
    before parking the Issue at \`ready-for-review\`. (A purely docs-only or
    config-only Issue with nothing to red-green is the lone exception.)
