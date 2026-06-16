@@ -44,9 +44,11 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
 
    Put the PRD template below in the body, beneath the frontmatter.
 
-5. Tell the user the PRD was written, its path, and that `/overseer-to-issues` is the next step (decompose it into Issues inside this folder).
+5. Tell the user the PRD was written and its path.
 
 Do not create any Issue files here — that's `/overseer-to-issues`.
+
+Next: `/overseer-to-issues` to decompose this PRD into Issues inside its folder.
 
 <prd-template>
 
