@@ -172,10 +172,10 @@ function runBoard(): void {
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
   // Every fail-fast check above (loadConfig, the eager scanWithOverlays) runs
   // *before* this call, so a config/scan error still prints on the normal screen
-  // rather than onto the alt buffer, where it would be wiped on restore. The
-  // liveness query inside that eager scan is bounded (timeout + maxBuffer) and
-  // degrades to unknown on any failure, so it neither hangs startup nor throws
-  // here.
+  // rather than onto the alt buffer, where it would be wiped on restore. Both
+  // subprocess overlays inside that eager scan are bounded (timeout + maxBuffer)
+  // and degrade on any failure — the liveness query to unknown, the per-`done`
+  // Linked PR query to no marker — so neither hangs startup nor throws here.
   render(
     <LiveApp
       root={root}
