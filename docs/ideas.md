@@ -163,6 +163,29 @@ Note this is the first time the board would *reach out to GitHub* rather than on
 local files — a genuine new capability class, like the deferred per-agent-logs
 subprocess call, not a keybind on existing data.
 
+#### (Deferred) Multi-repo PRDs: one PR per repo
+
+A PRD's **feature branch is per-repo**, not per-PRD: `featureBranchName(prdDir)` is
+derived from the PRD directory name, but `gitSetup` creates and checks it out **once per
+repo per dispatch**, and each Issue carries its own `repo:`. So a PRD whose Issues span
+repos A and B has the *same-named* feature branch in *both* (`quick-wins` in A **and** in
+B), each sitting unmerged against its own repo's default branch — i.e. **a multi-repo PRD
+needs one PR per repo**, not one PR. "One PRD → one PR" is only true for a single-repo PRD.
+
+The first cut of "open / link a GitHub PR" is therefore scoped to **single-repo PRDs
+only**: `open PR` opens the one PR from the PRD's single feature branch, and on a PRD whose
+Issues span multiple distinct `repo:` values it **explicitly refuses** with a visible
+status-line message ("this PRD spans N repos; open PRs per repo manually") rather than a
+silent no-op or a crash. The distinct-repo count is cheap to detect from the Issues even in
+v1, so the refusal is honest. Every PRD built so far is single-repo, so this defers a case
+not yet hit without pretending it can't happen.
+
+The deferred follow-up: make `open PR` enumerate the distinct repos across a PRD's Issues
+and open **one PR per repo** (each from that repo's feature branch into that repo's default
+base), turning the linked-PR icon, `go to PR`, and the link storage from a single value into
+a **collection per PRD** — and the confirm modal into a preview of N PRs into N repos. Worth
+building only once multi-repo PRDs are real.
+
 ### Jump straight to an Issue needing human review
 
 `human-review` is the *one* column in the whole pipeline that requires a human
