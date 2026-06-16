@@ -1,15 +1,18 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { Column } from "./Column.js";
-import { groupByLane } from "./lanes.js";
+import { groupByLane, cardAtCoord } from "./lanes.js";
 import { ISSUE_LANES, LANE_LABELS } from "../model.js";
 import type { PRD } from "../model.js";
 
 interface IssueBoardProps {
   /** The PRD whose Issues fill this kanban. */
   prd: PRD;
-  /** Index into `prd.issues` of the selected Issue. */
-  selectedIndex: number;
+  /**
+   * The selected grid coordinate — `(laneIndex, rowIndex)` over {@link ISSUE_LANES}
+   * — if any. The Issue card at that coordinate is highlighted (ADR 0015).
+   */
+  selected?: { readonly laneIndex: number; readonly rowIndex: number };
 }
 
 /**
@@ -17,9 +20,9 @@ interface IssueBoardProps {
  * is no Unsorted column — a missing/unknown status folds into Backlog flagged with
  * the `⚠ bad status` marker (CONTEXT.md, ADR 0003).
  */
-export function IssueBoard({ prd, selectedIndex }: IssueBoardProps) {
+export function IssueBoard({ prd, selected }: IssueBoardProps) {
   const byLane = groupByLane(prd.issues);
-  const selectedId = prd.issues[selectedIndex]?.id;
+  const selectedId = cardAtCoord(prd.issues, ISSUE_LANES, selected)?.id;
 
   return (
     <Box flexDirection="column">

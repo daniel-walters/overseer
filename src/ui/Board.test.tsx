@@ -74,6 +74,26 @@ describe("BoardView", () => {
     expect(columnOf(frame, "DoneCard")).toBe("Done");
   });
 
+  it("highlights the card at the selected (lane, row) coordinate, and no other", () => {
+    // Two cards stacked in the in-progress lane; row 1 (the second) is selected.
+    const board: Board = {
+      prds: [
+        prd({ id: "todo", title: "TodoCard", lane: "backlog" }),
+        prd({ id: "first", title: "FirstInProgress", lane: "in-progress" }),
+        prd({ id: "second", title: "SecondInProgress", lane: "in-progress" }),
+      ],
+    };
+
+    const frame =
+      render(<BoardView board={board} selected={{ laneIndex: 1, rowIndex: 1 }} />)
+        .lastFrame() ?? "";
+    const flat = stripAnsi(frame);
+
+    // The pointer sits on the second in-progress card and appears exactly once.
+    expect(flat).toMatch(/▶ SecondInProgress/);
+    expect(flat.match(/▶/g)?.length).toBe(1);
+  });
+
   it("renders a done PRD's Linked PR marker on its board card", () => {
     // The overlay reaches the board card end-to-end: a `done` PRD carrying a
     // merged Linked PR shows the marker under the Done column (ADR 0013).

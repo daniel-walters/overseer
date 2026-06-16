@@ -69,7 +69,7 @@ const prd: PRD = {
 
 describe("IssueBoard", () => {
   it("renders the PRD's Issues as cards in their lanes", () => {
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(columnOf(frame, "Login")).toBe("In Progress");
     expect(columnOf(frame, "OAuth")).toBe("Ready");
@@ -80,7 +80,7 @@ describe("IssueBoard", () => {
     // The Unsorted column is gone (no such heading renders); a missing/unknown
     // status lands in Backlog carrying the `⚠ bad status` marker, so the data
     // error stays triageable rather than parked as ordinary backlog.
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(stripAnsi(frame)).not.toContain("Unsorted");
     expect(columnOf(frame, "Mystery")).toBe("Backlog");
@@ -88,48 +88,61 @@ describe("IssueBoard", () => {
   });
 
   it("shows a human/agent badge on ready Issues", () => {
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(frame).toContain("🤖");
     expect(frame).toContain("🧑");
   });
 
   it("surfaces the escalation reason on a human-review Issue card", () => {
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(columnOf(frame, "Escalated")).toBe("Human Review");
     expect(stripAnsi(frame)).toContain("deviation");
   });
 
   it("surfaces the live marker on an in-progress Issue's card", () => {
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(columnOf(frame, "Login")).toBe("In Progress");
     expect(columnOf(frame, "live")).toBe("In Progress");
   });
 
   it("surfaces the unknown marker on an in-review Issue's card", () => {
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(columnOf(frame, "Reviewing")).toBe("In Review");
     expect(columnOf(frame, "unknown")).toBe("In Review");
   });
 
   it("surfaces the suppressed marker on a launch-failed ready Issue's card", () => {
-    const frame = render(<IssueBoard prd={prd} selectedIndex={0} />).lastFrame() ?? "";
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
 
     expect(columnOf(frame, "OAuth")).toBe("Ready");
     expect(columnOf(frame, "suppressed")).toBe("Ready");
   });
 
-  it("marks the selected Issue with a pointer and no other", () => {
+  it("marks the Issue at the selected (lane, row) coordinate with a pointer and no other", () => {
+    // OAuth is the first card in the Ready lane (laneIndex 1 of ISSUE_LANES).
     const frame =
-      render(<IssueBoard prd={prd} selectedIndex={1} />).lastFrame() ?? "";
+      render(<IssueBoard prd={prd} selected={{ laneIndex: 1, rowIndex: 0 }} />)
+        .lastFrame() ?? "";
     const flat = stripAnsi(frame);
 
     // The pointer immediately precedes the selected Issue's badge/title…
     expect(flat).toMatch(/▶ 🤖 OAuth/);
     // …and appears exactly once across the whole frame.
+    expect(flat.match(/▶/g)?.length).toBe(1);
+  });
+
+  it("selects the second card down within a lane (row index, not flat order)", () => {
+    // Review is the second card in the Ready lane (row 1), after OAuth (row 0).
+    const frame =
+      render(<IssueBoard prd={prd} selected={{ laneIndex: 1, rowIndex: 1 }} />)
+        .lastFrame() ?? "";
+    const flat = stripAnsi(frame);
+
+    expect(flat).toMatch(/▶ 🧑 Review/);
     expect(flat.match(/▶/g)?.length).toBe(1);
   });
 });

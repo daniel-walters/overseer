@@ -5,12 +5,14 @@ import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
-import { navReduce, initialNav } from "./navigation.js";
+import { navReduce, initialNav, selectedCoord } from "./navigation.js";
+import { laneShape, cardAtCoord } from "./lanes.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
 import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
+import { BOARD_LANES, ISSUE_LANES } from "../model.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
@@ -213,13 +215,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   // actually dead, or the Issue vanished). Cleared on the next keypress.
   const [notice, setNotice] = useState<string | undefined>(undefined);
 
-  // Clamp the stored selection against the current board so a shrunk board
-  // (after a live refresh) can never leave us pointing past the last card.
-  const boardIndex = Math.min(nav.boardIndex, Math.max(0, board.prds.length - 1));
-  const selectedPrd = board.prds[boardIndex];
+  // Resolve the stored grid coordinate against the live board into the card it
+  // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
+  // here on the render side and threaded into both the reducer's `move` action
+  // and the view's highlight, so the reducer never sees the Board. `selectedCoord`
+  // snaps the coordinate onto a real card under a live re-scan (an emptied lane,
+  // or a row past a now-shorter lane), so selection never rests on nothing.
+  const boardShape = laneShape(board.prds, BOARD_LANES);
+  const boardSel = selectedCoord(nav.board, boardShape);
+  const selectedPrd = cardAtCoord(board.prds, BOARD_LANES, boardSel);
   const issues = selectedPrd?.issues ?? [];
-  const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
-  const selectedIssue = issues[issueIndex];
+  const issueShape = laneShape(issues, ISSUE_LANES);
+  const issueSel = selectedCoord(nav.issues, issueShape);
+  const selectedIssue = cardAtCoord(issues, ISSUE_LANES, issueSel);
+  // The lane shape for the level that currently owns input — what a `move`
+  // carries so the pure reducer knows the grid's geometry.
+  const activeShape = nav.level === "board" ? boardShape : issueShape;
 
   /**
    * The App-side closures the registry dispatches a matched keypress to. Each is
@@ -228,10 +239,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
    * its key matched at the right level.
    */
   const handlers: KeybindHandlers = {
-    move: (delta) => {
-      const count = nav.level === "board" ? board.prds.length : issues.length;
-      dispatch({ type: "move", delta, count });
-    },
+    move: (dir) => dispatch({ type: "move", dir, lanes: activeShape }),
     zoom: () => dispatch({ type: "zoom", issueCount: issues.length }),
     back: () => dispatch({ type: "back" }),
     dispatch: () => {
@@ -458,9 +466,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   // indicator. (Modals return above, so the indicator never shows over a preview.)
   const view =
     nav.level === "issues" && selectedPrd ? (
-      <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />
+      <IssueBoard prd={selectedPrd} selected={issueSel} />
     ) : (
-      <BoardView board={board} selectedIndex={boardIndex} />
+      <BoardView board={board} selected={boardSel} />
     );
   // The view sits in a flex-shrinking region that clips under overflow; the
   // status line is held at fixed size (flexShrink={0}) so it is never the thing
