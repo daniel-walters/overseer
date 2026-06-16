@@ -24,3 +24,17 @@ export function renderMarkdown(body: string): string {
   setOptions({ renderer: new TerminalRenderer() as unknown as MarkedOptions["renderer"] });
   return (marked.parse(body) as string).trim();
 }
+
+/**
+ * Project a body to the rendered terminal lines the detail modal windows: render
+ * the markdown, then split on newlines. A blank (or whitespace-only) body yields
+ * no lines, so the modal shows its placeholder rather than a single empty line.
+ *
+ * This is the one place the body→lines transform lives: the {@link App} calls it to
+ * size the scroll window's `maxOffset` and the {@link DetailModal} renders the
+ * resulting lines, so the clamp and the rendered window operate on the *same* lines
+ * (and the heavier `renderMarkdown` runs once per frame, not once per call site).
+ */
+export function renderDetailLines(body: string): string[] {
+  return body.trim().length > 0 ? renderMarkdown(body).split("\n") : [];
+}

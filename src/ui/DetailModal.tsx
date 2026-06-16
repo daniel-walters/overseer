@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { CardDetail } from "./detailReader.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 
 /**
@@ -29,6 +29,13 @@ interface DetailModalProps {
    * scrolling render the whole body).
    */
   readonly viewportRows?: number;
+  /**
+   * The body's already-rendered terminal lines, supplied by {@link App} so the
+   * heavier markdown render runs once per frame (the App also needs the lines to
+   * size the scroll window) rather than once here and once there. Omitted by
+   * standalone tests, which fall back to rendering `detail.body` directly.
+   */
+  readonly lines?: readonly string[];
 }
 
 /**
@@ -52,11 +59,14 @@ interface DetailModalProps {
  * body. A body that fits the viewport shows no affordance (and the App ignores
  * scroll keys against it, since the offset can't move).
  */
-export function DetailModal({ detail, scrollOffset = 0, viewportRows }: DetailModalProps) {
+export function DetailModal({ detail, scrollOffset = 0, viewportRows, lines }: DetailModalProps) {
   const hasBody = detail.body.trim().length > 0;
-  const lines = hasBody ? renderMarkdown(detail.body).split("\n") : [];
-  const rows = viewportRows ?? lines.length;
-  const window = scrollDetail(lines, scrollOffset, rows);
+  // Use the App-supplied lines when present; otherwise render here (standalone
+  // tests, which don't pre-render). `renderDetailLines` returns the same lines the
+  // App sizes `maxOffset` from, so the clamp and this window never drift.
+  const bodyLines = lines ?? renderDetailLines(detail.body);
+  const rows = viewportRows ?? bodyLines.length;
+  const window = scrollDetail(bodyLines, scrollOffset, rows);
 
   return (
     <Box flexDirection="column" borderStyle="round" paddingX={1}>

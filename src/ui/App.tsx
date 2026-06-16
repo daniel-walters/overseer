@@ -6,7 +6,7 @@ import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { DetailModal, DETAIL_MODAL_CHROME_ROWS } from "./DetailModal.js";
-import { renderMarkdown } from "./markdown.js";
+import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
 import { navReduce, initialNav } from "./navigation.js";
@@ -258,9 +258,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   // open; `maxOffset` is what `j`/`k`/arrows clamp the offset against.
   const detailBodyRows = Math.max(1, rows - DETAIL_MODAL_CHROME_ROWS);
   const detailLines =
-    modal?.kind === "detail" && modal.detail.body.trim().length > 0
-      ? renderMarkdown(modal.detail.body).split("\n")
-      : [];
+    modal?.kind === "detail" ? renderDetailLines(modal.detail.body) : [];
   const detailMaxOffset = scrollDetail(detailLines, detailScroll, detailBodyRows).maxOffset;
 
   /**
@@ -546,6 +544,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
     return (
       <DetailModal
         detail={modal.detail}
+        lines={detailLines}
         scrollOffset={detailScroll}
         viewportRows={detailBodyRows}
       />
