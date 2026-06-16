@@ -405,6 +405,59 @@ This is a meaningful change to the review model (ADR 0005 territory — the revi
 reactor), not a prompt tweak; it deserves its own design pass on the review loop's
 shape if pursued.
 
+### Auto-resolve trivial merge conflicts instead of always escalating
+
+Today a merge conflict is treated as **uniformly un-automatable**: when the reviewer's
+clean-AI merge of the Issue's worktree into the PRD feature branch hits *any* conflict,
+it escalates straight to `human-review` with `human_review_reason: conflict` — "never
+auto-resolved by an agent" (CONTEXT.md → Review outcome). But conflicts are not uniform.
+In parallel work the feature branch moves under sibling worktrees constantly, and a large
+share of the resulting conflicts are **trivial** — two siblings each appended an import,
+both added a case to the same `switch`, an Issue file's `NNN-` numbering brushed a
+neighbour. A human resolving those is doing rote work an agent could do as reliably as it
+does the rest of the review. Escalating *every* conflict makes `human-review` — the one
+queue meant for genuine human judgment — the dumping ground for mechanical merges too,
+diluting the signal that the column is supposed to carry.
+
+The idea: let the reviewer **attempt** a conflict resolution, and escalate to
+`human-review` only when the conflict is **non-trivial** or the attempt doesn't cleanly
+converge. A merge conflict stops being an automatic terminal state and becomes one more
+thing the AI review loop tries first — exactly as it already tries `/code-review` fixes
+before giving up.
+
+The whole difficulty is **defining "trivial" safely**, because the cost of getting it
+wrong is asymmetric: a wrongly-auto-resolved conflict is *silently incorrect merged code*
+on the feature branch, which is far worse than the conservative status quo of bothering a
+human. So the bar for "trivial" must be high and the failure mode must be "escalate," never
+"guess." Open questions:
+
+- **What counts as trivial, and who judges?** A mechanical heuristic (e.g. non-overlapping
+  hunks, conflict confined to import blocks / additive-only regions), or the reviewer agent's
+  own judgment with an explicit instruction to escalate on any doubt? Agent-judgment is more
+  flexible but reintroduces exactly the self-grading bias the "fresh reviewer per iteration"
+  idea above is wary of — an agent motivated to finish may rationalise a risky resolve as
+  trivial. A conservative mechanical gate *in front of* the agent attempt may be the safer
+  shape.
+- **Does the resolution get re-reviewed?** A conflict the agent resolves changes the merged
+  diff — it should arguably go back through `/code-review` (or a fresh reviewer, per the idea
+  above) rather than merging unseen. That couples this to the review-loop shape: an
+  auto-resolved conflict is a new diff to certify, not a done deal.
+- **A new `human_review_reason`, or a record of the auto-resolution?** When it *does*
+  escalate, the reason is still `conflict`. When it *succeeds*, should the merge note that it
+  auto-resolved a conflict (so a human can audit it post-hoc), or is a clean `done` enough?
+  An audit trail matters more here than on a normal clean merge, precisely because the agent
+  touched conflicting code.
+- **Config knob for the appetite.** Like the hardcoded review cap, "how hard should the
+  reviewer try to auto-resolve" might want to be a `config.toml` dial — off (today's behavior,
+  always escalate), trivial-only, or aggressive — so a cautious operator can keep the current
+  guarantee. Pairs with "Configurable AI-review turns and effort" (now in the `quick-wins`
+  PRD): same instinct of promoting a baked-in review-loop default to a knob.
+
+This changes the review-merge contract (CONTEXT.md → Review outcome) and is ADR 0005
+territory — the review reactor — not a prompt tweak. It pairs with "Use a fresh reviewer
+agent for each review iteration" above (both reshape what the reviewer does and when it
+escalates) and should be designed alongside it if both are pursued.
+
 ### Viewport scrolling (overflow on the alternate screen)
 
 "Always full screen" (UI Polish part 1) renders the board on the terminal's
