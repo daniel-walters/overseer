@@ -136,7 +136,7 @@ export function openPrFor(prdDir: string, deps: OpenPrDeps): OpenPrResult {
 
     // Open the PR into the repo's *resolved* default base — the same base the
     // feature branch was created from (gitSetup.defaultBase), not a hardcoded main.
-    const url = deps.prSeam.create(repo, branch, deps.git.defaultBase(repo));
+    const url = deps.prSeam.create(repo, branch, prBase(deps.git.defaultBase(repo)));
     return { ok: true, url };
   } catch (err) {
     // A `git push` / `gh pr create` failure (no auth, network, non-GitHub remote)
@@ -173,7 +173,7 @@ function resolveEligibility(
     );
   }
 
-  const base = deps.git.defaultBase(repo);
+  const base = prBase(deps.git.defaultBase(repo));
   if (deps.prSeam.query(repo, branch) !== undefined) {
     return refused(
       prdTitle,
@@ -184,6 +184,20 @@ function resolveEligibility(
   }
 
   return { prdTitle, branch, base, eligibility: { canOpen: true } };
+}
+
+/**
+ * The PR base branch name `gh pr create --base` wants, from the ref
+ * `gitSetup.defaultBase` resolves. `defaultBase` returns a *remote-tracking* ref
+ * (`origin/master` / `origin/main`) — the right form for `git branch <name>
+ * <base>` (a revision), which is what dispatch uses it for. But `gh pr create
+ * --base` takes a **branch name on the base repo** (`master`), and rejects
+ * `origin/master` ("could not find branch"). Strip the leading `origin/` remote
+ * segment so the PR targets the actual default branch, and so the preview shows
+ * the same branch name the PR opens into.
+ */
+function prBase(defaultBase: string): string {
+  return defaultBase.replace(/^origin\//, "");
 }
 
 /** A refused {@link OpenPrPreviewData} carrying its visible reason. */

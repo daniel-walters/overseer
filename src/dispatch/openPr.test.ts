@@ -79,7 +79,20 @@ describe("openPrFor", () => {
     // Pushed the derived feature branch to its repo.
     expect(prSeam.push).toHaveBeenCalledWith("/repos/api", BRANCH);
     // Created the PR into the repo's *resolved* default base, not a hardcoded main.
-    expect(prSeam.create).toHaveBeenCalledWith("/repos/api", BRANCH, "origin/master");
+    // `defaultBase` resolves the remote-tracking ref `origin/master`; the PR base
+    // is the bare branch name `gh pr create --base` wants — not `origin/master`.
+    expect(prSeam.create).toHaveBeenCalledWith("/repos/api", BRANCH, "master");
+  });
+
+  it("strips the origin/ prefix off the resolved base for gh pr create", () => {
+    // `defaultBase` returns a remote-tracking ref (`origin/main`); `gh pr create
+    // --base` wants the bare branch name (`main`) — `origin/main` is rejected.
+    const prSeam = new FakePrSeam();
+    const d = deps({ prSeam, git: fakeGit("origin/main") });
+
+    openPrFor(PRD_DIR, d);
+
+    expect(prSeam.create).toHaveBeenCalledWith("/repos/api", BRANCH, "main");
   });
 
   it("pushes before it creates (a missing remote branch can't fail the create)", () => {
@@ -206,7 +219,9 @@ describe("createOpenPr", () => {
     const preview = opener.readOpenPr("Auth System");
 
     expect(preview?.branch).toBe(BRANCH);
-    expect(preview?.base).toBe("origin/master");
+    // The preview shows the bare base branch the PR opens into, not the
+    // `origin/`-prefixed remote-tracking ref `defaultBase` resolves.
+    expect(preview?.base).toBe("master");
     expect(preview?.eligibility.canOpen).toBe(true);
   });
 
@@ -253,6 +268,6 @@ describe("createOpenPr", () => {
 
     expect(result.ok).toBe(true);
     expect(prSeam.push).toHaveBeenCalledWith("/repos/api", BRANCH);
-    expect(prSeam.create).toHaveBeenCalledWith("/repos/api", BRANCH, "origin/main");
+    expect(prSeam.create).toHaveBeenCalledWith("/repos/api", BRANCH, "main");
   });
 });
