@@ -73,4 +73,35 @@ describe("BoardView", () => {
     expect(columnOf(frame, "AuthCard")).toBe("In Progress");
     expect(columnOf(frame, "DoneCard")).toBe("Done");
   });
+
+  it("renders a done PRD's Linked PR marker on its board card", () => {
+    // The overlay reaches the board card end-to-end: a `done` PRD carrying a
+    // merged Linked PR shows the marker under the Done column (ADR 0013).
+    const board: Board = {
+      prds: [
+        prd({
+          id: "shipped",
+          title: "Landed",
+          lane: "done",
+          linkedPr: { state: "merged", url: "https://gh/pr/7" },
+        }),
+      ],
+    };
+
+    const frame = render(<BoardView board={board} />).lastFrame() ?? "";
+
+    expect(frame).toContain("PR merged");
+    expect(columnOf(frame, "PR merged")).toBe("Done");
+  });
+
+  it("renders no PR marker on a done PRD without a linked PR", () => {
+    const board: Board = {
+      prds: [prd({ id: "shipped", title: "Unopened", lane: "done" })],
+    };
+
+    const frame = render(<BoardView board={board} />).lastFrame() ?? "";
+
+    expect(frame).toContain("Unopened");
+    expect(frame).not.toMatch(/PR open|PR merged/);
+  });
 });

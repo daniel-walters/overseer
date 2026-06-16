@@ -23,6 +23,7 @@ import {
   realLivenessQuery,
   type Absence,
 } from "./dispatch/liveness.js";
+import { realLinkedPrLookup } from "./dispatch/linkedPr.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
@@ -99,6 +100,13 @@ function runBoard(): void {
   // can drive the board's suppressed overlay (the spawn edges only ever write it).
   const failedSet = createFailedSet();
   const isSuppressed = suppressedSeam(failedSet);
+  // The Linked PR overlay (ADR 0013): a live `gh pr list` per `done` PRD for its
+  // derived feature branch, joined onto the PRD at overlay time and stored nowhere
+  // — recomputed each scan exactly like Liveness, so a PR opened/merged/closed
+  // outside Overseer is reflected on the next rebuild. `scanBoard` only calls it
+  // for `done` PRDs (the only ones with a feature-branch PR), so the per-scan `gh`
+  // query is bounded to finished work; a `gh` failure degrades to no marker.
+  const lookupPr = realLinkedPrLookup();
   const scanWithOverlays = (r: string): Board => {
     // Run the probe *lazily*, memoised for this scan: `scanBoard` only calls the
     // liveness lookup for an in-progress / in-review card (LIVENESS_LANES), so a
@@ -114,6 +122,7 @@ function runBoard(): void {
         return verdicts[issuePath];
       },
       isSuppressed,
+      lookupPr,
     );
   };
   const initialBoard = scanWithOverlays(root);

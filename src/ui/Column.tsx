@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import { Card } from "./Card.js";
-import type { ReadyFor, HumanReviewReason, Liveness } from "../model.js";
+import type { ReadyFor, HumanReviewReason, Liveness, LinkedPr } from "../model.js";
 
 /** The minimal shape both a PRD and an Issue satisfy as a kanban card. */
 export interface CardItem {
@@ -12,6 +12,8 @@ export interface CardItem {
   readonly liveness?: Liveness;
   readonly suppressed?: boolean;
   readonly malformedStatus?: boolean;
+  /** The Linked PR overlay, set only on a `done` PRD card (ADR 0013). */
+  readonly linkedPr?: LinkedPr;
 }
 
 interface ColumnProps {
@@ -35,6 +37,7 @@ export function Column({ heading, cards, selectedId }: ColumnProps) {
           liveness={card.liveness}
           suppressed={card.suppressed}
           malformedStatus={card.malformedStatus}
+          linkedPr={card.linkedPr}
           selected={card.id === selectedId}
         />
       ))}
