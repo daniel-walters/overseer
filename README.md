@@ -11,6 +11,10 @@ reflects whatever they now say, live. Operational state Overseer owns (which age
 it launched, which launches failed) lives outside the watched root as overlays on
 the board, never inside your files.
 
+> **New here? Start with the [getting-started walkthrough](./docs/getting-started.md)** —
+> a single connected narrative from a fresh install through `init`, authoring your
+> first PRD, opening the board, and pressing `d` to watch the agents drive it.
+
 ## What it does
 
 - **Live kanban board.** Scans a root directory of PRD folders and renders them as
@@ -56,6 +60,10 @@ node dist/cli.js init   # or `npm start init` to run from source
 into your global Claude skills directory and, if you have no config yet, writes one
 pointing at a default board root of `~/overseer-board` (creating that directory).
 It never overwrites an existing config.
+
+For a guided first run from here — authoring a PRD with the skills, opening the
+board, and igniting the work — follow the
+[getting-started walkthrough](./docs/getting-started.md).
 
 To get the `overseer` command itself on your `PATH`, `npm link` (or
 `npm install -g .`) the package; the examples below use `overseer` for brevity.
@@ -152,6 +160,22 @@ npm run build      # compile to dist/
 node dist/cli.js   # run the built CLI
 overseer           # run the installed bin
 ```
+
+## Troubleshooting
+
+First-timer failures are mostly missing or unauthenticated CLIs that Overseer
+shells out to. Match the symptom to the fix:
+
+| Symptom | What it means | Fix |
+| --- | --- | --- |
+| **`d` does nothing / a dispatched Issue never starts** | Overseer dispatches by shelling out to `claude --bg`; the spawn silently no-ops if `claude` isn't on your `PATH` or isn't authenticated. | Install the `claude` CLI, make sure it's on your `PATH`, and run it once to authenticate. Confirm with `claude --version`. |
+| **`P` or `g` silently do nothing** | The PR features (open / go-to a PRD's GitHub PR) shell out to `gh`, which does nothing useful when GitHub CLI is unauthenticated. | Run `gh auth login`. Everything *except* the PR features works without `gh`. |
+| **The board is empty** | A directory is a PRD only if it directly contains a `prd.md`; a root with no such folders has nothing to render. | Put a folder under your configured `root` that holds a `prd.md` (the `overseer-to-prd` skill writes one for you). Check the layout against [Layout it expects](#layout-it-expects). |
+| **A config error on launch** | The configured `root` directory does not exist. Overseer validates the root at startup and refuses to render against a missing path. | Create the directory, or fix the `root` path in `~/.config/overseer/config.toml`. A leading `~` is expanded; the path must already exist. |
+
+Still stuck on a fresh setup? Walk the
+[getting-started guide](./docs/getting-started.md) end to end — it threads through
+each of these prerequisites in order.
 
 ## Develop
 
