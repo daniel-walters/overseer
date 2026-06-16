@@ -145,4 +145,33 @@ describe("IssueBoard", () => {
     expect(flat).toMatch(/▶ 🧑 Review/);
     expect(flat.match(/▶/g)?.length).toBe(1);
   });
+
+  it("scrolls a tall lane to keep the selected Issue in view", () => {
+    // A backlog lane far taller than the available height: with `laneHeight`
+    // wired, selecting a deep card scrolls it into view and windows out the rest
+    // (ADR 0015), so no Issue is unreachable when zoomed on a short terminal.
+    const tall: PRD = {
+      id: "big",
+      title: "Big PRD",
+      lane: "backlog",
+      issues: Array.from({ length: 20 }, (_, i) => ({
+        id: `i${i}`,
+        title: `Task-${i}`,
+        lane: "backlog" as const,
+      })),
+    };
+
+    const frame =
+      render(
+        <IssueBoard
+          prd={tall}
+          selected={{ laneIndex: 0, rowIndex: 18 }}
+          laneHeight={5}
+        />,
+      ).lastFrame() ?? "";
+    const flat = stripAnsi(frame);
+
+    expect(flat).toMatch(/▶ Task-18/);
+    expect(flat).not.toContain("Task-0");
+  });
 });
