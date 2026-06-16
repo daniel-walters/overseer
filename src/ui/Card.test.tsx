@@ -9,6 +9,65 @@ const stripAnsi = (s: string): string => s.replace(ANSI, "");
 const frameOf = (el: React.ReactElement): string =>
   stripAnsi(render(el).lastFrame() ?? "");
 
+/** The raw, ANSI-bearing frame — for asserting colour (e.g. the cyan border). */
+const rawFrameOf = (el: React.ReactElement): string =>
+  render(el).lastFrame() ?? "";
+
+// The SGR code Ink emits for a cyan foreground (the selected card's border).
+const CYAN = ESC + "[36m";
+
+describe("Card selection treatment", () => {
+  it("indicates a selected card with its cyan border alone", () => {
+    // The border flips to cyan on select; that is the sole selection cue. An
+    // unselected card carries no cyan.
+    const selected = rawFrameOf(<Card title="Focused" selected />);
+    const unselected = rawFrameOf(<Card title="Focused" />);
+
+    expect(selected).toContain(CYAN);
+    expect(unselected).not.toContain(CYAN);
+  });
+
+  it("does not prepend the ▶ arrow to a selected card's title", () => {
+    // The arrow used to cost the title two columns — the focused card truncated
+    // earlier than its neighbours. Selection no longer taxes the title line.
+    const frame = frameOf(<Card title="Focused" selected />);
+
+    expect(frame).not.toContain("▶");
+  });
+
+  it("does not truncate a selected card's title earlier than an unselected one", () => {
+    // No two-character arrow tax: the same title shows identically whether or not
+    // the card is selected — the selected card is never the narrower of the two.
+    const title = "Share one failed-set across all spawn edges";
+    const selected = frameOf(<Card title={title} selected />);
+    const unselected = frameOf(<Card title={title} />);
+
+    expect(selected).toContain(title);
+    expect(selected).toEqual(unselected);
+  });
+
+  it("leaves a coloured marker line legible on a selected card", () => {
+    // No `inverse` muddying: the live marker renders the same on a selected card
+    // as on an unselected one, so selection and status never fight visually.
+    const selected = frameOf(<Card title="Working" selected liveness="live" />);
+
+    expect(selected).toContain("● live");
+    expect(selected).toContain("Working");
+  });
+
+  it("keeps the rounded border on every card, selected or not", () => {
+    // The cyan-border cue needs every card to carry a border so the selected
+    // one's cyan reads against neutral neighbours. The rounded glyphs stay.
+    const selected = frameOf(<Card title="A" selected />);
+    const unselected = frameOf(<Card title="B" />);
+
+    for (const corner of ["╭", "╮", "╰", "╯"]) {
+      expect(selected).toContain(corner);
+      expect(unselected).toContain(corner);
+    }
+  });
+});
+
 describe("Card human-review reason marker", () => {
   it("marks a card escalated for a deviation with a deviation marker", () => {
     const frame = frameOf(<Card title="Login" humanReviewReason="deviation" />);
