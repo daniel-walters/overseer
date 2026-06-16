@@ -2,6 +2,7 @@ import React from "react";
 import { Box } from "ink";
 import { Column } from "./Column.js";
 import { groupByLane } from "./lanes.js";
+import { useColumnWidth } from "./useColumnWidth.js";
 import { BOARD_LANES, LANE_LABELS } from "../model.js";
 import type { Board } from "../model.js";
 
@@ -21,6 +22,9 @@ export function BoardView({ board, selectedIndex }: BoardViewProps) {
   const byLane = groupByLane(board.prds);
   const selectedId =
     selectedIndex === undefined ? undefined : board.prds[selectedIndex]?.id;
+  // The board level divides the viewport across its three lanes (vs the Issue
+  // level's seven), so the same terminal gives PRD columns generous room here.
+  const width = useColumnWidth(BOARD_LANES.length);
 
   return (
     <Box flexDirection="row">
@@ -30,6 +34,7 @@ export function BoardView({ board, selectedIndex }: BoardViewProps) {
           heading={LANE_LABELS[lane]}
           cards={byLane[lane]}
           selectedId={selectedId}
+          width={width}
         />
       ))}
     </Box>

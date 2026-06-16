@@ -122,14 +122,19 @@ describe("IssueBoard", () => {
     expect(columnOf(frame, "suppressed")).toBe("Ready");
   });
 
-  it("marks the selected Issue with a pointer and no other", () => {
+  it("marks the selected Issue by cyan border alone, with no pointer arrow", () => {
+    // Selection is the cyan border alone — no prepended ▶ pointer eating the
+    // title line (the cyan-border-only treatment; see Card.test.tsx). The badge
+    // and title still read, just without the arrow tax in front of them.
     const frame =
       render(<IssueBoard prd={prd} selectedIndex={1} />).lastFrame() ?? "";
     const flat = stripAnsi(frame);
 
-    // The pointer immediately precedes the selected Issue's badge/title…
-    expect(flat).toMatch(/▶ 🤖 OAuth/);
-    // …and appears exactly once across the whole frame.
-    expect(flat.match(/▶/g)?.length).toBe(1);
+    // The selected Issue's badge + title still read, unprefixed by any pointer…
+    expect(flat).toMatch(/🤖 OAuth/);
+    // …and the ▶ pointer appears nowhere in the frame.
+    expect(flat).not.toContain("▶");
+    // The cyan border is the sole selection cue — present in the rendered frame.
+    expect(frame).toContain(ESC + "[36m");
   });
 });

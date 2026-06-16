@@ -128,8 +128,7 @@ export function Card({
       paddingX={1}
       width="100%"
     >
-      <Text wrap="truncate-end" inverse={selected} bold={selected}>
-        {selected ? "▶ " : ""}
+      <Text wrap="truncate-end">
         {readyFor ? `${BADGE[readyFor]} ` : ""}
         {title}
       </Text>
