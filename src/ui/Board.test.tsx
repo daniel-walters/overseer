@@ -104,4 +104,34 @@ describe("BoardView", () => {
     expect(frame).toContain("Unopened");
     expect(frame).not.toMatch(/PR open|PR merged/);
   });
+
+  it("widens columns on a wide terminal so a long title shows in full", () => {
+    // A title longer than the 24 floor's title budget but well within a wide
+    // terminal's 3-column share: it must survive untruncated, proving the column
+    // took the distributed width rather than the old hardcoded 24.
+    const longTitle = "Share one failed-set across all spawn edges";
+    const board: Board = {
+      prds: [prd({ id: "x", title: longTitle, lane: "backlog" })],
+    };
+
+    const frame = render(<BoardView board={board} />, 240).lastFrame() ?? "";
+
+    expect(frame).toContain(longTitle);
+  });
+
+  it("clamps columns to the floor on a narrow terminal — never below 24", () => {
+    // The same long title on a narrow terminal truncates (the column holds at the
+    // 24 floor), but the truncated head still identifies the card. It must not
+    // render in full — that would mean the column shrank/grew wrongly.
+    const longTitle = "Share one failed-set across all spawn edges";
+    const board: Board = {
+      prds: [prd({ id: "x", title: longTitle, lane: "backlog" })],
+    };
+
+    // 60 cols / 3 = 20, below the floor, so each column holds at 24.
+    const frame = render(<BoardView board={board} />, 60).lastFrame() ?? "";
+
+    expect(frame).not.toContain(longTitle);
+    expect(frame).toContain("Share one");
+  });
 });
