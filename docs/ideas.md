@@ -247,6 +247,40 @@ than inviting an out-of-band dispatch. (`grill-with-docs` already frames itself 
 applied to every skill's *downstream* hand-off.) Worth a pass across all three `SKILL.md`s so
 the wording is consistent — "next step is X" at each station, "ready in Overseer" at the end.
 
+### Keybind to advance a human-held Issue (mark done / mark for review)
+
+A human-held Issue has **no board action to move it on** — the human must hand-edit the
+frontmatter `status`. Two states sit in human hands:
+
+- **`ready-for-human`** — an Issue routed for a *human* to implement (HITL), parked in the
+  **ready** column with its badge. When the human finishes the work, nothing on the board
+  advances it: the natural next states are **`done`** (it's complete) or **`ready-for-review`**
+  (hand the result to the AI review loop, exactly as a finished agent Issue parks at
+  `ready-for-review`). Today both require editing the file by hand.
+- **`human-review`** — an escalated Issue (deviation / non-convergence / conflict) whose
+  **single exit is `done`** via the bundled `overseer-merge` skill. "Mark done" here already has
+  a path, but it's a skill run outside the board, not an in-board keypress.
+
+The idea: a keybind on a human-held card to **mark it `done`** or **mark it `ready-for-review`**,
+so the human can advance their own work from inside the board the same way `d`/`r` advance agent
+work — no dropping out to edit YAML. Most directly it fills the `ready-for-human` gap (which has
+*no* affordance at all); "mark done" also generalises to `human-review`'s done-exit, though that
+one already has the merge skill and a keybind there must not bypass the worktree merge the skill
+performs (a `human-review → done` that doesn't merge the branch would mark work done without
+landing it).
+
+Open questions: (1) which transitions each keybind offers per state — `ready-for-human` →
+{`done`, `ready-for-review`}, and whether `human-review` → `done` belongs here at all or stays
+with `overseer-merge` (since it must *merge*, not just flip status); (2) this is the board's first
+keybind that writes a **status flip with no spawn** — every status-writing action today either
+spawns an agent (`d`/`r`) or is the agent/skill writing its own transition, so a bare human
+"advance status" keypress is a new actor on the file, worth confirming it still respects the
+[ADR 0002](./adr/0002-agents-write-the-root-viewer-stays-readonly.md) writer contract; (3)
+whether it needs a confirm step (a status flip is cheap and reversible by re-editing, unlike the
+outward writes `d`/Open PR make, so probably a bare keypress is fine); (4) gating — the keybind is
+Issue-level and only lights up on a `ready-for-human` (and possibly `human-review`) card. Pairs
+with the central keybind registry (now `done`) — register the new binds there.
+
 ### Jump straight to an Issue needing human review
 
 `human-review` is the *one* column in the whole pipeline that requires a human
