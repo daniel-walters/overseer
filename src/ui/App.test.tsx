@@ -20,6 +20,8 @@ import type { OpenPrResult } from "../dispatch/openPr.js";
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
 const ARROW_DOWN = ESC + "[B";
+const ARROW_RIGHT = ESC + "[C";
+const ARROW_LEFT = ESC + "[D";
 
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
@@ -1005,6 +1007,8 @@ describe("App open PR (P on a done PRD)", () => {
     const opener = spyOpenPr();
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
 
+    stdin.write(ARROW_RIGHT); // move right from the in-progress BillPRD to the done AuthPRD
+    await tick();
     stdin.write("P");
     await tick();
 
@@ -1046,6 +1050,8 @@ describe("App open PR (P on a done PRD)", () => {
     const opener = spyOpenPr();
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
 
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
     stdin.write("P");
     await tick();
     stdin.write(ENTER); // confirm
@@ -1062,6 +1068,8 @@ describe("App open PR (P on a done PRD)", () => {
     const opener = spyOpenPr(() => ({ ok: false, error: "gh: not authenticated" }));
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
 
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
     stdin.write("P");
     await tick();
     stdin.write(ENTER); // confirm
@@ -1077,6 +1085,8 @@ describe("App open PR (P on a done PRD)", () => {
     );
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
 
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
     stdin.write("P");
     await tick();
     expect(stripAnsi(lastFrame() ?? "")).toContain("spans 2 repos");
@@ -1093,6 +1103,8 @@ describe("App open PR (P on a done PRD)", () => {
     );
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
 
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
     stdin.write("P");
     await tick();
 
@@ -1116,6 +1128,8 @@ describe("App open PR (P on a done PRD)", () => {
     const opener = spyOpenPr();
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
 
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
     stdin.write("P");
     await tick();
     stdin.write(ENTER); // confirm → notice shown
@@ -1142,7 +1156,9 @@ describe("App open PR (P on a done PRD)", () => {
       <App board={doneBoard} openPr={opener} />,
     );
 
-    stdin.write("P"); // open the preview on AuthPRD (first, done)
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("P"); // open the preview on AuthPRD (done)
     await tick();
     expect(stripAnsi(lastFrame() ?? "")).toContain("auth-branch");
 
