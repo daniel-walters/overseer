@@ -5,7 +5,9 @@ import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
-import { DetailModal } from "./DetailModal.js";
+import { DetailModal, DETAIL_MODAL_CHROME_ROWS } from "./DetailModal.js";
+import { renderMarkdown } from "./markdown.js";
+import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
 import { navReduce, initialNav } from "./navigation.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
@@ -222,6 +224,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   // alone drives the render — `nav.confirming` only owns input/navigation
   // suppression, the two are never read together.
   const [modal, setModal] = useState<ActiveModal | undefined>(undefined);
+  // The detail modal's scroll position over its body's *rendered* lines. Reset to
+  // the top when the modal opens (so a reopen never resumes a stale position) and
+  // moved by `j`/`k`/arrows while it is open, clamped to the body's bounds. Held
+  // here (not on `modal`) because the modal capture is frozen at open time, but the
+  // offset is live state the input handler updates on every keystroke.
+  const [detailScroll, setDetailScroll] = useState(0);
   // The help modal's open state, kept separate from `modal` — help is a passive
   // reference card with no frozen capture and no confirm side-effect, so it does
   // not belong in the action-preview `ActiveModal` union. The `nav.confirming`
@@ -241,6 +249,19 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   const issues = selectedPrd?.issues ?? [];
   const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
   const selectedIssue = issues[issueIndex];
+
+  // The detail modal's body region height and its current scroll window. The
+  // viewport is the terminal height minus the modal's fixed chrome (title, hints,
+  // affordance rows); the body's rendered lines are windowed through the same
+  // `scrollDetail` the modal renders from, so the App's keypress clamp and the
+  // modal's window can never disagree. Only meaningful while a detail modal is
+  // open; `maxOffset` is what `j`/`k`/arrows clamp the offset against.
+  const detailBodyRows = Math.max(1, rows - DETAIL_MODAL_CHROME_ROWS);
+  const detailLines =
+    modal?.kind === "detail" && modal.detail.body.trim().length > 0
+      ? renderMarkdown(modal.detail.body).split("\n")
+      : [];
+  const detailMaxOffset = scrollDetail(detailLines, detailScroll, detailBodyRows).maxOffset;
 
   /**
    * The App-side closures the registry dispatches a matched keypress to. Each is
@@ -359,7 +380,10 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
         nav.level === "issues" && selectedIssue
           ? detailReader.readDetail(selectedPrd.id, selectedIssue.id)
           : detailReader.readDetail(selectedPrd.id);
-      if (detail) setModal({ kind: "detail", detail });
+      if (detail) {
+        setDetailScroll(0); // always open at the top, never a stale position
+        setModal({ kind: "detail", detail });
+      }
     },
     showHelp: () => setShowHelp(true),
     quit: () => {
@@ -389,16 +413,23 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
 
     // The detail modal owns input while it is open, mirroring the help modal's
     // dismissal contract: `v` or Esc close it (restoring the prior selection/zoom,
-    // which the modal never touched), `q` closes it and quits, everything else is
-    // swallowed (a stray key while reading a body never leaks to the board). It is
-    // a read-only viewer, so there is nothing to confirm — it does not go through
-    // `nav.confirming`, and closing is just clearing the frozen capture.
+    // which the modal never touched), `q` closes it and quits. `j`/`k` and the
+    // down/up arrows scroll the body, clamped to `[0, detailMaxOffset]` so the
+    // offset can never move past the start or end (and a body that fits has
+    // `maxOffset` 0, so the keys are inert). Everything else is swallowed (a stray
+    // key while reading a body never leaks to the board). It is a read-only viewer,
+    // so there is nothing to confirm — it does not go through `nav.confirming`, and
+    // closing is just clearing the frozen capture.
     if (modal?.kind === "detail") {
       if (input === "v" || key.escape) {
         setModal(undefined);
       } else if (input === "q") {
         setModal(undefined);
         exit();
+      } else if (input === "j" || key.downArrow) {
+        setDetailScroll((o) => Math.min(o + 1, detailMaxOffset));
+      } else if (input === "k" || key.upArrow) {
+        setDetailScroll((o) => Math.max(o - 1, 0));
       }
       return;
     }
@@ -512,7 +543,13 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
     // The read-only body view — a full-screen takeover like the action previews
     // (it gives the body the whole screen, ADR 0014), rendered from the frozen
     // capture so a re-scan that removes the card cannot blank it mid-read.
-    return <DetailModal detail={modal.detail} />;
+    return (
+      <DetailModal
+        detail={modal.detail}
+        scrollOffset={detailScroll}
+        viewportRows={detailBodyRows}
+      />
+    );
   }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)

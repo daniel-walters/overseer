@@ -52,4 +52,41 @@ describe("DetailModal", () => {
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("Esc");
   });
+
+  // A body of eight one-line paragraphs renders to ~15 terminal lines (each
+  // paragraph plus a blank separator); a small `viewportRows` forces a window.
+  const tallBody = Array.from({ length: 8 }, (_, i) => `LINE${i}`).join("\n\n");
+
+  it("renders only the window of lines that fits the viewport, not the whole body", () => {
+    const { lastFrame } = render(
+      <DetailModal detail={{ title: "T", body: tallBody }} scrollOffset={0} viewportRows={3} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("LINE0");
+    expect(frame).not.toContain("LINE7"); // clipped below the window
+  });
+
+  it("reflects the scroll offset — a later window shows later lines", () => {
+    const { lastFrame } = render(
+      <DetailModal detail={{ title: "T", body: tallBody }} scrollOffset={99} viewportRows={3} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("LINE7"); // scrolled (and clamped) to the end
+    expect(frame).not.toContain("LINE0"); // first line now clipped above
+  });
+
+  it("shows an overflow affordance when there is more body below", () => {
+    const { lastFrame } = render(
+      <DetailModal detail={{ title: "T", body: tallBody }} scrollOffset={0} viewportRows={3} />,
+    );
+    expect(stripAnsi(lastFrame() ?? "")).toMatch(/more below|▾|↓/);
+  });
+
+  it("shows no overflow affordance when the whole body fits", () => {
+    const { lastFrame } = render(
+      <DetailModal detail={{ title: "T", body: "just one line" }} scrollOffset={0} viewportRows={20} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toMatch(/more below|more above/);
+  });
 });
