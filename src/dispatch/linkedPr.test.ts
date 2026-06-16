@@ -28,6 +28,10 @@ class FakePrSeam implements PrSeam {
   readonly query = vi.fn((repo: string, branch: string) => {
     return this.prs.get(`${repo}\n${branch}`);
   });
+  // The write half of the seam: unused by the read-path derivation tests here
+  // (exercised in openPr.test.ts), present only so the fake satisfies the seam.
+  readonly push = vi.fn();
+  readonly create = vi.fn(() => "https://gh/pr/new");
 
   /** Register a PR the fake should report for `repo` + `branch`. */
   setPr(repo: string, branch: string, state: PrState, url: string): void {
@@ -131,6 +135,8 @@ describe("createLinkedPrLookup", () => {
       query: () => {
         throw new Error("gh: command not found");
       },
+      push: () => {},
+      create: () => "",
     };
     const lookup = createLinkedPrLookup({
       seam,

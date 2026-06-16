@@ -9,6 +9,8 @@ import { navReduce, initialNav } from "./navigation.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
+import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
+import type { OpenPrResult } from "../dispatch/openPr.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
@@ -95,15 +97,33 @@ export interface Killer {
 }
 
 /**
+ * The Open PR seam the App drives at the PRD level — the board's first outward
+ * GitHub write (CONTEXT.md), the `done`-gated sibling of {@link Dispatcher}'s `d`.
+ *
+ * - `readOpenPr` resolves the selected `done` PRD into an Open PR preview: the
+ *   derived feature branch, the resolved default base, and whether the action can
+ *   proceed or is refused (the single-repo guard, or a branch that already has a
+ *   PR). `undefined` if the PRD vanished from the watched root.
+ * - `openPr` runs the action over a previewed PRD (push the branch, create the PR)
+ *   and returns an {@link OpenPrResult}, so the App can surface the new PR's url or
+ *   a loud `gh`/`git` failure on the status line. A no-op for a refused preview.
+ */
+export interface OpenPr {
+  readonly readOpenPr: (prdId: string) => OpenPrPreviewData | undefined;
+  readonly openPr: (preview: OpenPrPreviewData) => OpenPrResult;
+}
+
+/**
  * What the open modal is previewing: a PRD dispatch, a single-Issue review, a
- * single-orphan re-dispatch, or a single-agent kill. At most one is ever open
- * (the `nav.confirming` guard).
+ * single-orphan re-dispatch, a single-agent kill, or a PRD Open PR. At most one
+ * is ever open (the `nav.confirming` guard).
  */
 type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
   | { readonly kind: "review"; readonly preview: ReviewPreviewData }
   | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData }
-  | { readonly kind: "kill"; readonly preview: KillPreviewData };
+  | { readonly kind: "kill"; readonly preview: KillPreviewData }
+  | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -139,6 +159,8 @@ interface AppProps {
   rollback?: Rollback;
   /** Wired in production; absent in tests that don't exercise the kill switch. */
   killer?: Killer;
+  /** Wired in production; absent in tests that don't exercise Open PR. */
+  openPr?: OpenPr;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
   /** Wired in production; absent in tests that don't exercise `go to PR`. */
@@ -161,7 +183,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, urlOpener, activity }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, autoRun, urlOpener, activity }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -284,6 +306,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, ur
         setNotice(`${selectedPrd.title} has no PR to open.`);
       }
     },
+    openPr: () => {
+      // Open PR, board-level only (the registry gates the level). Gated further on
+      // the selected PRD's own derived `done` lane — the sole column a finished
+      // PRD's feature branch can be PR'd from — so `P` is a no-op on a backlog /
+      // in-progress PRD, mirroring how the kill/redispatch handlers gate on a
+      // card's liveness. `readOpenPr` resolves the branch + base + eligibility once
+      // and freezes it on the modal; a vanished PRD (raced a deletion) yields no
+      // preview, so nothing opens.
+      if (openPr && selectedPrd?.lane === "done") {
+        const preview = openPr.readOpenPr(selectedPrd.id);
+        if (preview) {
+          setModal({ kind: "open-pr", preview });
+          dispatch({ type: "open-preview" });
+        }
+      }
+    },
     toggleAutoRun: () => autoRun?.toggle(),
     showHelp: () => setShowHelp(true),
     quit: () => {
@@ -380,6 +418,20 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, ur
       } else if (outcome === "unavailable") {
         setNotice(`Couldn't run \`claude stop\` — is the claude CLI on your PATH?`);
       }
+    } else if (modal?.kind === "open-pr" && modal.preview.eligibility.canOpen) {
+      // Push the branch then open the PR (the orchestration does both, in order).
+      // A refused preview (>1 repo, or an existing PR) is a read-only notice:
+      // confirm does nothing, it just dismisses — its `canOpen` is false, so this
+      // branch is skipped. A `gh`/`git` failure comes back as a failed result and
+      // surfaces loudly on the status line, like a spawn failure; success surfaces
+      // the new PR's url. The PRD's `done` column is unchanged either way (ADR
+      // 0003) — the new PR shows via the Linked PR overlay on the next scan.
+      const result = openPr?.openPr(modal.preview);
+      if (result?.ok) {
+        setNotice(`Opened PR for ${modal.preview.prdTitle}: ${result.url}`);
+      } else if (result) {
+        setNotice(`Couldn't open PR for ${modal.preview.prdTitle}: ${result.error}`);
+      }
     }
   }
 
@@ -398,6 +450,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, ur
   }
   if (modal?.kind === "kill") {
     return <KillPreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "open-pr") {
+    return <OpenPrPreview preview={modal.preview} />;
   }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)
@@ -471,6 +526,7 @@ const ACTIVITY_INDICATOR: Record<
 const KEY_HINTS: readonly string[] = [
   "d dispatch",
   "r review",
+  "P open PR",
   "? help",
 ];
 
