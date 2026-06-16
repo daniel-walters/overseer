@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { App, type Dispatcher, type Reviewer, type Rollback, type Killer } from "./App.js";
+import { App, type Dispatcher, type Reviewer, type Rollback, type Killer, type UrlOpener } from "./App.js";
 import { useLiveBoard, type UseLiveBoardOptions } from "./useLiveBoard.js";
 
 export interface LiveAppProps extends UseLiveBoardOptions {
@@ -11,6 +11,8 @@ export interface LiveAppProps extends UseLiveBoardOptions {
   readonly rollback?: Rollback;
   /** The kill-switch seam, wired in cli.tsx; absent in board-only tests. */
   readonly killer?: Killer;
+  /** The browser seam `go to PR` opens through; wired in cli.tsx, absent in tests. */
+  readonly urlOpener?: UrlOpener;
 }
 
 // `reactor` rides in via UseLiveBoardOptions, consumed by useLiveBoard rather
@@ -22,7 +24,7 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  * preview) separately from the board, so a refresh under the user's feet never
  * loses their place. The dispatcher and reviewer are threaded straight through.
  */
-export function LiveApp({ dispatcher, reviewer, rollback, killer, ...options }: LiveAppProps) {
+export function LiveApp({ dispatcher, reviewer, rollback, killer, urlOpener, ...options }: LiveAppProps) {
   const reactor = options.reactor;
   // The board-level reactor-activity signal shown beside the auto-run indicator
   // (Issue: surface reactor state). LiveApp owns it as a single source of truth,
@@ -73,6 +75,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, ...options }: 
       rollback={rollback}
       killer={killer}
       autoRun={autoRun}
+      urlOpener={urlOpener}
       activity={activity}
     />
   );

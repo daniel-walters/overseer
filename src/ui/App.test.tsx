@@ -836,6 +836,116 @@ describe("App kill (K on a live card)", () => {
   });
 });
 
+describe("App go to PR (g on a done PRD)", () => {
+  /** A board whose first PRD is `done` with an open PR, the second with no PR. */
+  const prBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+        linkedPr: { state: "open", url: "https://github.com/o/r/pull/7" },
+      },
+      {
+        id: "billing",
+        title: "BillPRD",
+        lane: "done",
+        issues: [{ id: "010-invoice", title: "Invoice", lane: "done" }],
+      },
+    ],
+  };
+
+  /** A board with one `done` PRD whose PR is merged. */
+  const mergedBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+        linkedPr: { state: "merged", url: "https://github.com/o/r/pull/9" },
+      },
+    ],
+  };
+
+  /** A URL opener whose open method is a spy. */
+  function spyOpener() {
+    return { open: vi.fn<(url: string) => void>() };
+  }
+
+  it("opens the selected PRD's PR url on g when its overlay reports an open PR", async () => {
+    const opener = spyOpener();
+    const { stdin } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/7");
+  });
+
+  it("opens the PR url for a merged PR too (a merged PR's discussion stays reachable)", async () => {
+    const opener = spyOpener();
+    const { stdin } = render(<App board={mergedBoard} urlOpener={opener} />);
+
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
+  });
+
+  it("is a no-op (no open, no error) on a PRD with no linked PR, flashing a 'no PR' notice", async () => {
+    const opener = spyOpener();
+    const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write(ARROW_DOWN); // move to BillPRD, which has no linked PR
+    await tick();
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
+  });
+
+  it("does nothing on g at the Issue level (go to PR is board-level only)", async () => {
+    const opener = spyOpener();
+    const { stdin } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on g when no url opener is wired", async () => {
+    // No opener seam: the keybind degrades to a silent no-op rather than crashing.
+    const { stdin, lastFrame } = render(<App board={prBoard} />);
+
+    stdin.write("g");
+    await tick();
+
+    // The board is still up and unchanged (no crash, no notice).
+    expect(stripAnsi(lastFrame() ?? "")).toContain("AuthPRD");
+  });
+
+  it("clears the 'no PR' notice on the next keypress", async () => {
+    const opener = spyOpener();
+    const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
+
+    stdin.write(ARROW_DOWN); // BillPRD, no PR
+    await tick();
+    stdin.write("g"); // flashes the notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
+
+    stdin.write("k"); // any keypress dismisses the one-shot notice
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("no PR");
+  });
+});
+
 describe("App full screen", () => {
   /** Count the rendered rows in a frame (Ink emits one line per terminal row). */
   const rowCount = (frame: string): number => frame.split("\n").length;

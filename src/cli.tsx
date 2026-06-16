@@ -9,6 +9,7 @@ import type { ReviewConfig } from "./review/reviewConfig.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
+import { realUrlOpener } from "./ui/urlOpener.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
@@ -186,6 +187,7 @@ function runBoard(): void {
       reviewer={reviewer}
       rollback={rollback}
       killer={killer}
+      urlOpener={realUrlOpener}
       reactor={reactor}
     />,
     { alternateScreen: true },
