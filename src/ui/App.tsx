@@ -117,6 +117,18 @@ export interface AutoRun {
   readonly toggle: () => void;
 }
 
+/**
+ * The browser seam the `go to PR` keybind drives — open a url in the default
+ * browser. A seam, not a direct shell-out, so the keybind's gating (fire only
+ * when the selected `done` PRD's Linked PR overlay reports a PR; no-op otherwise)
+ * is testable without launching a real browser. The default impl shells out to
+ * the platform open command; a test fake records the url. Mirrors {@link AutoRun}
+ * and the dispatch seams: the App reaches GitHub only through an injected port.
+ */
+export interface UrlOpener {
+  readonly open: (url: string) => void;
+}
+
 interface AppProps {
   board: Board;
   /** Wired in production; absent in tests that don't exercise dispatch. */
@@ -129,6 +141,8 @@ interface AppProps {
   killer?: Killer;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
+  /** Wired in production; absent in tests that don't exercise `go to PR`. */
+  urlOpener?: UrlOpener;
   /**
    * The board-level reactor-activity signal (working / idle / at-rest), derived
    * from in-memory Reactor state and recomputed on each rebuild (Issue: surface
@@ -147,7 +161,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, activity }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, urlOpener, activity }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -251,6 +265,23 @@ export function App({ board, dispatcher, reviewer, rollback, killer, autoRun, ac
           // broken — so say plainly there's nothing to stop.
           setNotice(`${selectedIssue.id} has no recorded agent to stop — re-check the board.`);
         }
+      }
+    },
+    goToPr: () => {
+      // Board-level (the registry gates the level): the Linked PR overlay lives
+      // on the PRD card. Gated further on the card's own `linkedPr` overlay — the
+      // same live-query result the marker renders (open *or* merged, so a merged
+      // PR's discussion stays reachable). It introduces no new `gh` query and no
+      // outward write: it only reads the overlay's `url` and hands it to the
+      // browser seam.
+      if (!urlOpener || !selectedPrd) return;
+      const linkedPr = selectedPrd.linkedPr;
+      if (linkedPr) {
+        urlOpener.open(linkedPr.url);
+      } else {
+        // No PR to open — never an error, just a clear status-line flash so the
+        // keypress isn't indistinguishable from `g` being broken.
+        setNotice(`${selectedPrd.title} has no PR to open.`);
       }
     },
     toggleAutoRun: () => autoRun?.toggle(),
