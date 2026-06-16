@@ -186,6 +186,67 @@ base), turning the linked-PR icon, `go to PR`, and the link storage from a singl
 a **collection per PRD** — and the confirm modal into a preview of N PRs into N repos. Worth
 building only once multi-repo PRDs are real.
 
+### Rename the bundled `tdd` skill to `overseer-tdd`
+
+The quick-wins work bundled the `tdd` skill with the app and made the implementor prompt
+hard-require it (so dispatched worker agents drive their work test-first). But it was bundled
+under its bare upstream name, `tdd`, while every other bundled skill is namespaced
+`overseer-*` (`overseer-grill-with-docs`, `overseer-to-prd`, `overseer-to-issues`,
+`overseer-merge`). So the shipped set is four `overseer-*` skills plus one bare `tdd` — an
+inconsistency. It should be **`overseer-tdd`** to match the convention: this is *Overseer's*
+test-first skill for *its* worker agents, not the operator's personal `tdd`.
+
+Why the namespace matters beyond tidiness: `init` installs bundled skills into the operator's
+**global** `~/.claude/skills` (ADR 0004, remove-then-copy per skill). A bare `tdd` there
+**collides with any personal `tdd` skill the operator already keeps** — Overseer would silently
+overwrite it on every `init`. Namespacing to `overseer-tdd` removes the collision: Overseer owns
+the `overseer-*` namespace, leaving a user's own `tdd` untouched, exactly as the other four
+already do. The `overseer-tdd` name is also the clear signal that *this* is the skill worker
+agents must use — distinct from whatever `tdd` the human operator runs interactively.
+
+The rename touches three coupled places, so it must move together: (1) the bundled skill
+directory (`skills/tdd` → `skills/overseer-tdd`, and its `SKILL.md` name); (2) the implementor
+prompt, which names the skill by string (`buildImplementorPrompt` → "drive with the
+`overseer-tdd` skill"); (3) the bundled-skill install test that asserts `tdd` is present. A
+stale `~/.claude/skills/tdd` from the current bundling would linger after the rename (init only
+removes-then-copies the skills it ships, so it won't delete the old name) — a one-time manual
+cleanup, or noted as harmless clutter. Small and mechanical, but it is a rename across the
+prompt contract, so worth doing deliberately rather than as a drive-by.
+
+### Reframe the authoring skills so each one prompts the next — ending *in Overseer*
+
+The authoring pipeline is a chain of skills — `overseer-grill-with-docs` →
+`overseer-to-prd` → `overseer-to-issues` — but the chain doesn't consistently *hand off* at
+each step, so the operator has to know the next move themselves. The closing language should
+make each skill prompt the next, like a guided flow: after a **grill** the skill should say
+the next step is **`overseer-to-prd`**; after the **PRD** is written it should say the next
+step is **`overseer-to-issues`**; and after the **Issues** are written it should say *the
+work is now ready in Overseer* — open the board and ignite it there.
+
+Two problems with the wording today:
+
+1. **The chain isn't uniformly self-prompting.** `to-prd` does end by naming `to-issues` as
+   the next step, but `to-issues` has **no closing hand-off at all** — it stops once the files
+   are written, leaving the operator at a dead end with no cue for what comes next. Every skill
+   should end by pointing at the next station, the last one included.
+2. **The terminal step points the wrong way.** The natural (and observed) instinct at the end
+   of `to-issues` is to **dispatch the work from the authoring session** — spin up agents
+   straight from the conversation that just wrote the Issues. That is the wrong frame. The
+   Issues are now **files in the Overseer root**, and the whole point of the tool is that
+   Overseer reads them as a live board and is the place you ignite work (press `d`, let the
+   reactor drive). The authoring session's job *ends* when the Issues are written. So the
+   terminal hand-off should be **"this is ready to go in Overseer"** — not "now dispatch from
+   here." Dispatching out-of-band from the authoring session bypasses the board, the reactor,
+   liveness, and every operational affordance Overseer exists to provide; it splits the
+   workflow across two surfaces when it should converge on the board.
+
+The fix is **language, not mechanism**: tighten each authoring skill's closing instruction so
+the flow self-documents its next step, and so the final step terminates at the board rather
+than inviting an out-of-band dispatch. (`grill-with-docs` already frames itself as the
+"upstream" producer that does *not* write a PRD; this is the same self-locating discipline,
+applied to every skill's *downstream* hand-off.) Worth a pass across all three `SKILL.md`s so
+the wording is consistent — "next step is X" at each station, "ready in Overseer" at the end.
+
 ### Jump straight to an Issue needing human review
 
 `human-review` is the *one* column in the whole pipeline that requires a human
