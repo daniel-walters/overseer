@@ -676,3 +676,53 @@ open design questions are the interesting part:
 Pairs with the "Central keybind registry" idea (this touches the same input layer)
 and benefits from being designed alongside the selection-highlight rework, since both
 are about how the *current* card is identified and moved.
+
+### Surface "needs human intervention" on the board-level PRD card
+
+At the **board level** the cards are PRDs across three derived columns (backlog /
+in-progress / done) and they carry **no markers at all** — every marker family
+(liveness, suppressed, human-review reason, malformed-status) is an *Issue-level*
+overlay, visible only once you zoom into a PRD. So a PRD with an Issue parked in
+`human-review` — the one column in the whole pipeline that is *blocked on a human*
+(CONTEXT.md → Review outcome) — looks, from the board, exactly like a PRD that is
+humming along under the reactor. The single most important thing a PRD could tell
+you ("the automated pipeline has stalled here and is waiting on *you*") is the one
+thing the board-level card cannot currently show. You only discover it by zooming
+into each in-progress PRD and hunting.
+
+The idea: a **board-level PRD card marker** that lights up when *anything inside that
+PRD needs human intervention* — most concretely, ≥1 Issue in `human-review`, but
+worth deciding whether it also covers the other "stuck, needs a human" states
+(`ready-for-human` waiting to be picked up; an [Orphan](#); a `⚠ bad status` Issue).
+It rolls an Issue-level fact *up* to the PRD card so the board answers "which PRDs
+need me?" at a glance, without zooming.
+
+Open questions:
+
+- **What counts as "needs intervention"?** The tightest definition is *any Issue in
+  `human-review`* (the genuine human-attention queue). A looser one also rolls up
+  `ready-for-human` (HITL work not yet done), orphans (`R`-recoverable), and
+  malformed-status Issues (frontmatter to fix). Each is a real "a human must act"
+  state, but they want *different* actions — so a single undifferentiated marker may
+  under-inform. Does the PRD marker collapse them into one "⚠ needs you" glyph, or
+  carry a count / the dominant reason?
+- **It's a derived roll-up, not stored state.** Like every other marker it must be
+  computed from the Issues at scan time (ADR 0002 / ADR 0003) — the PRD has no field
+  of its own. The board already derives a PRD's *column* from its Issues; this is the
+  same shape (derive a PRD-level *marker* from its Issues), so it fits the existing
+  derivation pass and writes nothing.
+- **Where it sits.** The board-level PRD card is currently marker-free except the
+  `done`-only [Linked PR](#) overlay. This would be the **first Issue→PRD roll-up
+  marker** and the first marker an *in-progress* PRD card carries — worth confirming
+  it reads as its own line (the established marker idiom) and how it coexists with the
+  Linked PR marker (disjoint columns — Linked PR is `done`-only, human-review implies
+  not-done — so they likely never co-render, same as the Issue-level families).
+- **Counting.** If several Issues in one PRD need a human, does the marker show a
+  count ("⚠ 2 need you") or just presence? A count makes the board a triage surface;
+  presence is simpler.
+
+Pairs tightly with the "Jump straight to an Issue needing human review" idea above —
+that one *navigates* to the escalated Issue; this one *reveals at the board level
+which PRD holds it*. Together they answer "where is the work blocked on me?" both at a
+glance (this marker) and with a keypress (that jump). Designed together, the marker is
+the signal and the jump is the action it invites.

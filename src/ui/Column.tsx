@@ -21,12 +21,19 @@ interface ColumnProps {
   cards: readonly CardItem[];
   /** The id of the card to highlight, if the selected card is in this column. */
   selectedId?: string;
+  /**
+   * The column's width in terminal cells, distributed across the level's visible
+   * columns by {@link useColumnWidth} (never below the 24 floor). The board and
+   * Issue levels feed it their own column count, so the same terminal yields
+   * different widths per level.
+   */
+  width: number;
 }
 
 /** One kanban column: a heading and its cards stacked vertically. */
-export function Column({ heading, cards, selectedId }: ColumnProps) {
+export function Column({ heading, cards, selectedId, width }: ColumnProps) {
   return (
-    <Box flexDirection="column" width={24} marginRight={1}>
+    <Box flexDirection="column" width={width} marginRight={1}>
       <Text bold>{heading}</Text>
       {cards.map((card) => (
         <Card

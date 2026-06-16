@@ -21,6 +21,7 @@ import type { CardDetail } from "./detailReader.js";
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
 const ARROW_DOWN = ESC + "[B";
+const ARROW_UP = ESC + "[A";
 
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
@@ -1747,5 +1748,143 @@ describe("App detail modal", () => {
 
     expect(detailReader.readDetail).not.toHaveBeenCalled();
     expect(stripAnsi(lastFrame() ?? "")).toContain("Keybindings");
+  });
+
+  // A body taller than a short terminal: each marker is its own paragraph so it
+  // renders to a distinct terminal line we can assert window membership on.
+  const TALL = Array.from({ length: 20 }, (_, i) => `LINE${i}`).join("\n\n");
+  // A terminal short enough that 20+ body lines overflow the modal viewport.
+  const SHORT_ROWS = 12;
+
+  it("scrolls the body down with j and up with k", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v"); // open — windowed at the top
+    await tick();
+    const top = stripAnsi(lastFrame() ?? "");
+    expect(top).toContain("LINE0");
+    expect(top).not.toContain("LINE19"); // the end is clipped below
+
+    // Scroll down several lines — later content comes into view.
+    for (let i = 0; i < 8; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    const scrolled = stripAnsi(lastFrame() ?? "");
+    expect(scrolled).not.toContain("LINE0"); // the top is now clipped above
+
+    // Scroll back up — the top returns.
+    for (let i = 0; i < 8; i++) {
+      stdin.write("k");
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
+  });
+
+  it("scrolls with the down and up arrows too", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 8; i++) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("LINE0");
+    for (let i = 0; i < 8; i++) {
+      stdin.write(ARROW_UP);
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
+  });
+
+  it("cannot scroll up past the start of the body", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 5; i++) {
+      stdin.write("k"); // already at the top — no movement
+      await tick();
+    }
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("LINE0"); // still at the top
+    expect(frame).not.toMatch(/more above/); // no above-affordance at the start
+  });
+
+  it("cannot scroll down past the end of the body", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 50; i++) {
+      stdin.write("j"); // far past the end — clamps at the last full window
+      await tick();
+    }
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("LINE19"); // the end is shown
+    expect(frame).not.toMatch(/more below/); // nothing left below
+  });
+
+  it("shows no scroll affordance and ignores scroll keys for a body that fits", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "short body" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toMatch(/more below|more above/);
+
+    stdin.write("j"); // ignored — nothing to scroll
+    await tick();
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("short body");
+    expect(frame).not.toMatch(/more above/);
+  });
+
+  it("resets the scroll position when the modal is reopened", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 8; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("LINE0");
+
+    stdin.write("v"); // close
+    await tick();
+    stdin.write("v"); // reopen — back at the top
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
   });
 });
