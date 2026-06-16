@@ -189,6 +189,26 @@ export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
  */
 export type Liveness = "live" | "unknown" | "orphaned";
 
+/**
+ * The Linked PR overlay on a `done` PRD card: whether it has a GitHub PR for its
+ * derived feature branch, and that PR's state (CONTEXT.md, ADR 0013). Derived on
+ * each scan by a live `gh` query, joined onto the PRD at overlay time, and never
+ * written to a sidecar or `prd.md` (ADR 0002 / 0003) — so a PR opened, merged, or
+ * closed *outside* Overseer is reflected on the next scan, and the merged state
+ * (the real end-of-lifecycle signal that the out-of-scope default-branch merge
+ * happened) stays honest.
+ *
+ * Three-state, with *no PR* being the overlay's **absence** (no marker): only an
+ * *open* and a *merged* PR carry a value. A closed-unmerged PR folds into *no PR*
+ * (the marker disappears), so it is deliberately not a fourth state. The `url` is
+ * what the `go to PR` keybind opens (a later slice). Opening/merging a PR never
+ * changes the PRD's derived lane (ADR 0003) — this is a pure overlay.
+ */
+export interface LinkedPr {
+  readonly state: "open" | "merged";
+  readonly url: string;
+}
+
 export interface Issue {
   /** Identity: the Issue filename (e.g. `001-auth.md`). */
   readonly id: string;
@@ -252,6 +272,16 @@ export interface PRD {
    * Every markdown file in the PRD directory other than `prd.md` is an Issue.
    */
   readonly issues: readonly Issue[];
+  /**
+   * The Linked PR overlay, set only on a `done` PRD whose live `gh` query found a
+   * PR (open or merged) for its derived feature branch (CONTEXT.md, ADR 0013).
+   * Absent on a non-`done` PRD (the overlay is gated to `done`), on a `done` PRD
+   * with no PR, and when no lookup is wired in — so a finished PRD still needing a
+   * PR is distinct from one that has one. A read-only overlay, recomputed each
+   * scan, never persisted (ADR 0002 / 0003); opening/merging the PR leaves
+   * {@link lane} unchanged (`done` stays `done`).
+   */
+  readonly linkedPr?: LinkedPr;
 }
 
 export interface Board {

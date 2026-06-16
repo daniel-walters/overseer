@@ -1,6 +1,6 @@
 import React from "react";
 import { Box, Text } from "ink";
-import type { ReadyFor, HumanReviewReason, Liveness } from "../model.js";
+import type { ReadyFor, HumanReviewReason, Liveness, LinkedPr } from "../model.js";
 
 interface CardProps {
   title: string;
@@ -29,6 +29,14 @@ interface CardProps {
    * with the other markers (it rides the backlog lane, they ride other lanes).
    */
   malformedStatus?: boolean;
+  /**
+   * Linked PR marker, present only on a `done` PRD card whose live `gh` query
+   * found a PR for its derived feature branch (CONTEXT.md, ADR 0013). Three-state:
+   * *open*, *merged*, or — its absence — *no PR* (no marker). A PRD-level overlay,
+   * disjoint from the Issue-level markers above (a PRD card carries no `readyFor` /
+   * liveness / suppressed / human-review marker), so it never co-renders with them.
+   */
+  linkedPr?: LinkedPr;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -86,6 +94,21 @@ const SUPPRESSED_MARKER = "⊘ suppressed";
  */
 const MALFORMED_STATUS_MARKER = "⚠ bad status";
 
+/**
+ * The Linked PR marker on a `done` PRD card, following the same own-line idiom as
+ * the other markers (CONTEXT.md, ADR 0013). Three-state: *open* reads cyan (a PR
+ * exists, awaiting merge — a neutral "there's something here"), *merged* reads
+ * green (the real end-of-lifecycle signal: the out-of-scope default-branch merge
+ * finally happened — the "good, done" state). *No PR* is this marker's absence.
+ * Each carries its own glyph + word so the two states never read as one another.
+ * A PRD-level marker, disjoint from the Issue-level marker families, so it never
+ * co-renders with them.
+ */
+const LINKED_PR_MARKER: Record<LinkedPr["state"], { text: string; color: string }> = {
+  open: { text: "◆ PR open", color: "cyan" },
+  merged: { text: "✔ PR merged", color: "green" },
+};
+
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
@@ -94,6 +117,7 @@ export function Card({
   liveness,
   suppressed,
   malformedStatus,
+  linkedPr,
   selected = false,
 }: CardProps) {
   return (
@@ -143,6 +167,14 @@ export function Card({
         // other marker's lane, so it never co-renders with one (ADR 0003).
         <Text wrap="truncate-end" color="yellow">
           {MALFORMED_STATUS_MARKER}
+        </Text>
+      )}
+      {linkedPr && (
+        // Its own truncating line — a `done` PRD's Linked PR overlay. A PRD-level
+        // marker (the Issue-level fields above are never set on a PRD card), so it
+        // co-renders with none of them; cyan for open, green for merged (ADR 0013).
+        <Text wrap="truncate-end" color={LINKED_PR_MARKER[linkedPr.state].color}>
+          {LINKED_PR_MARKER[linkedPr.state].text}
         </Text>
       )}
     </Box>

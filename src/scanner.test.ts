@@ -557,3 +557,98 @@ describe("scanBoard suppressed overlay", () => {
     expect(issueById(featureIssues(board), "001-proto.md").suppressed).toBeUndefined();
   });
 });
+
+describe("scanBoard linked-PR overlay", () => {
+  /**
+   * Two throwaway PRDs: a `done` one (every Issue done) the overlay applies to,
+   * and an in-progress one it must never touch — the overlay is gated to `done`
+   * PRDs, the only ones with a feature-branch PR to surface (ADR 0013). The PR
+   * lookup is keyed by the PRD's absolute directory path.
+   */
+  function prRoot(): { root: string; dirOf: (prd: string) => string } {
+    const root = mkdtempSync(join(tmpdir(), "overseer-pr-"));
+    const shipped = join(root, "shipped");
+    mkdirSync(shipped);
+    writeFileSync(join(shipped, "prd.md"), "---\ntitle: Shipped\n---\nbody\n");
+    writeFileSync(join(shipped, "001-a.md"), "---\nstatus: done\n---\nbody\n");
+    const wip = join(root, "wip");
+    mkdirSync(wip);
+    writeFileSync(join(wip, "prd.md"), "---\ntitle: WIP\n---\nbody\n");
+    writeFileSync(join(wip, "001-a.md"), "---\nstatus: in-progress\n---\nbody\n");
+    return { root, dirOf: (prd) => join(root, prd) };
+  }
+
+  it("overlays an open PR marker on a done PRD by its absolute dir path", () => {
+    const { root, dirOf } = prRoot();
+    const board = scanBoard(root, undefined, undefined, (prdDir) =>
+      prdDir === dirOf("shipped")
+        ? { state: "open", url: "https://gh/pr/1" }
+        : undefined,
+    );
+
+    expect(prdById(board.prds, "shipped").linkedPr).toEqual({
+      state: "open",
+      url: "https://gh/pr/1",
+    });
+  });
+
+  it("overlays a merged PR marker on a done PRD — the end-of-lifecycle signal", () => {
+    const { root, dirOf } = prRoot();
+    const board = scanBoard(root, undefined, undefined, (prdDir) =>
+      prdDir === dirOf("shipped")
+        ? { state: "merged", url: "https://gh/pr/2" }
+        : undefined,
+    );
+
+    expect(prdById(board.prds, "shipped").linkedPr).toEqual({
+      state: "merged",
+      url: "https://gh/pr/2",
+    });
+  });
+
+  it("leaves linkedPr unset on a done PRD the lookup reports no PR for", () => {
+    // No PR ⇒ no marker (the three-state's third state is the overlay's absence).
+    const { root } = prRoot();
+    const board = scanBoard(root, undefined, undefined, () => undefined);
+
+    expect(prdById(board.prds, "shipped").linkedPr).toBeUndefined();
+  });
+
+  it("never queries the lookup for a PRD that is not done", () => {
+    // The overlay is gated to `done` PRDs only — the sole PRDs with a
+    // feature-branch PR to surface, and the gate that bounds the per-scan `gh`
+    // query to finished work (ADR 0013). The lookup claims every PRD has an open
+    // PR; the in-progress one must stay blank and must never even be asked.
+    const { root, dirOf } = prRoot();
+    const queried: string[] = [];
+    const board = scanBoard(root, undefined, undefined, (prdDir) => {
+      queried.push(prdDir);
+      return { state: "open", url: "https://gh/pr/9" };
+    });
+
+    expect(prdById(board.prds, "wip").linkedPr).toBeUndefined();
+    expect(queried).toEqual([dirOf("shipped")]);
+  });
+
+  it("leaves linkedPr unset when no lookup is provided", () => {
+    // The default scan (board-only tests, the eager first render) carries no
+    // linked-PR overlay; a done PRD simply has no PR marker.
+    const { root } = prRoot();
+    const board = scanBoard(root);
+
+    expect(prdById(board.prds, "shipped").linkedPr).toBeUndefined();
+  });
+
+  it("does not change the PRD's derived column when a PR is present (done stays done)", () => {
+    // Surfacing a PR is a pure overlay — opening/merging it never alters the
+    // derived status (ADR 0003): the done PRD stays in the done lane regardless of
+    // its PR state.
+    const { root } = prRoot();
+    const board = scanBoard(root, undefined, undefined, () => ({
+      state: "merged",
+      url: "https://gh/pr/3",
+    }));
+
+    expect(prdById(board.prds, "shipped").lane).toBe("done");
+  });
+});

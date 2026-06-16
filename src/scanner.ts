@@ -12,6 +12,7 @@ import {
   type ReadyFor,
   type HumanReviewReason,
   type Liveness,
+  type LinkedPr,
 } from "./model.js";
 import type { Absence } from "./dispatch/liveness.js";
 import type { SpawnEdgeKind } from "./dispatch/failureLog.js";
@@ -42,6 +43,22 @@ export type LivenessLookup = (issuePath: string) => Absence | undefined;
 export type SuppressedLookup = (path: string, edge: SpawnEdgeKind) => boolean;
 
 /**
+ * The Linked PR overlay lookup ({@link LinkedPr}), keyed by a PRD's absolute
+ * directory path. `undefined` when the PRD has no PR (no marker), and the only
+ * value it ever returns is for a PR that is open or merged. The scanner consults
+ * it **only for `done` PRDs** — the sole PRDs with a feature-branch PR to surface
+ * (ADR 0013), which also bounds the per-scan `gh` query to finished work — so a
+ * non-`done` PRD is never even passed to it.
+ *
+ * The PRD-level sibling of {@link LivenessLookup} / {@link SuppressedLookup} (both
+ * Issue-level): recomputed and passed in on each rebuild, never read from the PRD
+ * files (ADR 0002 / 0003). Omitting it (the eager first render, board-only tests)
+ * leaves every PRD's `linkedPr` unset. Total by construction — a `gh` failure
+ * resolves to `undefined` (no marker), never out of the scan.
+ */
+export type LinkedPrLookup = (prdDir: string) => LinkedPr | undefined;
+
+/**
  * Scan the root directory into an immutable {@link Board}.
  *
  * A pure path → Board function: the single most important seam in Overseer.
@@ -59,14 +76,22 @@ export type SuppressedLookup = (path: string, edge: SpawnEdgeKind) => boolean;
  *
  * `lookupSuppressed` is the mirror-image optional overlay, gated to the opposite
  * (awaiting) `ready-for-agent` / `ready-for-review` lanes — the two an agent has
- * *not* started on. A second param rather than an `overlays` bag because there are
- * exactly two and they gate disjoint lanes; the same omit-it-and-cards-are-blank
- * contract holds. Because the lanes are disjoint, no Issue can carry both overlays.
+ * *not* started on. Positional params rather than an `overlays` bag because each
+ * gates a disjoint slice of the board; the same omit-it-and-cards-are-blank
+ * contract holds for all of them. Because the two Issue-level lanes are disjoint,
+ * no Issue can carry both the liveness and the suppressed overlay.
+ *
+ * `lookupPr` is the PRD-level Linked PR overlay (ADR 0013), the board's third
+ * derived overlay — joined onto a PRD (not an Issue) and consulted only for a
+ * `done` PRD, so a `gh` query fires solely for finished work. Like the other two
+ * it is recomputed each rebuild and never read from disk; omitting it leaves every
+ * PRD's `linkedPr` unset.
  */
 export function scanBoard(
   root: string,
   lookupLiveness?: LivenessLookup,
   lookupSuppressed?: SuppressedLookup,
+  lookupPr?: LinkedPrLookup,
 ): Board {
   const entries = readdirSync(root, { withFileTypes: true });
 
@@ -74,7 +99,7 @@ export function scanBoard(
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, entry.name);
-    const prd = scanPrd(dir, entry.name, lookupLiveness, lookupSuppressed);
+    const prd = scanPrd(dir, entry.name, lookupLiveness, lookupSuppressed, lookupPr);
     if (prd) prds.push(prd);
   }
 
@@ -87,6 +112,7 @@ function scanPrd(
   dirName: string,
   lookupLiveness?: LivenessLookup,
   lookupSuppressed?: SuppressedLookup,
+  lookupPr?: LinkedPrLookup,
 ): PRD | null {
   const prdPath = join(dir, "prd.md");
 
@@ -104,7 +130,18 @@ function scanPrd(
   // Issues, collapsing to backlog / in-progress / done.
   const lane = derivePrdLane(issues);
 
-  return { id: dirName, title, lane, issues };
+  const prd: PRD = { id: dirName, title, lane, issues };
+  // The Linked PR overlay rides only on a `done` PRD, keyed by its absolute dir
+  // path (ADR 0013). The `done` gate both scopes the marker to PRDs that can have
+  // a feature-branch PR and bounds the per-scan `gh` query to finished work — a
+  // non-`done` PRD never reaches the lookup. A PR (open/merged) stamps the field;
+  // no PR (or no lookup) leaves it unset. The overlay never touches `lane`, so a
+  // PR can't promote or demote the PRD (ADR 0003).
+  if (lookupPr && lane === "done") {
+    const linkedPr = lookupPr(dir);
+    if (linkedPr) return { ...prd, linkedPr };
+  }
+  return prd;
 }
 
 /**
