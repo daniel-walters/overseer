@@ -121,49 +121,11 @@ on `main` directly (they're decisions, not feature code) and the feature branch 
 branch off an up-to-date `main`? That last framing might be the cleaner fix — the real
 bug may be that the docs never reached `main` at all, not that the branch was late.
 
-### Open / link a GitHub PR for a done PRD
+### (Deferred) Multi-repo PRDs: one PR per repo
 
-A finished PRD currently dead-ends. The whole flow merges Issue worktrees into the
-**PRD feature branch** (e.g. `suppressed-marker`) and stops there — "merging that
-branch to `main` is out of scope for this flow" (CONTEXT.md → Review outcome). So a
-`done` PRD is a feature branch with all its work merged in, sitting unmerged against
-`main`, with no PR. This idea closes that last gap with three keybinds/affordances:
-
-1. **`open PR` keybind on a done PRD.** Board-level action on a PRD in the `done`
-   column: open a GitHub PR from its feature branch into `main` (the default base),
-   titled from the PRD. This is the deliberate human gate the flow intentionally stops
-   short of — the agent never opens PRs (the implementor prompt says so explicitly),
-   so this is a human-triggered, board-level act, sibling to `d`/`r`.
-2. **An icon on PRDs linked to a GH PR.** A card marker (the established marker
-   family — liveness / suppressed / human-review) showing a PRD has an open PR, so the
-   board distinguishes "done, no PR yet" from "done, PR open" at a glance.
-3. **A `go to PR` keybind** that opens the attached PR in the browser, when one exists.
-
-The hard part is the same one every overlay faces: **where does the PR link live?**
-The board is a read-only viewer of files and Overseer-owned operational state, never a
-GitHub client today. Nothing tracks a PR URL. Options, with the now-familiar trade:
-
-- **A sidecar** keyed by PRD (like the liveness handle), recording `prd → pr-url`
-  when `open PR` runs; the icon and `go to PR` read it. Keeps the watched root clean,
-  matches the overlay pattern, but the link is Overseer-local (lost if you inspect from
-  elsewhere).
-- **Query GitHub live** (`gh pr list --head <feature-branch>`): no persistence, always
-  truthful, the icon reflects reality even for a PR opened outside Overseer — but it
-  adds a `gh` subprocess on the board's hot path (bound it like the liveness query) and
-  a hard dependency on `gh` + auth + network.
-- **PRD frontmatter** (`pr: <url>`): durable and portable, but it makes *something*
-  write to the watched root for a PRD — and PRDs deliberately have **no** written
-  fields today (status is derived, ADR 0003); adding a written field to `prd.md` is a
-  real departure worth its own decision.
-
-Open questions: does this assume a GitHub remote (the flow is `gh`-shaped — what about
-non-GitHub repos)? Is the base always `main`, or configurable? Does opening the PR
-change the PRD's board state at all, or is `done` still `done` with just an added icon?
-Note this is the first time the board would *reach out to GitHub* rather than only read
-local files — a genuine new capability class, like the deferred per-agent-logs
-subprocess call, not a keybind on existing data.
-
-#### (Deferred) Multi-repo PRDs: one PR per repo
+The **Open PR** / **Linked PR** flow has shipped (CONTEXT.md → Open PR, Linked PR),
+scoped to **single-repo PRDs only**. This is the deferred follow-up that extends it to
+PRDs whose Issues span multiple repos.
 
 A PRD's **feature branch is per-repo**, not per-PRD: `featureBranchName(prdDir)` is
 derived from the PRD directory name, but `gitSetup` creates and checks it out **once per
@@ -172,80 +134,18 @@ repos A and B has the *same-named* feature branch in *both* (`quick-wins` in A *
 B), each sitting unmerged against its own repo's default branch — i.e. **a multi-repo PRD
 needs one PR per repo**, not one PR. "One PRD → one PR" is only true for a single-repo PRD.
 
-The first cut of "open / link a GitHub PR" is therefore scoped to **single-repo PRDs
-only**: `open PR` opens the one PR from the PRD's single feature branch, and on a PRD whose
-Issues span multiple distinct `repo:` values it **explicitly refuses** with a visible
-status-line message ("this PRD spans N repos; open PRs per repo manually") rather than a
-silent no-op or a crash. The distinct-repo count is cheap to detect from the Issues even in
-v1, so the refusal is honest. Every PRD built so far is single-repo, so this defers a case
-not yet hit without pretending it can't happen.
+The shipped single-repo cut handles this case by **refusing** it: `open PR` opens the one
+PR from the PRD's single feature branch, and on a PRD whose Issues span multiple distinct
+`repo:` values it **explicitly refuses** with a visible status-line message ("this PRD
+spans N repos; open a PR per repo manually") rather than a silent no-op or a crash. Every
+PRD built so far is single-repo, so this defers a case not yet hit without pretending it
+can't happen.
 
 The deferred follow-up: make `open PR` enumerate the distinct repos across a PRD's Issues
 and open **one PR per repo** (each from that repo's feature branch into that repo's default
 base), turning the linked-PR icon, `go to PR`, and the link storage from a single value into
 a **collection per PRD** — and the confirm modal into a preview of N PRs into N repos. Worth
 building only once multi-repo PRDs are real.
-
-### Rename the bundled `tdd` skill to `overseer-tdd`
-
-The quick-wins work bundled the `tdd` skill with the app and made the implementor prompt
-hard-require it (so dispatched worker agents drive their work test-first). But it was bundled
-under its bare upstream name, `tdd`, while every other bundled skill is namespaced
-`overseer-*` (`overseer-grill-with-docs`, `overseer-to-prd`, `overseer-to-issues`,
-`overseer-merge`). So the shipped set is four `overseer-*` skills plus one bare `tdd` — an
-inconsistency. It should be **`overseer-tdd`** to match the convention: this is *Overseer's*
-test-first skill for *its* worker agents, not the operator's personal `tdd`.
-
-Why the namespace matters beyond tidiness: `init` installs bundled skills into the operator's
-**global** `~/.claude/skills` (ADR 0004, remove-then-copy per skill). A bare `tdd` there
-**collides with any personal `tdd` skill the operator already keeps** — Overseer would silently
-overwrite it on every `init`. Namespacing to `overseer-tdd` removes the collision: Overseer owns
-the `overseer-*` namespace, leaving a user's own `tdd` untouched, exactly as the other four
-already do. The `overseer-tdd` name is also the clear signal that *this* is the skill worker
-agents must use — distinct from whatever `tdd` the human operator runs interactively.
-
-The rename touches three coupled places, so it must move together: (1) the bundled skill
-directory (`skills/tdd` → `skills/overseer-tdd`, and its `SKILL.md` name); (2) the implementor
-prompt, which names the skill by string (`buildImplementorPrompt` → "drive with the
-`overseer-tdd` skill"); (3) the bundled-skill install test that asserts `tdd` is present. A
-stale `~/.claude/skills/tdd` from the current bundling would linger after the rename (init only
-removes-then-copies the skills it ships, so it won't delete the old name) — a one-time manual
-cleanup, or noted as harmless clutter. Small and mechanical, but it is a rename across the
-prompt contract, so worth doing deliberately rather than as a drive-by.
-
-### Reframe the authoring skills so each one prompts the next — ending *in Overseer*
-
-The authoring pipeline is a chain of skills — `overseer-grill-with-docs` →
-`overseer-to-prd` → `overseer-to-issues` — but the chain doesn't consistently *hand off* at
-each step, so the operator has to know the next move themselves. The closing language should
-make each skill prompt the next, like a guided flow: after a **grill** the skill should say
-the next step is **`overseer-to-prd`**; after the **PRD** is written it should say the next
-step is **`overseer-to-issues`**; and after the **Issues** are written it should say *the
-work is now ready in Overseer* — open the board and ignite it there.
-
-Two problems with the wording today:
-
-1. **The chain isn't uniformly self-prompting.** `to-prd` does end by naming `to-issues` as
-   the next step, but `to-issues` has **no closing hand-off at all** — it stops once the files
-   are written, leaving the operator at a dead end with no cue for what comes next. Every skill
-   should end by pointing at the next station, the last one included.
-2. **The terminal step points the wrong way.** The natural (and observed) instinct at the end
-   of `to-issues` is to **dispatch the work from the authoring session** — spin up agents
-   straight from the conversation that just wrote the Issues. That is the wrong frame. The
-   Issues are now **files in the Overseer root**, and the whole point of the tool is that
-   Overseer reads them as a live board and is the place you ignite work (press `d`, let the
-   reactor drive). The authoring session's job *ends* when the Issues are written. So the
-   terminal hand-off should be **"this is ready to go in Overseer"** — not "now dispatch from
-   here." Dispatching out-of-band from the authoring session bypasses the board, the reactor,
-   liveness, and every operational affordance Overseer exists to provide; it splits the
-   workflow across two surfaces when it should converge on the board.
-
-The fix is **language, not mechanism**: tighten each authoring skill's closing instruction so
-the flow self-documents its next step, and so the final step terminates at the board rather
-than inviting an out-of-band dispatch. (`grill-with-docs` already frames itself as the
-"upstream" producer that does *not* write a PRD; this is the same self-locating discipline,
-applied to every skill's *downstream* hand-off.) Worth a pass across all three `SKILL.md`s so
-the wording is consistent — "next step is X" at each station, "ready in Overseer" at the end.
 
 ### Keybind to advance a human-held Issue (mark done / mark for review)
 
@@ -403,8 +303,8 @@ liveness PRD (it is in that PRD's Out of Scope). It is more than the one-shot
   reads files; shelling out to `claude logs` to pull/stream output is a different subprocess
   call, and live tailing is more than a single membership query.
 - **A TUI rendering problem.** Where do logs render (detail pane? modal?) and how do they
-  coexist with the alt-screen board that already *clips* on overflow (see "Viewport
-  scrolling" below)? Live log tailing inside Ink is real UI work.
+  coexist with the alt-screen board that still *clips* horizontally on overflow (see
+  "Horizontal paging across columns" below)? Live log tailing inside Ink is real UI work.
 - **Overlaps "is it hung?".** The `state: working/idle/blocked` field liveness already
   captures is the *cheap* signal and may answer "what's it doing" 80% of the time; full
   logs are the *expensive* signal to reach for when `state` isn't enough.
@@ -412,39 +312,28 @@ liveness PRD (it is in that PRD's Out of Scope). It is more than the one-shot
 So: a natural follow-on now that the liveness handle has landed, but its own UI-shaped
 piece of work, not part of the dogfood-minimum set.
 
-This is one of **three pane-shaped ideas** that all want the same missing surface — a
-place to render per-Issue detail. See "View the Issue / PRD body" (next) for the shared
-"design the detail pane once" framing.
+This is one of the **pane-shaped ideas** that want the same per-Issue detail surface.
+See "The shared detail surface" (next) for the framing.
 
-### View the Issue / PRD body
+### The shared detail surface
 
-Overseer reads every PRD/Issue markdown file but **never shows the body** — the board
-renders only the title, badges, and markers. To read what an Issue actually *says* (its
-`## What to build`, acceptance criteria, the PRD's problem statement) you have to open the
-file outside the app. For a tool whose whole job is surfacing PRD/Issue work as a live
-board, not being able to read the work from inside it is a real gap. The idea: a way to
-view the selected card's full markdown body — its frontmatter-stripped content, ideally
-lightly rendered (headings, lists, checkboxes) rather than raw.
+The **static body view shipped** as the detail modal — `v` opens a full-screen,
+scrollable, markdown-rendered view of the selected card's frontmatter-stripped body
+(the PRD's `prd.md` at board level, the selected Issue's file when zoomed), via
+[ADR 0014](./adr/0014-detail-body-rendered-through-marked-terminal.md). That establishes
+the rendering surface the remaining pane-shaped ideas can reuse:
 
-Open questions: where it renders (a side/bottom **detail pane** vs. a full-screen modal vs.
-expand-in-place), and how it scrolls given the alt-screen board already clips on overflow
-(see "Viewport scrolling"). At the board level the body is the PRD's `prd.md`; zoomed, it
-is the selected Issue's file — so one surface serves both levels.
+1. **"Per-agent logs from a card"** (above) — the selected agent's `claude logs` output
+   (live stream rather than static text).
+2. **"A detail pane / expand-on-select"** (under "more real estate for Issue titles") —
+   full title overflow + body + deviation reason for the selected card, *in context*
+   beside the board rather than as a full-screen takeover.
 
-**The shared detail surface.** Three ideas converge on the same unbuilt thing — a pane that
-renders per-Issue/PRD detail:
-
-1. **This one** — the Issue/PRD markdown body.
-2. **"Per-agent logs from a card"** (above) — the selected agent's `claude logs` output.
-3. **"A detail pane / expand-on-select"** (under "more real estate for Issue titles") — full
-   title overflow + body + deviation reason for the selected card.
-
-They are the same rendering surface viewed three ways (static body / live log stream /
-overflow detail). Whoever shapes any one into a PRD should design the pane *once* — its
-placement, scrolling, and how it shares the screen with the clipped board — rather than
-inventing three. The body view is the simplest of the three (static text, no subprocess,
-no live tailing), so it is the natural first cut that establishes the pane the other two
-then reuse.
+Both are the same surface viewed differently (live log stream / in-context overflow
+detail) and can build on the modal's body-rendering + scrolling rather than reinventing
+it — though the log stream adds a subprocess + live tailing, and the in-context variant
+adds the harder question of sharing the screen with the (clipped) board rather than
+taking it over.
 
 ### Pause / resume development of a PRD
 
@@ -630,58 +519,36 @@ new IO from a read-only-ish loop). This is ADR 0005 territory (the review reacto
 new pre-dispatch gate — a meaty multi-layer feature deserving its own grill + PRD, not a
 prompt edit.
 
-### Viewport scrolling (overflow on the alternate screen)
+### Horizontal paging across columns (overflow on the alternate screen)
 
 "Always full screen" (UI Polish part 1) renders the board on the terminal's
 **alternate screen buffer** (à la vim/htop), sized to fill the viewport. The alt
 buffer has **no scrollback** (standard terminal behaviour — Ink's own docs warn of
-it), so when a column has more cards than fit, the overflow is **clipped and
-unreachable** — there is no scroll and no scrollback to recover it. This converts an
-overflow that used to be merely awkward (scroll the terminal) into genuinely hidden
-content on small terminals.
+it), so overflow is clipped rather than terminal-scrollable.
 
-We **knowingly accepted clipping** for part 1 rather than block full-screen on it.
-The follow-up is in-app **viewport scrolling / virtualization** within a column (and
-possibly horizontal paging across columns) so no card is ever unreachable. Until then,
-a small terminal can hide cards with no recourse.
-
-### Rework the selection-highlight design
-
-The current selected-card treatment is `inverse` + `bold` on the title line plus a
-prepended `▶ ` arrow (the `selected` branch in the Card component). Two problems:
-(1) `inverse` (swapped fg/bg) reads as heavy and noisy, and fights the colored
-markers — a selected card with a red `⊘ suppressed` or green `● live` line gets a
-muddy mix of inverse-title + colored-marker; (2) the `▶ ` arrow *consumes two
-columns of the title line itself*, so the one card you're focused on truncates its
-title **two chars earlier** than its neighbours — actively worse legibility on the
-card that matters most. That's the opposite of what selection should do.
-
-Directions to weigh (not yet decided): move the selection signal off the title line
-entirely so it costs the title no width — e.g. lean on the existing cyan
-**border** (`borderColor` already flips to cyan on select) as the *sole* indicator
-and drop both the inverse and the arrow; or a left **gutter** column outside the
-card box that holds the `▶` so it never eats title width; or a background tint on
-the whole card rather than an inverse title. Whatever wins, the constraint is: the
-selected card must show *more* of its title than an unselected one, never less.
+**Vertical** overflow within a column is now solved: a column taller than the viewport
+renders only its visible window and scrolls to follow the selection (shipped,
+[ADR 0015](./adr/0015-2d-nav-with-vertical-only-selection-following-scroll.md)), so no
+card is unreachable *down* a lane. What remains is the **horizontal** axis: with more
+columns than fit the terminal width, the rightmost columns clip at the screen edge with
+no way to page across to them. The follow-up is **horizontal paging / virtualization
+across columns** so a wide board (the 7-column Issue level on a narrow terminal) stays
+fully reachable left-to-right. Until then, a narrow terminal can hide whole columns.
 
 ### Brainstorm: more real estate for Issue titles
 
-Titles are cramped. A column is a hardcoded `width={24}`, and each card spends that
-budget on a rounded border (−2) + horizontal padding (−2), the ready/liveness badge
-glyph, and (when selected) the `▶ ` arrow (−2) — leaving a `truncate-end` title
-often **~16 chars wide**. For Issue titles like "Share one failed-set across all
-spawn edges" that's near-useless; you read the first two words and guess. Worth a
-dedicated design pass, not a one-line tweak. Candidate directions to brainstorm:
+Titles can still be cramped. Two of the original width pressures have since been
+relieved — column width is now **adaptive** (divided across the visible columns
+rather than a hardcoded 24, shipped), and selection no longer prepends a `▶ ` arrow
+that ate two title columns (selection is now the cyan border alone, shipped). What
+remains is the per-card chrome tax and single-line truncation. Candidate directions
+still on the table:
 
-- **Make column width adaptive, not fixed.** Divide the (full-screen, ADR-driven)
-  viewport across the visible columns instead of pinning 24. On a wide terminal
-  titles breathe; on a narrow one they degrade gracefully. Interacts with the
-  clipping/overflow problem already noted under "Viewport scrolling".
 - **Drop per-card chrome.** The rounded border + padding on *every* card is a heavy
   per-card tax on width and vertical space. A lighter separator (a rule, or just
   spacing) between cards could reclaim the 2 border + 2 padding columns for the
-  title. Selection could then be the *only* thing that draws a box (ties into the
-  highlight rework above).
+  title. Selection could then be the *only* thing that draws a box (the cyan border
+  is already the sole selection cue, so this fits cleanly).
 - **Wrap instead of truncate.** Let a long title wrap to two lines (`wrap="wrap"` /
   truncate at line 2) rather than hard-truncating at one. Costs vertical space —
   trades against the overflow/clipping limit — but a title you can fully read may be
@@ -689,47 +556,10 @@ dedicated design pass, not a one-line tweak. Candidate directions to brainstorm:
 - **A detail pane / expand-on-select.** Keep cards terse, but show the full title
   (and body, deviation reason, etc.) for the selected Issue in a side or bottom
   pane. The card list stays scannable; the focused Issue gets unlimited room. This
-  is the biggest change and is one of the **three pane-shaped ideas** that share one
-  detail surface — see the "shared detail surface" note under "View the Issue / PRD
-  body" for the design-the-pane-once framing.
-
-These two ideas are coupled: the `▶ ` arrow is both a highlight-design choice and a
-title-width tax, so a selection rework and a real-estate pass should probably be
-designed together rather than as separate polish bullets.
-
-### Fix hjkl navigation to be relative to the board (2-D)
-
-`hjkl` today is fake vim nav: `moveDelta` collapses all four keys into a 1-D ±1 step
-over a flat card list — `h`/`k` both move −1, `j`/`l` both move +1 (the code comment
-admits "treat horizontal moves the same as vertical"). So `h` and `k` are
-indistinguishable, `j` and `l` are indistinguishable, and `l` does **not** move right
-to the next column — it just steps to the next card in flat order. Navigation should
-be **spatial, relative to the board's columns**: `l` → the card to the right (next
-column), `h` → left (previous column), `j` → down within a column, `k` → up. That's
-what a user pressing `l` on a kanban board expects.
-
-This is **not a keybind tweak** — the nav reducer (`navReduce` / `NavState`) has no
-concept of columns or rows. It models selection as a single flat index (`boardIndex`
-/ `issueIndex`) and a single `move` action carrying a `delta` over a flat `count`.
-Making `l`/`h` mean "change column" requires the nav model to become 2-D: track
-*which column* and *which row within it*, and define the cross-column behavior. The
-open design questions are the interesting part:
-
-- **What does `l`/`h` do to the row?** Moving from a column with 5 cards (row 3) to
-  one with 2 cards — clamp to the nearest row (row 1), or remember the original row
-  and restore it if you come back? Vim-style "sticky column" (here, sticky *row*) is
-  the nicer behavior but more state.
-- **Empty columns.** `l` into an empty column — skip to the next non-empty one, or
-  land on the empty column with no selection? A kanban routinely has empty columns
-  (a PRD with nothing `in-review`), so this case is common, not edge.
-- **Which levels.** Both the 7-column Issue level *and* the 3-column board level are
-  grids, so both want 2-D nav — the reducer change covers both.
-- **Arrow keys come along for free** once the model is 2-D (←/→ map to `h`/`l`,
-  ↑/↓ to `j`/`k`), replacing today's arrow→flat-delta mapping.
-
-Pairs with the "Central keybind registry" idea (this touches the same input layer)
-and benefits from being designed alongside the selection-highlight rework, since both
-are about how the *current* card is identified and moved.
+  is the biggest change and is one of the **pane-shaped ideas** that share one
+  detail surface — see "The shared detail surface" note for the design-the-pane-once
+  framing. (The static body view itself has shipped as the detail modal; this is the
+  *per-card-in-context* variant.)
 
 ### Surface "needs human intervention" on the board-level PRD card
 
