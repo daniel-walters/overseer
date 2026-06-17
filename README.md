@@ -50,11 +50,20 @@ the board, never inside your files.
 
 ## Setup
 
+Build the package and put the `overseer` command on your `PATH`, then run `init`:
+
 ```sh
 npm install
 npm run build
-node dist/cli.js init   # or `npm start init` to run from source
+npm install -g .        # or `npm link` — puts the `overseer` bin on your PATH
+overseer init
 ```
+
+The global install (`npm install -g .` / `npm link`) is what lets you type
+`overseer` anywhere instead of `node dist/cli.js`; it points the bin at the
+compiled output, so `npm run build` must come first. Prefer to run from source
+without installing globally? Use `node dist/cli.js init` (or `npm start init`)
+instead — everywhere below that says `overseer`, substitute one of those.
 
 `init` is the one-step onboarding: it installs Overseer's bundled agent skills
 into your global Claude skills directory and, if you have no config yet, writes one
@@ -64,9 +73,6 @@ It never overwrites an existing config.
 For a guided first run from here — authoring a PRD with the skills, opening the
 board, and igniting the work — follow the
 [getting-started walkthrough](./docs/getting-started.md).
-
-To get the `overseer` command itself on your `PATH`, `npm link` (or
-`npm install -g .`) the package; the examples below use `overseer` for brevity.
 
 To point the board somewhere else, edit `~/.config/overseer/config.toml`:
 
