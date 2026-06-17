@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from "vitest";
 import {
   KEYBINDS,
   matchKeybind,
+  hintsFor,
   type KeyPress,
   type KeybindHandlers,
 } from "./keybinds.js";
@@ -303,6 +304,104 @@ describe("matchKeybind — eligibility gate", () => {
     // (an absent predicate ⇒ always eligible), never some other shape.
     for (const b of KEYBINDS) {
       if (b.eligible !== undefined) expect(typeof b.eligible).toBe("function");
+    }
+  });
+});
+
+describe("hintsFor — the status-line subset, eligibility-filtered", () => {
+  // The bottom bar renders from the registry filtered by eligibility (ADR 0017),
+  // not a hardcoded list. `hintsFor` is the pure selector both the bar and these
+  // tests read: the hint-flagged bindings active at the level whose `eligible`
+  // predicate passes for the context. The keys it returns are exactly the keys the
+  // bar shows. Driven through plain BindContext flags, never a real seam.
+
+  const keysOf = (level: "board" | "issues", c: BindContext): string[] =>
+    hintsFor(level, c).map((b) => b.key);
+
+  it("shows a done PRD with no PR exactly P and X (and ?), not g or d", () => {
+    const c = ctx({
+      dispatchable: false,
+      prdDone: true,
+      prdHasPr: false,
+    });
+    const keys = keysOf("board", c);
+    expect(keys).toContain("P");
+    expect(keys).toContain("X");
+    expect(keys).toContain("?");
+    expect(keys).not.toContain("g");
+    expect(keys).not.toContain("d");
+  });
+
+  it("shows a done PRD with a PR exactly g and X (and ?), not P", () => {
+    const c = ctx({
+      dispatchable: false,
+      prdDone: true,
+      prdHasPr: true,
+    });
+    const keys = keysOf("board", c);
+    expect(keys).toContain("g");
+    expect(keys).toContain("X");
+    expect(keys).not.toContain("P");
+    expect(keys).not.toContain("d");
+  });
+
+  it("shows d on an in-progress PRD with dispatchable work (resume), but no done-only keys", () => {
+    const c = ctx({
+      dispatchable: true,
+      prdDone: false,
+      prdHasPr: false,
+    });
+    const keys = keysOf("board", c);
+    expect(keys).toContain("d");
+    expect(keys).not.toContain("P");
+    expect(keys).not.toContain("g");
+    expect(keys).not.toContain("X");
+  });
+
+  it("hides d on a PRD with no dispatchable work (empty wave never advertised)", () => {
+    const c = ctx({ dispatchable: false, prdDone: false });
+    expect(keysOf("board", c)).not.toContain("d");
+  });
+
+  it("shows the issue-level action keys only where their state matches", () => {
+    expect(keysOf("issues", ctx({ issueReadyForReview: true, issueOrphan: false, issueLive: false }))).toContain("r");
+    expect(keysOf("issues", ctx({ issueReadyForReview: false }))).not.toContain("r");
+    expect(keysOf("issues", ctx({ issueOrphan: true, issueReadyForReview: false, issueLive: false }))).toContain("R");
+    expect(keysOf("issues", ctx({ issueOrphan: false }))).not.toContain("R");
+    expect(keysOf("issues", ctx({ issueLive: true, issueReadyForReview: false, issueOrphan: false }))).toContain("K");
+    expect(keysOf("issues", ctx({ issueLive: false }))).not.toContain("K");
+  });
+
+  it("never offers board-only keys at the issue level, or issue-only keys at the board level", () => {
+    const all = ctx();
+    const boardKeys = keysOf("board", all);
+    const issueKeys = keysOf("issues", all);
+    // Issue-level action keys never leak onto the board bar.
+    for (const k of ["r", "R", "K"]) expect(boardKeys).not.toContain(k);
+    // Board-only PRD keys never leak onto the issue bar.
+    for (const k of ["d", "P", "g", "X"]) expect(issueKeys).not.toContain(k);
+  });
+
+  it("always keeps ? regardless of selection (the always-on learning pointer)", () => {
+    const none = ctx({
+      dispatchable: false,
+      prdDone: false,
+      prdHasPr: false,
+      issueReadyForReview: false,
+      issueOrphan: false,
+      issueLive: false,
+      cardSelected: false,
+    });
+    expect(keysOf("board", none)).toContain("?");
+    expect(keysOf("issues", none)).toContain("?");
+  });
+
+  it("does not clutter the bar with the navigation keys (movement / Enter / Esc / a / q)", () => {
+    // These always-on keys belong in `?`, not the bottom bar — the bar is a signal
+    // of the *actionable* keys for the selection, not the whole map.
+    const keys = keysOf("board", ctx());
+    for (const k of ["h j k l / arrows", "Enter", "a", "q"]) {
+      expect(keys).not.toContain(k);
     }
   });
 });

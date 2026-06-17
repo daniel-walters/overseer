@@ -93,6 +93,18 @@ export interface Keybind {
    * App.
    */
   readonly eligible?: (ctx: BindContext) => boolean;
+  /**
+   * Whether the binding surfaces on the **status-line hints** (the bottom bar) when
+   * eligible. The bar is a curated signal of the *actionable* keys for the current
+   * selection — the per-card action keys (`d` / `P` / `go to PR` / `X` / `r` / `R` /
+   * `K`) plus the always-on `?` learning pointer — not the whole map, so the
+   * navigation keys (movement / `Enter` / `Esc` / `a` / `q` / `v`) carry no `hint`
+   * and stay in `?` help only. Eligibility still gates a hinted key: it shows on the
+   * bar exactly when its {@link eligible} predicate passes (ADR 0017). `?` is hinted
+   * *and* always-eligible, so it never leaves the bar. Orthogonal to {@link eligible}
+   * — "does it show on the bar at all?" vs "is it actionable right now?".
+   */
+  readonly hint?: boolean;
 }
 
 /**
@@ -144,6 +156,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "d",
     label: "Dispatch a wave",
     level: "board",
+    hint: true,
     matches: (p) => p.input === "d",
     // Frontier-based, not lane-based: eligible whenever the selected PRD's
     // frontier has a spawn candidate, so `d` stays available to *resume* an
@@ -155,6 +168,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "P",
     label: "Open a PR for a done PRD",
     level: "board",
+    hint: true,
     matches: (p) => p.input === "P",
     // A done PRD with no Linked PR yet — mutually exclusive with `go to PR`.
     eligible: (ctx) => ctx.prdDone && !ctx.prdHasPr,
@@ -164,6 +178,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "X",
     label: "Delete a done PRD",
     level: "board",
+    hint: true,
     matches: (p) => p.input === "X",
     eligible: (ctx) => ctx.prdDone,
     action: (h) => h.deletePrd(),
@@ -172,6 +187,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "r",
     label: "Review the selected Issue",
     level: "issues",
+    hint: true,
     matches: (p) => p.input === "r",
     eligible: (ctx) => ctx.issueReadyForReview,
     action: (h) => h.review(),
@@ -180,6 +196,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "R",
     label: "Re-dispatch an orphaned Issue",
     level: "issues",
+    hint: true,
     matches: (p) => p.input === "R",
     eligible: (ctx) => ctx.issueOrphan,
     action: (h) => h.redispatch(),
@@ -188,6 +205,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "K",
     label: "Stop a live Issue's agent",
     level: "issues",
+    hint: true,
     matches: (p) => p.input === "K",
     eligible: (ctx) => ctx.issueLive,
     action: (h) => h.kill(),
@@ -196,6 +214,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "g",
     label: "Go to the selected PRD's PR",
     level: "board",
+    hint: true,
     matches: (p) => p.input === "g",
     // A done PRD that already has a Linked PR (open or merged) — mutually
     // exclusive with `P`.
@@ -221,6 +240,7 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "?",
     label: "Show this help",
     level: "both",
+    hint: true,
     matches: (p) => p.input === "?",
     action: (h) => h.showHelp(),
   },
@@ -259,5 +279,25 @@ export function matchKeybind(
 ): Keybind | undefined {
   return KEYBINDS.find(
     (b) => levelActive(b.level, at) && b.matches(press) && eligibleFor(b, ctx),
+  );
+}
+
+/**
+ * The status-line hints for the current nav level + selection: the bottom bar's
+ * curated subset of {@link KEYBINDS}, filtered by eligibility (ADR 0017). A binding
+ * surfaces here iff it opts in via {@link Keybind.hint}, its level gate is open at
+ * `at`, **and** its `eligible` predicate passes for `ctx` — the *same* predicate the
+ * matcher gates on, so "does it work?" and "does it show?" can never drift. So the
+ * bar offers exactly the keys actionable on the selected card right now (the per-card
+ * action keys appear and vanish as the selection moves), plus the always-on `?`.
+ *
+ * Deliberately the inverse of the `?` help map, which lists *every* key ignoring
+ * eligibility: the hints answer "what can I do now?", help answers "what keys exist?".
+ * Returns whole bindings (not just labels) so the bar reads each one's `key`/`label`
+ * from the single registry — finally retiring the hardcoded `KEY_HINTS` copy.
+ */
+export function hintsFor(at: Level, ctx: BindContext): readonly Keybind[] {
+  return KEYBINDS.filter(
+    (b) => b.hint === true && levelActive(b.level, at) && eligibleFor(b, ctx),
   );
 }
