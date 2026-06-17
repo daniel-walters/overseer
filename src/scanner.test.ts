@@ -202,6 +202,40 @@ describe("scanBoard Issues", () => {
     expect(issue.humanReviewReason).toBeUndefined();
   });
 
+  it("records the human-review note on a human-review Issue that carries one", () => {
+    const issue = issueById(authIssues(), "009-needs-human.md");
+
+    expect(issue.humanReviewNote).toBe(
+      "Swapped the inline send for a queue to avoid a deadlock.",
+    );
+  });
+
+  it("records the note independently of the reason — present on a non-deviation escalation", () => {
+    // 012 escalates for non-convergence (not a deviation) yet still carries a
+    // note; the note must surface regardless of which reason drives the marker.
+    const issue = issueById(authIssues(), "012-stuck-with-note.md");
+
+    expect(issue.humanReviewReason).toBe("non-convergence");
+    expect(issue.humanReviewNote).toBe(
+      "After 3 passes the auth test still fails intermittently; couldn't isolate the race.",
+    );
+  });
+
+  it("treats a blank human-review note as absent", () => {
+    const issue = issueById(authIssues(), "013-blank-note.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.humanReviewNote).toBeUndefined();
+  });
+
+  it("carries no human-review note when the frontmatter omits it", () => {
+    // 010 is in human-review but has no note field at all.
+    const issue = issueById(authIssues(), "010-bad-reason.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.humanReviewNote).toBeUndefined();
+  });
+
   it("folds an Issue with an unrecognized status into backlog, flagged malformed", () => {
     const issue = issueById(authIssues(), "005-mystery.md");
 

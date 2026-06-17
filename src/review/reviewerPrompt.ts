@@ -62,9 +62,12 @@ export interface ReviewerPromptInput {
  * that reports zero findings; on a converged clean pass with no recorded
  * deviation, merge the worktree branch into the PRD feature branch and set
  * `done`; on a recorded deviation, non-convergence after the cap, or a merge
- * conflict, set `human-review` and record `human_review_reason` (deviation /
- * non-convergence / conflict) so the card can surface why. The merge targets the
- * feature branch only, never `main`.
+ * conflict, set `human-review` and record both `human_review_reason` (the
+ * category — deviation / non-convergence / conflict — that drives the card
+ * marker) and a free-text `human_review_note` (the specifics, written for all
+ * three reasons; for a deviation it folds in the implementor's own deviation
+ * note) so the user can read *why*. The merge targets the feature branch only,
+ * never `main`.
  *
  * Whether a deviation was recorded is baked into the prose so the reviewer knows
  * up-front which exit is even available: a recorded deviation forecloses the
@@ -91,7 +94,11 @@ export function buildReviewerPrompt(input: ReviewerPromptInput): string {
 
   Because a deviation is present, the clean auto-merge path is foreclosed: after
   running the review loop you must set \`human-review\`, never \`done\`. A human
-  resolves the deviation and runs the merge themselves.`;
+  resolves the deviation and runs the merge themselves. When you write the
+  \`human_review_note\` at that exit, FOLD this implementor deviation note into it
+  so there is one coherent "why" — do not leave the human two separate notes to
+  reconcile. (Leave the implementor's raw \`deviation\` frontmatter field on the
+  Issue untouched; it is an audit trail the dispatch reader still consumes.)`;
 
   return `You are an autonomous reviewer agent dispatched by Overseer.
 
@@ -155,9 +162,21 @@ Take exactly one of two exits:
   human reconciles it).
 
 - HUMAN-REVIEW EXIT — any of: a deviation was recorded, the loop did not
-  converge within ${cap} passes, or the merge hit a conflict. Do NOT merge. Set
-  \`status: human-review\` on the Issue AND record \`human_review_reason\` so a
-  human knows what attention it needs before opening it. Use exactly one of:
+  converge within ${cap} passes, or the merge hit a conflict. Do NOT merge. In a
+  single edit to the Issue's frontmatter, set \`status: human-review\` AND record
+  BOTH of these so a human knows what attention it needs before opening it:
+
+  1. \`human_review_reason\` — the category, exactly one of:
 ${reasonBullets}
+  2. \`human_review_note\` — a free-text explanation of the specifics: what the
+     agent actually did or found. Write this for ALL three reasons, regardless of
+     which one you recorded — especially for non-convergence and conflict, which
+     otherwise carry no prose at all (e.g. "after ${cap} passes the auth test
+     still failed intermittently; couldn't isolate the race"). For a deviation,
+     FOLD the implementor's recorded deviation note (shown above) into this single
+     note so there is one coherent "why". Quote the value
+     (\`human_review_note: "..."\`) so a colon or other punctuation can't corrupt
+     the frontmatter.
+
   Then stop; a human takes it from there.`;
 }

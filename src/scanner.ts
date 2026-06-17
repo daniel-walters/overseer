@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIELD, readString, safeMatter } from "./issueFile.js";
+import { FIELD, readString, readPresentString, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
   placeStatus,
@@ -207,10 +207,20 @@ function scanIssue(
   );
 
   if (lane !== "human-review") return withSuppressed;
+  // The escalation reason (an enum, drives the card marker) and the free-text
+  // note (the reviewer's "why", surfaced in the detail view) are parsed
+  // independently: each only lands on a human-review card, each treats an
+  // absent/blank value as absent, and the note is additive — present or not
+  // regardless of which reason the card carries.
   const humanReviewReason = parseHumanReviewReason(data[FIELD.humanReviewReason]);
-  return humanReviewReason === undefined
-    ? withSuppressed
-    : { ...withSuppressed, humanReviewReason };
+  const humanReviewNote = readPresentString(data, FIELD.humanReviewNote);
+  const withReason =
+    humanReviewReason === undefined
+      ? withSuppressed
+      : { ...withSuppressed, humanReviewReason };
+  return humanReviewNote === undefined
+    ? withReason
+    : { ...withReason, humanReviewNote };
 }
 
 /**

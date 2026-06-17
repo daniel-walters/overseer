@@ -221,6 +221,16 @@ export interface Issue {
   /** Set only when `lane === "human-review"`; drives the escalation marker. */
   readonly humanReviewReason?: HumanReviewReason;
   /**
+   * The reviewer's free-text explanation of *why* this Issue needs human
+   * attention, written at the human-review exit for all three escalation reasons
+   * (for a deviation, it folds in the implementor's own `deviation` note). Set
+   * only when `lane === "human-review"` and the frontmatter carries a non-blank
+   * `human_review_note`; absent otherwise — additive to and independent of
+   * {@link humanReviewReason} (the enum that drives the card marker). The detail
+   * view renders it beneath the reason; the card stays terse.
+   */
+  readonly humanReviewNote?: string;
+  /**
    * The derived liveness overlay, set only on an `in-progress` / `in-review`
    * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
    * query shows the handle is gone, `unknown` otherwise. Absent on every other
