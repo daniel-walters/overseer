@@ -43,7 +43,7 @@ export interface KeyPress {
  *
  * - `move` steps the selection one square in a spatial direction (movement keys derive it).
  * - `zoom` / `back` drive the level reducer (Enter zooms in, Esc backs out).
- * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` open the matching preview.
+ * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` / `deletePrd` open the matching preview.
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
  * - `toggleAutoRun` flips the global auto-run brake.
  * - `viewDetail` opens the selected card's body in the detail modal.
@@ -58,6 +58,7 @@ export interface KeybindHandlers {
   readonly redispatch: () => void;
   readonly kill: () => void;
   readonly openPr: () => void;
+  readonly deletePrd: () => void;
   readonly goToPr: () => void;
   readonly toggleAutoRun: () => void;
   readonly viewDetail: () => void;
@@ -141,6 +142,13 @@ export const KEYBINDS: readonly Keybind[] = [
     level: "board",
     matches: (p) => p.input === "P",
     action: (h) => h.openPr(),
+  },
+  {
+    key: "X",
+    label: "Delete a done PRD",
+    level: "board",
+    matches: (p) => p.input === "X",
+    action: (h) => h.deletePrd(),
   },
   {
     key: "r",
