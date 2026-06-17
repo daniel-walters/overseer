@@ -15,11 +15,12 @@ const checkoutFlow = fileURLToPath(
 function recordingDeps(overrides: Partial<ReviewerDeps> = {}): ReviewerDeps & {
   spawns: { repo: string; prompt: string }[];
   failures: unknown[];
-  handles: { issueKey: string; handle: string }[];
+  handles: { issueKey: string; handle: string; reviewPass?: number }[];
 } {
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: unknown[] = [];
-  const handles: { issueKey: string; handle: string }[] = [];
+  const handles: { issueKey: string; handle: string; reviewPass?: number }[] =
+    [];
   return {
     spawns,
     failures,
@@ -29,7 +30,9 @@ function recordingDeps(overrides: Partial<ReviewerDeps> = {}): ReviewerDeps & {
       return `handle-${repo}`;
     },
     logFailure: (r) => failures.push(r),
-    recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
+    recordHandle: (issueKey, handle, reviewPass) =>
+      handles.push({ issueKey, handle, reviewPass }),
+    readReviewPass: () => undefined,
     failedSet: createFailedSet(),
     review: DEFAULT_REVIEW_CONFIG,
     ...overrides,
@@ -95,12 +98,51 @@ describe("createReviewer", () => {
 
       // The reviewer edge records its handle through the same path as the
       // implementor edge, so the in-review card is as joinable as in-progress.
+      // It also records the pass it is driving — the first pass (1) here, since
+      // no prior pass is recorded — so the card's `N/cap` marker reads 1/cap.
       expect(deps.handles).toEqual([
         {
           issueKey: join(root, "checkout-flow", "004-receipt-email.md"),
           handle: "handle-/repos/backend",
+          reviewPass: 1,
         },
       ]);
+    });
+
+    it("drives the next pass by hand: records N+1 from the recorded pass", () => {
+      // A manual `r` press is one pass, exactly like an auto-reconcile pass: it
+      // reads the pass already recorded for this Issue and records the increment
+      // at spawn time. Two passes have run, so this press drives the third.
+      const deps = recordingDeps({ readReviewPass: () => 2 });
+      const reviewer = createReviewer(root, deps);
+
+      const preview = reviewer.readReview("checkout-flow", "004-receipt-email.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      expect(deps.spawns).toHaveLength(1);
+      expect(deps.handles[0]?.reviewPass).toBe(3);
+    });
+
+    it("escalates to human-review with non-convergence at the cap instead of spawning", () => {
+      // The cap is Reactor/keybind-enforced from the count (ADR 0018): a manual
+      // `r` on an Issue already at the cap (3 passes recorded, cap 3) must NOT
+      // spawn a 4th pass — it escalates to human-review with `non-convergence`,
+      // the same gate the auto path applies.
+      const deps = recordingDeps({ readReviewPass: () => 3 });
+      const reviewer = createReviewer(root, deps);
+
+      const preview = reviewer.readReview("checkout-flow", "004-receipt-email.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      expect(deps.spawns).toEqual([]); // no 4th pass
+      const after = readFileSync(
+        join(root, "checkout-flow", "004-receipt-email.md"),
+        "utf8",
+      );
+      expect(after).toContain("status: human-review");
+      expect(after).toContain("human_review_reason: non-convergence");
     });
 
     it("builds a prompt carrying the worktree, branch, feature branch, and PRD body", () => {

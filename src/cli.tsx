@@ -93,6 +93,14 @@ function runBoard(): void {
     }
     return handles;
   };
+  // The review-pass projection (ADR 0018): the loop control reads the count
+  // Overseer recorded for an Issue off the same widened sidecar, so the Reactor
+  // and the manual `r` keybind decide spawn-next-pass vs. escalate-at-cap from one
+  // source of truth. Absent ⇒ no pass recorded ⇒ the first pass. Shared by both
+  // review edges so a hand-driven loop steps the count identically to the auto
+  // cascade; the same number is what a later card marker renders as `N/cap`.
+  const readReviewPass = (issueKey: string): number | undefined =>
+    readEntries()[issueKey]?.reviewPass;
   // The liveness probe (ADR 0008 / 0009): on each call it re-queries
   // `claude agents --json`, re-reads the recorded handles, and intersects them
   // into a per-Issue trust-qualified absence (live / absent-clean /
@@ -157,6 +165,7 @@ function runBoard(): void {
     spawn,
     logFailure,
     recordHandle,
+    readReviewPass,
     failedSet,
     review,
   });
@@ -204,6 +213,7 @@ function runBoard(): void {
     spawn,
     logFailure,
     recordHandle,
+    readReviewPass,
     failedSet,
     review,
   });

@@ -96,6 +96,7 @@ describe("shared failed-set across spawn edges", () => {
       spawn,
       logFailure: () => {},
       recordHandle: () => {},
+      readReviewPass: () => undefined,
       failedSet,
       review: DEFAULT_REVIEW_CONFIG,
     };
