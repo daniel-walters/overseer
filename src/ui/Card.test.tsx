@@ -265,6 +265,48 @@ describe("Card linked-PR marker", () => {
   });
 });
 
+describe("Card review-pass marker", () => {
+  it("shows an N/cap marker on a card with a review pass and cap", () => {
+    const frame = frameOf(<Card title="Reviewing" reviewPass={1} reviewCap={3} />);
+
+    expect(frame).toContain("1/3");
+    expect(frame).toContain("Reviewing");
+  });
+
+  it("advances the numerator with the recorded pass", () => {
+    const frame = frameOf(<Card title="Reviewing" reviewPass={2} reviewCap={3} />);
+
+    expect(frame).toContain("2/3");
+  });
+
+  it("reflects a tuned cap in the denominator", () => {
+    // The denominator is the configured cap, not a literal 3 — a board that tuned
+    // the cap down reads honestly.
+    const frame = frameOf(<Card title="Reviewing" reviewPass={1} reviewCap={5} />);
+
+    expect(frame).toContain("1/5");
+  });
+
+  it("shows no count on a card with no review pass", () => {
+    // Absent pass ⇒ no marker, never a false 0/cap from a default.
+    const frame = frameOf(<Card title="Plain" reviewCap={3} />);
+
+    expect(frame).not.toMatch(/\d+\/\d+/);
+    expect(frame).toContain("Plain");
+  });
+
+  it("renders the review-pass marker outside the yellow and red marker families", () => {
+    // The neutral in-progress path: its glyph must read apart from the yellow
+    // warning family (orphaned, the human-review reasons, bad status) and the red
+    // `⊘ suppressed` nothing-ran family. The renderer strips ANSI, so the glyph is
+    // the observable distinction.
+    const frame = frameOf(<Card title="Reviewing" reviewPass={1} reviewCap={3} />);
+
+    expect(frame).toContain("1/3");
+    expect(frame).not.toMatch(/⚠|↻|✗|⊘/);
+  });
+});
+
 describe("Card needs-review marker", () => {
   it("marks a PRD whose Issues need review with a 'needs review' marker", () => {
     const frame = frameOf(<Card title="Blocked" needsReview />);

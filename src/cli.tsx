@@ -78,8 +78,29 @@ function runBoard(): void {
   // open can join a live `claude agents --json` row back to its Issue. Shared by
   // all three spawn paths (manual `d`/`r` and the Reactor) so every launched
   // agent is recorded identically; `read` feeds the liveness probe below.
-  const { record: recordHandle, read: readHandles } =
+  const { record: recordHandle, read: readEntries } =
     createAgentSidecar(defaultSidecarPath());
+  // The liveness join and the kill switch only need `issueKey → handle`; the
+  // sidecar's widened entry also carries the AI-review pass (ADR 0018), so project
+  // the entries down to handles right at the join boundary. Keeping the projection
+  // here leaves the liveness probe id-only and untouched by the schema widening —
+  // a non-string handle can never match a live session `id`, so handle membership
+  // is exactly what those two seams want.
+  const readHandles = (): Record<string, string> => {
+    const handles: Record<string, string> = {};
+    for (const [issueKey, entry] of Object.entries(readEntries())) {
+      handles[issueKey] = entry.handle;
+    }
+    return handles;
+  };
+  // The review-pass projection (ADR 0018): the loop control reads the count
+  // Overseer recorded for an Issue off the same widened sidecar, so the Reactor
+  // and the manual `r` keybind decide spawn-next-pass vs. escalate-at-cap from one
+  // source of truth. Absent ⇒ no pass recorded ⇒ the first pass. Shared by both
+  // review edges so a hand-driven loop steps the count identically to the auto
+  // cascade; the same number is what a later card marker renders as `N/cap`.
+  const readReviewPass = (issueKey: string): number | undefined =>
+    readEntries()[issueKey]?.reviewPass;
   // The liveness probe (ADR 0008 / 0009): on each call it re-queries
   // `claude agents --json`, re-reads the recorded handles, and intersects them
   // into a per-Issue trust-qualified absence (live / absent-clean /
@@ -127,6 +148,13 @@ function runBoard(): void {
       },
       isSuppressed,
       lookupPr,
+      // The review-pass overlay (ADR 0018): the scanner joins the recorded pass
+      // onto a *live* in-review card as the `N/cap` marker's numerator, reading the
+      // very same `readReviewPass` projection the review loop's cap check reads —
+      // one source of truth for control and display. A pure sidecar read, gated to
+      // live-and-in-review by the scanner, so it never co-renders with the Orphan
+      // marker and never persists into the Issue files (ADR 0002).
+      readReviewPass,
     );
   };
   const initialBoard = scanWithOverlays(root);
@@ -144,6 +172,7 @@ function runBoard(): void {
     spawn,
     logFailure,
     recordHandle,
+    readReviewPass,
     failedSet,
     review,
   });
@@ -191,6 +220,7 @@ function runBoard(): void {
     spawn,
     logFailure,
     recordHandle,
+    readReviewPass,
     failedSet,
     review,
   });
@@ -218,6 +248,7 @@ function runBoard(): void {
       detailReader={detailReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
+      reviewCap={review.cap}
     />,
     { alternateScreen: true },
   );

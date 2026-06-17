@@ -140,8 +140,10 @@ describe("createDispatcher", () => {
       dispatcher.dispatch(dispatcher.readFrontier("checkout-flow"));
 
       const issueKey = join(root, "checkout-flow", "002-payment-intent.md");
+      // A dispatch spawn records only a handle — no review pass — so the entry
+      // reads as a bare handle with no recorded count.
       expect(createAgentSidecar(sidecarPath).read()).toEqual({
-        [issueKey]: "session-9c2",
+        [issueKey]: { handle: "session-9c2" },
       });
     });
 

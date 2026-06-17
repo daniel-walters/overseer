@@ -27,19 +27,24 @@ function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
 function recordingDeps(overrides: Partial<ReactorDeps> = {}): ReactorDeps & {
   spawns: { repo: string; prompt: string }[];
   failures: unknown[];
+  recorded: { issueKey: string; handle: string; reviewPass?: number }[];
 } {
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: unknown[] = [];
+  const recorded: { issueKey: string; handle: string; reviewPass?: number }[] =
+    [];
   return {
     spawns,
     failures,
+    recorded,
     git: fakeGit(),
     spawn: (repo, prompt) => {
       spawns.push({ repo, prompt });
       return `handle-${repo}`;
     },
     logFailure: (r) => failures.push(r),
-    recordHandle: () => {},
+    recordHandle: (issueKey, handle, reviewPass) =>
+      recorded.push({ issueKey, handle, reviewPass }),
     ...overrides,
   };
 }
@@ -647,6 +652,131 @@ describe("createReactor", () => {
     reactor.reconcile();
     expect(deps.spawns).toHaveLength(1); // reviewer not suppressed by the impl failure
     expect(readFileSync(file, "utf8")).toContain("status: in-review");
+  });
+
+  // The Reactor drives the AI-review loop one pass per spawn (ADR 0018): on each
+  // ready-for-review Issue it reads the pass count `N` recorded in the sidecar,
+  // and either spawns the next pass (recording `N+1`) or — at the cap — escalates
+  // to human-review with `non-convergence`, the count being both the loop control
+  // and the card's `N/cap` marker.
+  describe("review-pass cap enforcement", () => {
+    it("spawns the first pass and records reviewPass 1 when no pass is recorded yet", () => {
+      // An absent count reads as the first pass: the reviewer is spawned and the
+      // sidecar records 1, so the card's marker reads 1/cap the instant review
+      // begins.
+      writePrd(root, "alpha", { "001-review.md": reviewable() });
+
+      const deps = recordingDeps();
+      createReactor(root, deps).reconcile();
+
+      expect(deps.spawns).toHaveLength(1);
+      expect(deps.recorded).toEqual([
+        {
+          issueKey: join(root, "alpha", "001-review.md"),
+          handle: "handle-/repos/alpha",
+          reviewPass: 1,
+        },
+      ]);
+    });
+
+    it("spawns the next pass and records N+1 when N is below the cap", () => {
+      // Two passes have run (N=2, cap=3); the next reconcile spawns the third pass
+      // and records 3. The card's marker would tick 2/3 → 3/3.
+      writePrd(root, "alpha", { "001-review.md": reviewable() });
+      const issueKey = join(root, "alpha", "001-review.md");
+
+      const deps = recordingDeps({
+        readReviewPass: (key) => (key === issueKey ? 2 : undefined),
+        review: { cap: 3, effort: "medium" },
+      });
+      createReactor(root, deps).reconcile();
+
+      expect(deps.spawns).toHaveLength(1);
+      expect(deps.recorded).toEqual([
+        { issueKey, handle: "handle-/repos/alpha", reviewPass: 3 },
+      ]);
+      // It flipped to in-review (the idempotency lock) before spawning.
+      expect(readFileSync(issueKey, "utf8")).toContain("status: in-review");
+    });
+
+    it("escalates to human-review with non-convergence at the cap and does not spawn", () => {
+      // N has reached the cap (3 passes recorded, cap 3): the loop did not
+      // converge, so the Reactor escalates to human-review with `non-convergence`
+      // — and spawns no further pass.
+      writePrd(root, "alpha", { "001-review.md": reviewable() });
+      const issueKey = join(root, "alpha", "001-review.md");
+
+      const deps = recordingDeps({
+        readReviewPass: (key) => (key === issueKey ? 3 : undefined),
+        review: { cap: 3, effort: "medium" },
+      });
+      createReactor(root, deps).reconcile();
+
+      expect(deps.spawns).toEqual([]); // no 4th pass
+      expect(deps.recorded).toEqual([]); // nothing recorded — no spawn happened
+      const after = readFileSync(issueKey, "utf8");
+      expect(after).toContain("status: human-review");
+      expect(after).toContain("human_review_reason: non-convergence");
+      // The reason is the Reactor-owned one and carries a note for the human.
+      expect(after).toContain("human_review_note:");
+    });
+
+    it("advances the count across the between-passes return to ready-for-review", () => {
+      // A found-and-fixed pass returns the Issue to ready-for-review; the next
+      // reconcile re-picks it up and spawns the *next* pass, the count advancing
+      // because the sidecar now reads one higher. Simulate the recorded count
+      // climbing as the agent hands work back.
+      writePrd(root, "alpha", { "001-review.md": reviewable() });
+      const issueKey = join(root, "alpha", "001-review.md");
+
+      let recorded: number | undefined;
+      const deps = recordingDeps({
+        readReviewPass: () => recorded,
+        review: { cap: 3, effort: "medium" },
+        // Spawning records the pass; mirror that into the sidecar fake so the
+        // next reconcile reads the advanced count.
+        spawn: (repo, prompt) => {
+          deps.spawns.push({ repo, prompt });
+          return `handle-${repo}`;
+        },
+        recordHandle: (key, handle, reviewPass) => {
+          deps.recorded.push({ issueKey: key, handle, reviewPass });
+          recorded = reviewPass;
+        },
+      });
+      const reactor = createReactor(root, deps);
+
+      // Pass 1 spawns and records 1.
+      reactor.reconcile();
+      expect(deps.recorded.at(-1)?.reviewPass).toBe(1);
+
+      // The agent finds-and-fixes and hands back: ready-for-review again.
+      writeFileSync(issueKey, reviewable());
+
+      // Pass 2: the count advanced to 2.
+      reactor.reconcile();
+      expect(deps.recorded.at(-1)?.reviewPass).toBe(2);
+      expect(deps.spawns).toHaveLength(2);
+    });
+
+    it("stops the loop on a clean exit: a done Issue is never re-spawned", () => {
+      // A zero-findings clean pass merges and sets done. `done` is off the review
+      // frontier, so the next reconcile spawns nothing — the loop halts.
+      writePrd(root, "alpha", { "001-review.md": reviewable() });
+      const issueKey = join(root, "alpha", "001-review.md");
+
+      const deps = recordingDeps({ review: { cap: 3, effort: "medium" } });
+      const reactor = createReactor(root, deps);
+
+      reactor.reconcile(); // pass 1 spawns
+      expect(deps.spawns).toHaveLength(1);
+
+      // The reviewer converges and merges: 001 → done.
+      writeFileSync(issueKey, fm({ status: "done", repo: "/repos/alpha" }));
+
+      reactor.reconcile(); // nothing eligible
+      expect(deps.spawns).toHaveLength(1); // no further pass
+    });
   });
 });
 

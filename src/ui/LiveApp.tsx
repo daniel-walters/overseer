@@ -19,6 +19,12 @@ export interface LiveAppProps extends UseLiveBoardOptions {
   readonly detailReader?: DetailReader;
   /** The browser seam `go to PR` opens through; wired in cli.tsx, absent in tests. */
   readonly urlOpener?: UrlOpener;
+  /**
+   * The configured AI-review cap (`config.review.cap`), forwarded to {@link App} as
+   * the denominator of the `N/cap` review-pass marker (ADR 0018). Wired in cli.tsx
+   * from config; absent in board-only tests.
+   */
+  readonly reviewCap?: number;
 }
 
 // `reactor` rides in via UseLiveBoardOptions, consumed by useLiveBoard rather
@@ -30,7 +36,7 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  * preview) separately from the board, so a refresh under the user's feet never
  * loses their place. The dispatcher and reviewer are threaded straight through.
  */
-export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, urlOpener, ...options }: LiveAppProps) {
+export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, urlOpener, reviewCap, ...options }: LiveAppProps) {
   const reactor = options.reactor;
   // The board-level reactor-activity signal shown beside the auto-run indicator
   // (Issue: surface reactor state). LiveApp owns it as a single source of truth,
@@ -87,6 +93,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, delete
       urlOpener={urlOpener}
       activity={activity}
       refresh={refresh}
+      reviewCap={reviewCap}
     />
   );
 }

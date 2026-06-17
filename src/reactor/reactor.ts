@@ -4,7 +4,7 @@ import { readDispatchView } from "../dispatch/reader.js";
 import { runDispatch, type FailureRecord } from "../dispatch/dispatch.js";
 import { featureBranchName, type GitSeam } from "../dispatch/gitSetup.js";
 import { buildImplementorPrompt } from "../dispatch/implementorPrompt.js";
-import { runReview } from "../review/review.js";
+import { driveReviewPass } from "../review/review.js";
 import { buildReviewerPrompt } from "../review/reviewerPrompt.js";
 import {
   DEFAULT_REVIEW_CONFIG,
@@ -44,8 +44,28 @@ export interface ReactorDeps {
   readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
-  /** Record a launched agent's handle against its Issue key in the sidecar. */
-  readonly recordHandle: (issueKey: string, handle: string) => void;
+  /**
+   * Record a launched agent's handle — and, on the review edge, the AI-review
+   * pass Overseer is driving — against its Issue key in the sidecar (ADR 0008 /
+   * 0018). A dispatch spawn omits the pass; a review spawn passes `N+1`.
+   */
+  readonly recordHandle: (
+    issueKey: string,
+    handle: string,
+    reviewPass?: number,
+  ) => void;
+  /**
+   * Read the AI-review pass recorded for `issueKey` in the sidecar, or
+   * `undefined` when none is recorded (a fresh `ready-for-review` Issue whose
+   * first pass hasn't spawned yet). The review edge reads this to decide, per
+   * reconcile, whether to spawn the next pass (`N < cap`) or escalate at the cap —
+   * the count being both the loop control and the card marker (ADR 0018). The CLI
+   * projects it off the same sidecar `read` the handle-recorder writes; the
+   * Reactor's own unit tests inject a fake. Optional: when omitted, every Issue
+   * reads as no recorded pass — the current-behaviour first pass — which is what
+   * the Reactor's spawn-edge-wiring tests rely on.
+   */
+  readonly readReviewPass?: (issueKey: string) => number | undefined;
   /**
    * The session-scoped failed-set the Reactor subtracts from each frontier and
    * records spawn failures into. The CLI constructs one shared instance and
@@ -312,7 +332,17 @@ function reviewEligible(
 ): void {
   for (const issue of reviewers) {
     if (failed.has(issue.path, "reviewer")) continue; // suppressed this session
-    runReview(issue, {
+
+    // One pass of the Reactor-owned loop (ADR 0018): `driveReviewPass` reads the
+    // pass count off the sidecar and either spawns the next pass (flipping
+    // ready-for-review → in-review first, then recording `N+1`) or escalates to
+    // human-review with `non-convergence` at the cap. The exact same decision the
+    // manual `r` keybind makes — so auto and hand-driven loops step the count
+    // identically. When no `readReviewPass` is injected (the Reactor's own
+    // spawn-edge-wiring tests), every Issue reads as the first pass.
+    driveReviewPass(issue, {
+      readReviewPass: deps.readReviewPass ?? (() => undefined),
+      review,
       writeStatus,
       buildPrompt: (reviewIssue) =>
         buildReviewerPrompt({
