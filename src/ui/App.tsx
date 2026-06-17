@@ -192,6 +192,16 @@ interface AppProps {
   /** Wired in production; absent in tests that don't exercise `go to PR`. */
   urlOpener?: UrlOpener;
   /**
+   * Re-scan the live board on demand — wired in production to the live loop's
+   * own rebuild+reconcile, absent in board-only tests. The watcher only fires on
+   * filesystem changes, so an action that mutates state the scan reads without
+   * touching the watched root (opening a PR is a GitHub write, issue #66) leaves
+   * the board stale; the App calls this after such an action so the card's status
+   * and Open PR eligibility re-resolve at once rather than waiting on an unrelated
+   * FS event.
+   */
+  refresh?: () => void;
+  /**
    * The board-level reactor-activity signal (working / idle / at-rest), derived
    * from in-memory Reactor state and recomputed on each rebuild (Issue: surface
    * reactor state). A second, distinct status-line indicator beside the auto-run
@@ -209,7 +219,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, detailReader, autoRun, urlOpener, activity }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, detailReader, autoRun, urlOpener, refresh, activity }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -542,6 +552,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
       const result = openPr?.openPr(modal.preview);
       if (result?.ok) {
         setNotice(`Opened PR for ${modal.preview.prdTitle}: ${result.url}`);
+        // Opening a PR is a GitHub write that touches nothing in the watched root,
+        // so the FS watcher never fires (issue #66). Re-scan on demand so the new
+        // PR shows on the Linked PR overlay and the PRD's Open PR eligibility flips
+        // to "a PR already exists" at once, rather than the board staying stale
+        // (and re-offering `canOpen: true`) until an unrelated FS event.
+        refresh?.();
       } else if (result) {
         setNotice(`Couldn't open PR for ${modal.preview.prdTitle}: ${result.error}`);
       }
