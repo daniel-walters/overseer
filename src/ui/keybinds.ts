@@ -94,6 +94,19 @@ export interface Keybind {
    */
   readonly eligible?: (ctx: BindContext) => boolean;
   /**
+   * An optional context-aware label override consulted by the **status-line hints
+   * only** (ADR 0017). When present, the bar renders `labelFor(ctx)` in place of the
+   * static {@link label}; the `?` help map ignores it and always shows {@link label},
+   * because help has no live selection to key a dynamic label off (the deliberate
+   * eligibility/learning exception). Only `d` defines it — its hint reads "dispatch"
+   * on a `backlog` PRD (first ignition) and "resume" on an `in-progress` one (the
+   * manual resume crank when auto-run is off). Every other binding keeps its plain
+   * static label, so this is the lone dynamic label on the bar. Read via the
+   * {@link hintLabel} selector, never directly, so the static-fallback rule is
+   * applied in one place.
+   */
+  readonly labelFor?: (ctx: BindContext) => string;
+  /**
    * Whether the binding surfaces on the **status-line hints** (the bottom bar) when
    * eligible. The bar is a curated signal of the *actionable* keys for the current
    * selection — the per-card action keys (`d` / `P` / `go to PR` / `X` / `r` / `R` /
@@ -162,6 +175,13 @@ export const KEYBINDS: readonly Keybind[] = [
     // frontier has a spawn candidate, so `d` stays available to *resume* an
     // in-progress PRD with newly-unblocked work when auto-run is off (ADR 0017).
     eligible: (ctx) => ctx.dispatchable,
+    // The lone dynamic hint label (ADR 0017): "Dispatch a wave" on a backlog PRD
+    // (first ignition) vs "Resume a wave" on an in-progress one (re-dispatching
+    // newly-unblocked work — the manual crank when auto-run is off). Keys off the
+    // PRD's derived *lane*, not the frontier-based `dispatchable` gate. Hints only;
+    // `?` help keeps the static "Dispatch a wave".
+    labelFor: (ctx) =>
+      ctx.prdLane === "in-progress" ? "Resume a wave" : "Dispatch a wave",
     action: (h) => h.dispatch(),
   },
   {
@@ -300,4 +320,18 @@ export function hintsFor(at: Level, ctx: BindContext): readonly Keybind[] {
   return KEYBINDS.filter(
     (b) => b.hint === true && levelActive(b.level, at) && eligibleFor(b, ctx),
   );
+}
+
+/**
+ * The label the **status-line hints** render for a binding under `ctx`: the
+ * binding's context-aware {@link Keybind.labelFor} override when it defines one,
+ * otherwise its plain static {@link Keybind.label} (ADR 0017). The single place the
+ * static-fallback rule lives, so the bar never reaches `labelFor` directly. The `?`
+ * help map does **not** call this — it always renders the static `label`, the
+ * deliberate exception (help has no live selection to key a dynamic label off). Only
+ * `d` carries a `labelFor` (dispatch vs resume by the PRD's lane); for every other
+ * binding this returns the static label unchanged.
+ */
+export function hintLabel(bind: Keybind, ctx: BindContext): string {
+  return bind.labelFor?.(ctx) ?? bind.label;
 }

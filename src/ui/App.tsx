@@ -12,7 +12,7 @@ import type { CardDetail } from "./detailReader.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
-import { matchKeybind, hintsFor, type Keybind, type KeybindHandlers } from "./keybinds.js";
+import { matchKeybind, hintsFor, hintLabel, type Keybind, type KeybindHandlers } from "./keybinds.js";
 import { computeBindContext } from "./eligibility.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
@@ -315,7 +315,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
 
   // The status-line hints for the current level + selection (ADR 0017): the bottom
   // bar renders only the keys eligible *right now*, from the same registry +
-  // `eligible` predicate the matcher gates on — never a hardcoded list. The hints
+  // `eligible` predicate the matcher gates on — never a hardcoded list, and each
+  // one's label via `hintLabel` so `d`'s context-aware "dispatch"/"resume" override
+  // surfaces here (and only here — `?` help keeps the static label). The hints
   // recompute on every render, so they track both a selection move (a new
   // `selectedPrd`/`selectedIssue`) and a card-state change under the selection (a
   // re-scan that re-derives the lane, the Linked-PR overlay, or the liveness verdict).
@@ -344,7 +346,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     // matcher path passes `frontier` instead, since `d` there must dispatch it).
     dispatchable,
   });
-  const hints = hintsFor(nav.level, hintCtx);
+  // Pre-render each hint to its bar text here, where `hintCtx` is in scope, so the
+  // context-aware `hintLabel` (d's dispatch/resume override) is resolved against the
+  // live selection before the strings reach the seam-free StatusLine.
+  const hintTexts = hintsFor(nav.level, hintCtx).map(
+    (b) => `${b.key} ${hintLabel(b, hintCtx)}`,
+  );
 
   // The detail modal's body region height and its current scroll window. The
   // viewport is the terminal height minus the modal's fixed chrome (title, hints,
@@ -766,7 +773,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         </Box>
       )}
       <Box flexShrink={0}>
-        <StatusLine hints={hints} autoRun={autoRun} activity={activity} />
+        <StatusLine hints={hintTexts} autoRun={autoRun} activity={activity} />
       </Box>
     </Box>
   );
@@ -806,19 +813,20 @@ const ACTIVITY_INDICATOR: Record<
  * in-memory Reactor state, never written to disk (ADR 0002).
  *
  * The `hints` are the eligibility-filtered keybinds for the current selection
- * (ADR 0017), computed in the App and passed in: the bar renders each one's `key`
- * + registry `label` from the single {@link KEYBINDS} source — never a hardcoded
- * list — so it offers exactly the keys actionable on the selected card, plus the
- * always-on `?`. They are *always* rendered regardless of the Reactor seams: they
- * are what make the keybinds discoverable. "auto-run"/"working"/"idle"/"at-rest" —
- * never "reactor".
+ * (ADR 0017), each already rendered to its `key + label` bar text in the App — where
+ * the live BindContext is in scope, so `d`'s context-aware dispatch/resume
+ * label is resolved before it reaches here. The App derives them from the single
+ * {@link KEYBINDS} source — never a hardcoded list — so the bar offers exactly the
+ * keys actionable on the selected card, plus the always-on `?`. They are *always*
+ * rendered regardless of the Reactor seams: they are what make the keybinds
+ * discoverable. "auto-run"/"working"/"idle"/"at-rest" — never "reactor".
  */
 function StatusLine({
   hints,
   autoRun,
   activity,
 }: {
-  hints: readonly Keybind[];
+  hints: readonly string[];
   autoRun?: AutoRun;
   activity?: ReactorActivity;
 }) {
@@ -840,9 +848,7 @@ function StatusLine({
       {/* A fixed gap guarantees separation from the auto-run indicator even when
           the content-sized bar leaves the Spacer with nothing to push apart. */}
       {autoRun ? <Text>{"   "}</Text> : null}
-      <Text dimColor>
-        {hints.map((b) => `${b.key} ${b.label}`).join("  ·  ")}
-      </Text>
+      <Text dimColor>{hints.join("  ·  ")}</Text>
     </Box>
   );
 }
