@@ -26,8 +26,6 @@ export interface ReviewPreview {
    */
   readonly prdTitle: string;
   readonly prdBody: string;
-  /** The PRD feature branch the clean review path merges into. */
-  readonly featureBranch: string;
 }
 
 /**

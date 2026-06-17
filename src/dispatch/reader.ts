@@ -52,6 +52,15 @@ export interface DispatchIssue {
    * review; undefined when the implementor followed the plan.
    */
   readonly deviation: string | undefined;
+  /**
+   * The pass agent's review verdict (ADR 0019), the one bit Overseer cannot
+   * derive: `clean` when a review pass found zero findings and wrote it to the
+   * frontmatter, leaving `status: in-review` for Overseer to merge and finish.
+   * A blank value reads as absent (`undefined`) — only a real verdict moves the
+   * Issue onto the resolve frontier. Everything else (`deviation`, `conflict`,
+   * `non-convergence`) Overseer already has from elsewhere.
+   */
+  readonly reviewVerdict: string | undefined;
   /** The Issue's markdown body (frontmatter stripped). */
   readonly body: string;
 }
@@ -128,6 +137,9 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     // forecloses the clean auto-merge path (its mere presence forces a human
     // review), so an empty-string field must not silently escalate.
     deviation: readPresentString(data, FIELD.deviation),
+    // A blank verdict reads as absent, like `deviation`: only a real value puts
+    // the Issue on the resolve frontier (ADR 0019).
+    reviewVerdict: readPresentString(data, FIELD.reviewVerdict),
     body: content,
   };
 }

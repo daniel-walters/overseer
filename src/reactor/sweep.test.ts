@@ -13,6 +13,7 @@ function issue(over: Partial<DispatchIssue> & { id: string }): DispatchIssue {
     worktree: undefined,
     branch: undefined,
     deviation: undefined,
+    reviewVerdict: undefined,
     body: "",
     ...over,
   };
@@ -229,5 +230,64 @@ describe("sweepFrontier — reviewer edge", () => {
 
     expect(eligibleIds(swept)).toEqual(["impl.md"]);
     expect(reviewerIds(swept)).toEqual(["rev.md"]);
+  });
+});
+
+/** The ids the sweep classified as resolve-verdict candidates, across PRDs. */
+function resolverIds(swept: readonly SweptPrd[]): string[] {
+  return swept.flatMap((p) => p.resolvers.map((i) => i.id));
+}
+
+describe("sweepFrontier — resolve edge", () => {
+  it("surfaces an in-review Issue carrying review_verdict: clean as a resolver", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "001.md", status: "in-review", reviewVerdict: "clean" }),
+        ]),
+      },
+    ]);
+
+    expect(resolverIds(swept)).toEqual(["001.md"]);
+  });
+
+  it("excludes an in-review Issue with no verdict (a pass still running)", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([issue({ id: "001.md", status: "in-review" })]),
+      },
+    ]);
+
+    expect(resolverIds(swept)).toEqual([]);
+  });
+
+  it("gates on the verdict, not the lane: ready-for-review + clean is not a resolver", () => {
+    // Only an `in-review` Issue resolves; a clean verdict on any other lane is
+    // ignored (a verdict only ever appears on an Issue Overseer is about to finish).
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "001.md", status: "ready-for-review", reviewVerdict: "clean" }),
+        ]),
+      },
+    ]);
+
+    expect(resolverIds(swept)).toEqual([]);
+  });
+
+  it("ignores an unrecognised verdict value", () => {
+    const swept = sweepFrontier([
+      {
+        prdDir: "/root/p",
+        view: view([
+          issue({ id: "001.md", status: "in-review", reviewVerdict: "dirty" }),
+        ]),
+      },
+    ]);
+
+    expect(resolverIds(swept)).toEqual([]);
   });
 });

@@ -7,6 +7,12 @@ import { buildImplementorPrompt } from "../dispatch/implementorPrompt.js";
 import { driveReviewPass } from "../review/review.js";
 import { buildReviewerPrompt } from "../review/reviewerPrompt.js";
 import {
+  mergeWorktree,
+  cleanUpWorktree,
+  type MergeSeam,
+} from "../review/mergeSeam.js";
+import { resolveVerdict } from "../review/resolveVerdict.js";
+import {
   DEFAULT_REVIEW_CONFIG,
   type ReviewConfig,
 } from "../review/reviewConfig.js";
@@ -78,6 +84,16 @@ export interface ReactorDeps {
    */
   readonly failedSet?: FailedSet;
   /**
+   * The git merge seam for the **resolve** edge (ADR 0019): the in-process clean
+   * merge Overseer runs to finish an `in-review` Issue carrying
+   * `review_verdict: clean`, taking the place of the merge the reviewer agent used
+   * to run. The CLI injects {@link import("../review/mergeSeam.js").realMergeSeam};
+   * the Reactor's resolve tests inject a fake. Optional: when omitted the resolve
+   * edge is inert — every verdict-bearing Issue is left `in-review` — which is what
+   * the Reactor's spawn-edge-wiring tests (focused on the two spawn edges) rely on.
+   */
+  readonly merge?: MergeSeam;
+  /**
    * The resolved review knobs (pass cap + effort) the reviewer prompt embeds.
    * The CLI threads {@link import("../config.js").Config.review} here, the *same*
    * value it gives the manual `r` reviewer, so an auto-reviewer's brief is
@@ -91,11 +107,14 @@ export interface ReactorDeps {
 /** The in-process automation the live loop drives after every board rebuild. */
 export interface Reactor {
   /**
-   * Sweep every PRD under the root and spawn whatever is eligible on either
-   * spawn edge right now — implementors for unblocked `ready-for-agent` Issues,
-   * reviewers for `ready-for-review` Issues with a recorded repo — reading only
-   * on-disk status (level-triggered, no diffing). A no-op while a reconcile is
-   * already in flight, or while auto-run is disabled.
+   * Sweep every PRD under the root and act on whatever is eligible right now,
+   * reading only on-disk status (level-triggered, no diffing): spawn implementors
+   * for unblocked `ready-for-agent` Issues and reviewers for `ready-for-review`
+   * Issues with a recorded repo (the two spawn edges), then — the third,
+   * non-spawn edge (ADR 0019) — resolve every `in-review` Issue carrying
+   * `review_verdict: clean` by merging it into the feature branch and writing
+   * `done`. A no-op while a reconcile is already in flight, or while auto-run is
+   * disabled.
    */
   reconcile(): void;
   /**
@@ -121,7 +140,8 @@ export interface Reactor {
 
 /**
  * Build the Reactor: in-process automation that closes the pipeline's two
- * spawn-edge loops (ADR 0005). On each {@link Reactor.reconcile} it enumerates
+ * spawn-edge loops plus the resolve edge (ADR 0005 / 0019). On each
+ * {@link Reactor.reconcile} it enumerates
  * every PRD under `root`, reads each PRD's dispatch view, computes the cross-PRD
  * frontier (reusing `computeFrontier` via the sweep), and runs the existing
  * `runDispatch`/`runReview` per PRD — the very spawn edges the `d` and `r`
@@ -145,6 +165,15 @@ export interface Reactor {
  * them: it reuses only the spawn-edge cores (`runDispatch`/`runReview`),
  * deliberately not their preview/`lastRead` caching, which is a human-flow
  * concern and a re-entrancy footgun in a sweep.
+ *
+ * After the two spawn frontiers, a third **non-spawn** edge runs in the same pass
+ * (ADR 0019): the **resolve** edge merges every `in-review` Issue carrying
+ * `review_verdict: clean` into its feature branch and writes `done`
+ * (`resolveVerdict` over the injected `merge` seam). It is gated on the verdict,
+ * not on liveness, and `writeStatus(done)` is its durable idempotency lock — the
+ * resolve analogue of flip-before-spawn. Because it never spawns, the "exactly
+ * two **spawn** edges" invariant survives literally; it is inert when no `merge`
+ * seam is injected.
  *
  * Three invariants keep it safe:
  *
@@ -224,11 +253,17 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
       try {
         for (const swept of sweepFrontier(readPrds(root))) {
           // The PRD's feature branch — the implementor's worktree base and the
-          // reviewer's merge target — is derived once here and shared by both
-          // edges, so the two can't drift on how it's computed.
+          // resolve edge's merge target — is derived once here and shared, so the
+          // edges can't drift on how it's computed.
           const featureBranch = featureBranchName(basename(swept.prdDir));
           dispatchEligible(swept, featureBranch, countingDeps, failed);
-          reviewEligible(swept, featureBranch, countingDeps, failed, review);
+          reviewEligible(swept, countingDeps, failed, review);
+          // The third, non-spawn edge (ADR 0019): resolve a clean verdict by
+          // merging → `done`. Runs after the two spawn frontiers, synchronously
+          // under the same re-entrancy guard, gated on the verdict the sweep
+          // surfaced — not on a spawn, so "exactly two spawn edges" holds. Inert
+          // when no merge seam is injected.
+          if (deps.merge) resolveEligible(swept, featureBranch, deps.merge);
         }
       } finally {
         // Publish this pass's tally and always release the guard, even if a path
@@ -325,7 +360,6 @@ function dispatchEligible(
  */
 function reviewEligible(
   { prdDir, view, reviewers }: SweptPrd,
-  featureBranch: string,
   deps: ReactorDeps,
   failed: FailedSet,
   review: ReviewConfig,
@@ -349,13 +383,51 @@ function reviewEligible(
           issue: reviewIssue,
           prdTitle: view.prdTitle,
           prdBody: view.prdBody,
-          featureBranch,
           review,
         }),
       spawn: deps.spawn,
       logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),
       recordHandle: deps.recordHandle,
     });
+  }
+}
+
+/**
+ * Run the resolve-verdict decision over one PRD's resolve candidates — the third,
+ * **non-spawn** edge (ADR 0019). Each candidate is `in-review` carrying
+ * `review_verdict: clean` (the sweep gated that, on the verdict, not on liveness).
+ * {@link resolveVerdict} runs the clean merge into `featureBranch` and, on
+ * success, writes `status: done` — the durable idempotency lock that drops the
+ * Issue off the verdict frontier, so an overlapping reconcile can't double-act —
+ * then cleans up the worktree. A non-merged outcome leaves the Issue `in-review`
+ * with its verdict, retried next reconcile (conflict/transient handling is a later
+ * slice).
+ *
+ * This edge does **not** spawn, so it runs off the raw `mergeSeam` rather than the
+ * spawn-counting wrapper, and never contributes to the board's activity signal —
+ * resolving a verdict is not "working" in the spawn sense.
+ *
+ * Total: {@link resolveVerdict} and the merge/cleanup seam are best-effort and
+ * never throw, but each candidate is additionally wrapped so a surprise throw on
+ * one Issue can't skip the rest or escape the watcher callback and crash the board.
+ */
+function resolveEligible(
+  { resolvers }: SweptPrd,
+  featureBranch: string,
+  mergeSeam: MergeSeam,
+): void {
+  for (const issue of resolvers) {
+    try {
+      resolveVerdict(issue, featureBranch, {
+        merge: (input) => mergeWorktree(input, mergeSeam),
+        cleanUp: (input) => cleanUpWorktree(input, mergeSeam),
+        writeStatus,
+      });
+    } catch {
+      // resolveVerdict is already total; this is a belt-and-braces backstop so a
+      // vanished/unreadable Issue mid-resolve is swallowed, never thrown out of the
+      // watcher callback, and the remaining resolvers still run.
+    }
   }
 }
 

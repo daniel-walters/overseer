@@ -12,6 +12,7 @@ const issue: DispatchIssue = {
   worktree: "/Users/daniel/.worktrees/worktree-blue-cat-fox",
   branch: "worktree-blue-cat-fox",
   deviation: undefined,
+  reviewVerdict: undefined,
   body: "Hash passwords with argon2id before persisting them.",
   path: "/root/auth-system/001-password-hashing.md",
 };
@@ -22,7 +23,6 @@ const prdBody = "## Problem\nUsers cannot sign in.\n\n## Solution\nBuild auth.";
 const context = {
   prdTitle,
   prdBody,
-  featureBranch: "auth-system",
   review: DEFAULT_REVIEW_CONFIG,
 };
 
@@ -56,6 +56,10 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain(issue.worktree!);
   });
 
+  it("names the repo the review runs in", () => {
+    expect(build()).toContain(issue.repo!);
+  });
+
   it("runs a single /code-review pass at the default medium effort", () => {
     const prompt = build();
     expect(prompt).toContain("/code-review");
@@ -82,144 +86,75 @@ describe("buildReviewerPrompt", () => {
   });
 
   it("does not name the cap as a loop bound", () => {
-    // The cap / non-convergence escalation moved into the Reactor; a non-default
+    // The cap / non-convergence escalation lives in the Reactor; a non-default
     // cap must not leak into the prompt as a pass bound at all.
     const prompt = buildWithReview({ cap: 5, effort: "medium" });
     expect(prompt).not.toMatch(/\bcap\b|\bpasses\b|\bconverge/i);
     expect(prompt).not.toContain("5");
   });
 
-  it("does not escalate non-convergence itself (that is the Reactor's job)", () => {
-    // The prompt owns deviation and conflict escalations only; non-convergence
-    // is enforced by the Reactor reading the sidecar count.
-    const prompt = build().toLowerCase();
-    expect(prompt).not.toContain("non-convergence");
-    expect(prompt).not.toMatch(/converge/);
-  });
-
   it("uses the configured effort, not a hardcoded medium", () => {
     const prompt = buildWithReview({ cap: 3, effort: "high" });
     expect(prompt.toLowerCase()).toContain("high");
-    // The pass instruction names HIGH effort, not the old MEDIUM literal.
     expect(prompt).toContain("HIGH effort");
     expect(prompt).not.toContain("MEDIUM effort");
   });
 
-  it("instructs fixing findings", () => {
-    expect(build().toLowerCase()).toContain("fix");
-  });
+  // The two — and only two — exits the pass agent now owns (ADR 0019).
 
-  it("names the PRD feature branch as the merge target", () => {
-    expect(build()).toContain(context.featureBranch);
-  });
-
-  it("names the recorded branch to merge", () => {
-    expect(build()).toContain(issue.branch!);
-  });
-
-  it("merges only into the feature branch, never main", () => {
-    const prompt = build().toLowerCase();
-    expect(prompt).toMatch(/never .*main|not .*main|never merge .*main/);
-  });
-
-  it("names the repo and runs the merge there with git -C, not from the worktree", () => {
+  it("CLEAN exit: a zero-findings pass writes review_verdict: clean", () => {
     const prompt = build();
-    expect(prompt).toContain(issue.repo!);
-    // The merge must be anchored to the repo (git -C <repo>), not run from
-    // inside the worktree, so its direction is unambiguous.
-    expect(prompt).toContain(`git -C ${issue.repo} checkout ${context.featureBranch}`);
-    expect(prompt).toContain(`git -C ${issue.repo} merge --no-ff ${issue.branch}`);
-    expect(prompt).toContain(`git -C ${issue.repo} merge --abort`);
-  });
-
-  it("routes a zero-findings pass with no deviation to merge then done", () => {
-    const prompt = build();
-    expect(prompt).toContain("done");
-    // The clean path merges then sets done.
-    expect(prompt.toLowerCase()).toContain("merge");
+    expect(prompt).toContain("review_verdict: clean");
   });
 
   it("defines the clean exit as a pass that reports zero findings", () => {
     expect(build().toLowerCase()).toMatch(/zero findings|no findings/);
   });
 
-  it("routes a pass WITH findings to fix then set ready-for-review", () => {
-    // The between-passes return: a pass that found and fixed issues sets the
-    // Issue back to ready-for-review so the Reactor spawns the next pass.
+  it("CLEAN exit: never merges and never writes a terminal status itself", () => {
+    // Overseer owns the merge and the terminal `done` write now (ADR 0019); the
+    // clean exit is just the verdict bit. The prompt may *explain* that Overseer
+    // merges, but must never hand the agent a merge command or a `done` write.
+    const prompt = build().toLowerCase();
+    expect(prompt).not.toContain("merge --no-ff");
+    expect(prompt).not.toMatch(/git -c \S+ .*merge/);
+    expect(prompt).not.toContain("status: done");
+    // And it tells the agent in so many words that it does not merge.
+    expect(prompt).toContain("do not merge");
+  });
+
+  it("CLEAN exit: does not change the Issue status (Overseer owns the terminal write)", () => {
+    // The agent leaves the status untouched on the clean exit — it only adds the
+    // verdict. Asserted over the static template (caller bodies may mention it).
+    const prompt = buildReviewerPrompt({
+      issue: { ...issue, body: "", title: "", worktree: "/w" },
+      prdTitle: "",
+      prdBody: "",
+      review: DEFAULT_REVIEW_CONFIG,
+    });
+    expect(prompt).not.toContain("status: done");
+    expect(prompt).not.toContain("status: in-review");
+  });
+
+  it("FINDINGS exit: fix, commit, then set ready-for-review", () => {
     const prompt = build();
     expect(prompt).toContain("ready-for-review");
     const lower = prompt.toLowerCase();
     expect(lower).toContain("fix");
-    expect(lower).toContain("ready-for-review");
+    expect(lower).toContain("commit");
   });
 
-  it("routes a merge conflict to human-review with reason conflict", () => {
-    const prompt = build();
-    expect(prompt.toLowerCase()).toContain("human-review");
-    expect(prompt).toContain("conflict");
+  it("does not reason about deviations, branches, conflicts, or human-review", () => {
+    // The agent's brief shrank to two exits; it no longer reasons about merges,
+    // the branch to merge, recorded deviations, conflicts, or a human-review exit.
+    const prompt = build({ deviation: "Used a queue instead of inline send." });
+    expect(prompt.toLowerCase()).not.toMatch(/deviation|human-review|conflict/);
+    // Even with a deviation recorded on the Issue, the prompt never surfaces it.
+    expect(prompt).not.toContain("Used a queue instead of inline send.");
   });
 
-  it("writes the final status into the Issue file by its path", () => {
+  it("writes the verdict/status into the Issue file by its path", () => {
     expect(build()).toContain(issue.path);
-  });
-
-  it("tells the reviewer no deviation was recorded so the clean path is open", () => {
-    const prompt = build({ deviation: undefined }).toLowerCase();
-    expect(prompt).toContain("no deviation");
-  });
-
-  it("tells the reviewer a deviation was recorded and routes it to human-review", () => {
-    const prompt = build({ deviation: "Used a queue instead of inline send." });
-    expect(prompt).toContain("Used a queue instead of inline send.");
-    expect(prompt.toLowerCase()).toContain("human-review");
-  });
-
-  it("instructs recording the human-review reason alongside the status", () => {
-    const prompt = build();
-    expect(prompt).toContain("human_review_reason");
-  });
-
-  it("names the deviation and conflict escalation reasons it owns", () => {
-    const prompt = build();
-    expect(prompt).toContain("deviation");
-    expect(prompt).toContain("conflict");
-  });
-
-  it("instructs writing a free-text human_review_note alongside the status and reason", () => {
-    const prompt = build();
-    expect(prompt).toContain("human_review_note");
-  });
-
-  it("instructs writing the note for both escalation reasons it owns", () => {
-    // The note must be written for conflict as well as deviation — conflict
-    // otherwise carries no prose at all.
-    const prompt = build().toLowerCase();
-    expect(prompt).toMatch(/both|each|either|regardless of/);
-    expect(prompt).toContain("conflict");
-    expect(prompt).toContain("deviation");
-  });
-
-  it("on a deviation, instructs folding the implementor's deviation note into the single human_review_note", () => {
-    const prompt = build({ deviation: "Used a queue instead of inline send." });
-    // The implementor's recorded deviation is handed to the reviewer, and the
-    // reviewer is told to fold it into the one user-facing note.
-    expect(prompt).toContain("Used a queue instead of inline send.");
-    expect(prompt.toLowerCase()).toContain("fold");
-    expect(prompt).toContain("human_review_note");
-  });
-
-  it("does NOT instruct the reviewer to set in-review (the trigger already did)", () => {
-    // The review trigger flips ready-for-review → in-review before spawning, so
-    // the reviewer inherits in-review and must never set it. Assert over the
-    // static template only, since caller bodies may legitimately mention it.
-    const prompt = buildReviewerPrompt({
-      issue: { ...issue, body: "", title: "", branch: "b", worktree: "/w" },
-      prdTitle: "",
-      prdBody: "",
-      featureBranch: "fb",
-      review: DEFAULT_REVIEW_CONFIG,
-    });
-    expect(prompt).not.toContain("in-review");
   });
 
   it("is deterministic: identical inputs produce identical output", () => {
