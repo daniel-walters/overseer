@@ -15,6 +15,8 @@ export interface CardItem {
   readonly malformedStatus?: boolean;
   /** The Linked PR overlay, set only on a `done` PRD card (ADR 0013). */
   readonly linkedPr?: LinkedPr;
+  /** The needs-review overlay, set only on a PRD card with an Issue in human-review. */
+  readonly needsReview?: boolean;
 }
 
 interface ColumnProps {
@@ -91,6 +93,7 @@ export function Column({
           suppressed={card.suppressed}
           malformedStatus={card.malformedStatus}
           linkedPr={card.linkedPr}
+          needsReview={card.needsReview}
           selected={card.id === selectedId}
         />
       ))}
