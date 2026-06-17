@@ -1,5 +1,5 @@
 import { basename } from "node:path";
-import { writeStatus } from "../issueFile.js";
+import { writeStatus, writeHumanReview } from "../issueFile.js";
 import { readDispatchView } from "../dispatch/reader.js";
 import { runDispatch, type FailureRecord } from "../dispatch/dispatch.js";
 import { featureBranchName, type GitSeam } from "../dispatch/gitSetup.js";
@@ -396,12 +396,15 @@ function reviewEligible(
  * Run the resolve-verdict decision over one PRD's resolve candidates — the third,
  * **non-spawn** edge (ADR 0019). Each candidate is `in-review` carrying
  * `review_verdict: clean` (the sweep gated that, on the verdict, not on liveness).
- * {@link resolveVerdict} runs the clean merge into `featureBranch` and, on
+ * {@link resolveVerdict} forks on the implementor's `deviation`: a recorded
+ * deviation routes to `human-review` (reason `deviation`) via `writeHumanReview`,
+ * no merge; otherwise it runs the clean merge into `featureBranch` and, on
  * success, writes `status: done` — the durable idempotency lock that drops the
  * Issue off the verdict frontier, so an overlapping reconcile can't double-act —
  * then cleans up the worktree. A non-merged outcome leaves the Issue `in-review`
  * with its verdict, retried next reconcile (conflict/transient handling is a later
- * slice).
+ * slice). Both terminal writes use the same fs writers the rest of the Reactor
+ * does (`writeStatus`, `writeHumanReview`).
  *
  * This edge does **not** spawn, so it runs off the raw `mergeSeam` rather than the
  * spawn-counting wrapper, and never contributes to the board's activity signal —
@@ -422,6 +425,7 @@ function resolveEligible(
         merge: (input) => mergeWorktree(input, mergeSeam),
         cleanUp: (input) => cleanUpWorktree(input, mergeSeam),
         writeStatus,
+        writeHumanReview,
       });
     } catch {
       // resolveVerdict is already total; this is a belt-and-braces backstop so a
