@@ -12,6 +12,13 @@ import { KEYBINDS } from "./keybinds.js";
  * drift from the real bindings. It lists *every* key with its context (board /
  * issues / both) rather than filtering to the current level: a user pressing `?`
  * wants the whole map, including keys that only light up once zoomed in.
+ *
+ * It takes **no** {@link BindContext} on purpose: the matcher and the status-line
+ * hints filter the map by eligibility, but the `?` reference never does (ADR 0017).
+ * It answers "what keys exist and where?" — a learning surface — not "what can I do
+ * right now?", so it must keep showing keys that are inert on the current selection.
+ * `HelpModal.test.tsx` locks this: feeding a context that makes action keys inert in
+ * the matcher must not drop them here, so routing `?` through eligibility fails.
  */
 export function HelpModal() {
   return (
