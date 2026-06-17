@@ -17,6 +17,8 @@ import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
 import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
+import { DeletePreview, type DeletePreviewData } from "./DeletePreview.js";
+import type { DeleteResult } from "../dispatch/deletePrd.js";
 import { BOARD_LANES, ISSUE_LANES } from "../model.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
@@ -121,6 +123,24 @@ export interface OpenPr {
 }
 
 /**
+ * The Delete seam the App drives at the PRD level — the board's first destructive
+ * write to the watched root (ADR 0016), the `done`-gated, tidy-up sibling of
+ * {@link OpenPr}. Mirrors the {@link OpenPr} interface:
+ *
+ * - `readDelete` resolves the selected `done` PRD into a delete preview: the PRD
+ *   title and how many Issue files the delete will remove. `undefined` if the PRD
+ *   vanished from the watched root (a re-scan raced the keypress).
+ * - `delete` removes the whole PRD directory wholesale (`prd.md`, every Issue file,
+ *   and any other file) and returns a {@link DeleteResult}, so the App can surface a
+ *   success notice or a loud removal failure on the status line. Never throws — a
+ *   removal that fails comes back as a failed result.
+ */
+export interface Delete {
+  readonly readDelete: (prdId: string) => DeletePreviewData | undefined;
+  readonly delete: (preview: DeletePreviewData) => DeleteResult;
+}
+
+/**
  * The detail seam the `v` keybind drives — the read-only body view (the first
  * presentation-only feature, ADR 0014), the passive sibling of the action seams
  * above. `readDetail` resolves the selected card's frontmatter-stripped body off
@@ -147,6 +167,7 @@ type ActiveModal =
   | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData }
   | { readonly kind: "kill"; readonly preview: KillPreviewData }
   | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData }
+  | { readonly kind: "delete"; readonly preview: DeletePreviewData }
   | { readonly kind: "detail"; readonly detail: CardDetail };
 
 /**
@@ -185,6 +206,8 @@ interface AppProps {
   killer?: Killer;
   /** Wired in production; absent in tests that don't exercise Open PR. */
   openPr?: OpenPr;
+  /** Wired in production; absent in tests that don't exercise Delete PRD. */
+  deleter?: Delete;
   /** Wired in production; absent in tests that don't exercise the detail modal. */
   detailReader?: DetailReader;
   /** Wired in production; absent in tests that don't exercise auto-run. */
@@ -219,7 +242,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, detailReader, autoRun, urlOpener, refresh, activity }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, autoRun, urlOpener, refresh, activity }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -381,6 +404,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
         const preview = openPr.readOpenPr(selectedPrd.id);
         if (preview) {
           setModal({ kind: "open-pr", preview });
+          dispatch({ type: "open-preview" });
+        }
+      }
+    },
+    deletePrd: () => {
+      // Delete PRD, board-level only (the registry gates the level). Gated further
+      // on the selected PRD's own derived `done` lane — the sole column a finished
+      // PRD can be deleted from — so `X` is a no-op on a backlog / in-progress PRD,
+      // mirroring how the Open PR handler gates on `done`. `readDelete` resolves the
+      // title + Issue count once and freezes it on the modal; a vanished PRD (raced
+      // a deletion) yields no preview, so nothing opens. This is the board's first
+      // destructive write to the watched root (ADR 0016).
+      if (deleter && selectedPrd?.lane === "done") {
+        const preview = deleter.readDelete(selectedPrd.id);
+        if (preview) {
+          setModal({ kind: "delete", preview });
           dispatch({ type: "open-preview" });
         }
       }
@@ -561,6 +600,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
       } else if (result) {
         setNotice(`Couldn't open PR for ${modal.preview.prdTitle}: ${result.error}`);
       }
+    } else if (modal?.kind === "delete") {
+      // Remove the whole PRD directory wholesale (the orchestration does the
+      // `rm -rf`). The board's first destructive write to the watched root (ADR
+      // 0016). A removal failure (permissions, a folder that vanished mid-action)
+      // comes back as a failed result and surfaces loudly on the status line, like
+      // a spawn failure; success surfaces a confirmation notice.
+      const result = deleter?.delete(modal.preview);
+      if (result?.ok) {
+        setNotice(`Deleted ${modal.preview.prdTitle}.`);
+        // Removing the folder *does* fire an FS event, but re-scan on demand too so
+        // the card disappears at once rather than waiting on the debounced watcher —
+        // reusing the same `refresh` seam Open PR added (issue #66).
+        refresh?.();
+      } else if (result) {
+        setNotice(`Couldn't delete ${modal.preview.prdTitle}: ${result.error}`);
+      }
     }
   }
 
@@ -582,6 +637,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   }
   if (modal?.kind === "open-pr") {
     return <OpenPrPreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "delete") {
+    return <DeletePreview preview={modal.preview} />;
   }
   if (modal?.kind === "detail") {
     // The read-only body view — a full-screen takeover like the action previews

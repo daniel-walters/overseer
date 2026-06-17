@@ -16,6 +16,9 @@ import type {
 } from "../dispatch/kill.js";
 import type { OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
+import type { DeletePreviewData } from "./DeletePreview.js";
+import type { DeleteResult } from "../dispatch/deletePrd.js";
+import { createDelete } from "../dispatch/deletePrd.js";
 import type { CardDetail } from "./detailReader.js";
 
 const ESC = String.fromCharCode(27);
@@ -1213,6 +1216,237 @@ describe("App open PR (P on a done PRD)", () => {
     stdin.write(ENTER);
     await tick();
     expect(opener.openPr).toHaveBeenCalledWith(eligiblePreview("auth"));
+  });
+});
+
+
+describe("App delete PRD (X on a done PRD)", () => {
+  // A board whose first PRD is `done` (the only column Delete is offered on) and
+  // whose second is in-progress, so we can assert the `done` gate.
+  const doneBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+      },
+      {
+        id: "billing",
+        title: "BillPRD",
+        lane: "in-progress",
+        issues: [{ id: "010-invoice", title: "Invoice", lane: "in-progress" }],
+      },
+    ],
+  };
+
+  function previewFor(prdId: string): DeletePreviewData {
+    return { prdTitle: prdId, issueCount: 2 };
+  }
+
+  function spyDeleter(
+    del: (p: DeletePreviewData) => DeleteResult = () => ({ ok: true }),
+    readDelete: (prdId: string) => DeletePreviewData | undefined = (id) =>
+      previewFor(id),
+  ) {
+    return {
+      readDelete: vi.fn(readDelete),
+      delete: vi.fn(del),
+    };
+  }
+
+  it("opens a confirm preview on X at the board level for a done PRD", async () => {
+    const deleter = spyDeleter();
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_RIGHT); // move from the in-progress BillPRD to the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Delete");
+    expect(frame).toContain("auth"); // the preview names the PRD
+    expect(deleter.readDelete).toHaveBeenCalledWith("auth");
+  });
+
+  it("does nothing on X for a non-done PRD (the action is done-gated)", async () => {
+    const deleter = spyDeleter();
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_DOWN); // move to the in-progress BillPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+
+    expect(deleter.readDelete).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("permanent");
+  });
+
+  it("does nothing on X at the issue (zoomed) level", async () => {
+    const deleter = spyDeleter();
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("X");
+    await tick();
+
+    expect(deleter.readDelete).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("permanent");
+  });
+
+  it("does nothing on X when no deleter seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={doneBoard} />);
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("permanent");
+  });
+
+  it("removes the directory on confirm, then closes the modal with a success notice", async () => {
+    const deleter = spyDeleter();
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(deleter.delete).toHaveBeenCalledTimes(1);
+    expect(deleter.delete).toHaveBeenCalledWith(previewFor("auth"));
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("permanent"); // modal closed
+    expect(frame).toContain("Deleted"); // success notice
+  });
+
+  it("re-scans the board after a successful delete so the card disappears at once", async () => {
+    const deleter = spyDeleter();
+    const refresh = vi.fn();
+    const { stdin } = render(
+      <App board={doneBoard} deleter={deleter} refresh={refresh} />,
+    );
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-scan after a failed delete (nothing was removed)", async () => {
+    const deleter = spyDeleter(() => ({ ok: false, error: "EACCES" }));
+    const refresh = vi.fn();
+    const { stdin } = render(
+      <App board={doneBoard} deleter={deleter} refresh={refresh} />,
+    );
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a removal failure loudly in the status line, deleting no card", async () => {
+    const deleter = spyDeleter(() => ({
+      ok: false,
+      error: "EACCES: permission denied",
+    }));
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Couldn't delete");
+  });
+
+  it("cancels on Esc with nothing deleted", async () => {
+    const deleter = spyDeleter();
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(deleter.delete).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("permanent");
+  });
+
+  it("keeps the modal labelled from the open-time capture if a re-scan removes its PRD", async () => {
+    const deleter = spyDeleter();
+    const { stdin, lastFrame, rerender } = render(
+      <App board={doneBoard} deleter={deleter} />,
+    );
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X"); // open the preview on AuthPRD (done)
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auth");
+
+    // A live re-scan removes AuthPRD from under the open modal.
+    const withoutAuth: Board = {
+      prds: doneBoard.prds.filter((p) => p.id !== "auth"),
+    };
+    rerender(<App board={withoutAuth} deleter={deleter} />);
+    await tick();
+
+    // Still labelled from the frozen capture, and a confirm acts on AuthPRD.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("auth");
+    stdin.write(ENTER);
+    await tick();
+    expect(deleter.delete).toHaveBeenCalledWith(previewFor("auth"));
+  });
+
+  it("surfaces the failure notice rather than throwing when the directory vanished under the modal (real seam, total by construction)", async () => {
+    // The spy tests above hand the App a canned `DeleteResult`; this one drives the
+    // *real* `createDelete` orchestration end-to-end so the total-by-construction
+    // guarantee is exercised through the App, not just unit-tested. The directory
+    // the preview was frozen on has vanished (or its removal is forbidden) by the
+    // time the user confirms, so the injected `removeDir` throws. The orchestration
+    // must catch it and hand the App a failed result — surfacing the loud status-
+    // line notice — never letting the throw escape the Ink input handler and crash
+    // the board (mirroring the Open PR end-to-end failure path).
+    const deleter = createDelete("/root", {
+      seam: {
+        removeDir: () => {
+          throw new Error("ENOENT: no such file or directory");
+        },
+      },
+      countIssues: () => 2,
+    });
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X"); // open the preview (frozen on AuthPRD)
+    await tick();
+    stdin.write(ENTER); // confirm — the removal throws under the modal
+    await tick();
+
+    // The throw was caught and degraded to a loud notice; the board still renders.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Couldn't delete");
+    expect(frame).toContain("ENOENT");
   });
 });
 

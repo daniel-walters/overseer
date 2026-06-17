@@ -27,6 +27,7 @@ import {
 } from "./dispatch/liveness.js";
 import { realLinkedPrLookup } from "./dispatch/linkedPr.js";
 import { createOpenPr, realOpenPrDeps } from "./dispatch/openPr.js";
+import { createDelete, realDeleteDeps } from "./dispatch/deletePrd.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
@@ -166,6 +167,14 @@ function runBoard(): void {
   // the same base the feature branch was created from. A `gh`/`git` failure surfaces
   // loudly in the status line; the new PR shows via the overlay on the next scan.
   const openPr = createOpenPr(root, realOpenPrDeps());
+  // Delete PRD (CONTEXT.md, ADR 0016): `X` on a `done` PRD removes its whole
+  // directory — `prd.md`, every Issue file, and any other file — wholesale, behind
+  // a confirm preview. The board's first destructive write to the watched root: a
+  // single `fs.rmSync(dir, { recursive: true, force: true })` through the
+  // DeleteSeam. The deleted Issues' liveness sidecar entries are left
+  // dangling-but-inert. A removal failure surfaces loudly in the status line; the
+  // existing `refresh` re-scan rebuilds the board without the deleted folder.
+  const deleter = createDelete(root, realDeleteDeps());
   // The detail modal (ADR 0014): `v` reads the selected card's frontmatter-stripped
   // body off the watched root on demand — the PRD's `prd.md` at the board level, the
   // selected Issue's file when zoomed — and renders it through marked-terminal. A
@@ -205,6 +214,7 @@ function runBoard(): void {
       rollback={rollback}
       killer={killer}
       openPr={openPr}
+      deleter={deleter}
       detailReader={detailReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
