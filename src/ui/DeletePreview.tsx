@@ -16,13 +16,14 @@ interface DeletePreviewProps {
  * write to the watched root (ADR 0016). Pure presentation — the keypress handling
  * and the `rm -rf` itself live in {@link App}; this only renders what will be
  * destroyed (the PRD + its Issue files) and the **strongest** warning of the modal
- * family: the delete is permanent and unrecoverable (the root is not a git repo,
- * so there is no `git restore`).
+ * family: the delete is permanent and unrecoverable. The copy closes every escape
+ * hatch a user might assume exists — no git in the root to `git restore` from, no
+ * archive or trash to recover from, no undo (archive/trash/undo were considered and
+ * rejected in the grill; the confirm + the `done`-gate are the only safety net).
  *
  * The destructive counterpart to {@link OpenPrPreview}: where Open PR previews an
  * outward GitHub write, this previews an irreversible local removal — the
- * deliberate-friction safety net the `done`-gate and shift-keyed `X` rely on. Full
- * warning copy is a follow-up Issue; this carries the irreversibility plainly.
+ * deliberate-friction safety net the `done`-gate and shift-keyed `X` rely on.
  */
 export function DeletePreview({ preview }: DeletePreviewProps) {
   const { prdTitle, issueCount } = preview;
@@ -44,10 +45,13 @@ export function DeletePreview({ preview }: DeletePreviewProps) {
         </Text>
       </Box>
 
-      <Box marginTop={1}>
+      <Box flexDirection="column" marginTop={1}>
+        <Text bold color="red">
+          ⚠ This is permanent and unrecoverable.
+        </Text>
         <Text color="red">
-          ⚠ This is permanent and unrecoverable — the root is not a git repo, so
-          there is no way to restore it.
+          No git in the root to restore from, no archive or trash to recover it,
+          no undo.
         </Text>
       </Box>
 
