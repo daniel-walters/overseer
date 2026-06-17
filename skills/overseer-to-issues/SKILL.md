@@ -104,3 +104,11 @@ A concise description of this vertical slice. Describe the end-to-end behavior, 
 </issue-template>
 
 Do NOT modify the `prd.md`. A PRD has no stored status — its board column is derived from these Issues automatically.
+
+### 6. Hand off to the board
+
+The Issues now exist as a live board, not as work to start here. This skill is the **terminal** station of the authoring chain — the chain converges on the board, where dispatch is tracked (the Reactor, liveness, kill). **Do not offer to dispatch agents, run the Issues, or start implementation from this conversation.** Igniting the work is a board action the user takes, not something this skill does — offering it here bypasses every operational affordance the board exists to provide. Close by pointing the user at the board:
+
+Next: open Overseer, select `<PRD>`, press `d`.
+
+(Substitute `<PRD>` with the PRD's display title.)

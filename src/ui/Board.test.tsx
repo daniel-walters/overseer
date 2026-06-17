@@ -14,6 +14,13 @@ const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
+// The SGR code Ink emits for a cyan foreground — the selected card's border,
+// which is the sole selection cue (no ▶ pointer; see Card.test.tsx). Counting
+// its runs counts selected cards (Ink emits it once per bordered line).
+const CYAN = ESC + "[36m";
+const cyanRuns = (raw: string): number =>
+  (raw.match(new RegExp(ESC + "\\[36m", "g")) ?? []).length;
+
 const HEADINGS = ["Backlog", "In Progress", "Done"];
 
 /**
@@ -87,11 +94,19 @@ describe("BoardView", () => {
     const frame =
       render(<BoardView board={board} selected={{ laneIndex: 1, rowIndex: 1 }} />)
         .lastFrame() ?? "";
-    const flat = stripAnsi(frame);
 
-    // The pointer sits on the second in-progress card and appears exactly once.
-    expect(flat).toMatch(/▶ SecondInProgress/);
-    expect(flat.match(/▶/g)?.length).toBe(1);
+    // The cyan-border selection cue marks the second in-progress card and no
+    // other: the rendered cyan runs equal exactly one selected card's worth (a
+    // board with a single card selected).
+    const oneSelected =
+      render(
+        <BoardView
+          board={{ prds: [prd({ id: "x", title: "Only", lane: "backlog" })] }}
+          selected={{ laneIndex: 0, rowIndex: 0 }}
+        />,
+      ).lastFrame() ?? "";
+    expect(stripAnsi(frame)).toContain("SecondInProgress");
+    expect(cyanRuns(frame)).toBe(cyanRuns(oneSelected));
   });
 
   it("renders a done PRD's Linked PR marker on its board card", () => {
@@ -149,10 +164,11 @@ describe("BoardView", () => {
           laneHeight={5}
         />,
       ).lastFrame() ?? "";
-    const flat = stripAnsi(frame);
-
-    expect(flat).toMatch(/▶ Backlog-18/);
-    expect(flat).not.toContain("Backlog-0");
+    // The selected card (Backlog-18) scrolled into the window carrying the
+    // cyan-border cue, and the top of the lane scrolled away.
+    expect(stripAnsi(frame)).toContain("Backlog-18");
+    expect(frame).toContain(CYAN);
+    expect(stripAnsi(frame)).not.toContain("Backlog-0");
   });
 
   it("renders every card of a lane that fits the available height", () => {
@@ -183,5 +199,35 @@ describe("BoardView", () => {
 
     expect(frame).toContain("Unopened");
     expect(frame).not.toMatch(/PR open|PR merged/);
+  });
+
+  it("widens columns on a wide terminal so a long title shows in full", () => {
+    // A title longer than the 24 floor's title budget but well within a wide
+    // terminal's 3-column share: it must survive untruncated, proving the column
+    // took the distributed width rather than the old hardcoded 24.
+    const longTitle = "Share one failed-set across all spawn edges";
+    const board: Board = {
+      prds: [prd({ id: "x", title: longTitle, lane: "backlog" })],
+    };
+
+    const frame = render(<BoardView board={board} />, 240).lastFrame() ?? "";
+
+    expect(frame).toContain(longTitle);
+  });
+
+  it("clamps columns to the floor on a narrow terminal — never below 24", () => {
+    // The same long title on a narrow terminal truncates (the column holds at the
+    // 24 floor), but the truncated head still identifies the card. It must not
+    // render in full — that would mean the column shrank/grew wrongly.
+    const longTitle = "Share one failed-set across all spawn edges";
+    const board: Board = {
+      prds: [prd({ id: "x", title: longTitle, lane: "backlog" })],
+    };
+
+    // 60 cols / 3 = 20, below the floor, so each column holds at 24.
+    const frame = render(<BoardView board={board} />, 60).lastFrame() ?? "";
+
+    expect(frame).not.toContain(longTitle);
+    expect(frame).toContain("Share one");
   });
 });

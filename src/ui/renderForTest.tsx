@@ -18,7 +18,7 @@ const DEFAULT_COLUMNS = 240;
 const DEFAULT_ROWS = 200;
 
 class Stdout extends EventEmitter {
-  readonly columns: number;
+  columns: number;
   readonly rows: number;
   frames: string[] = [];
   private _lastFrame = "";
@@ -35,6 +35,13 @@ class Stdout extends EventEmitter {
   };
 
   lastFrame = (): string | undefined => this._lastFrame;
+
+  /** Mimic a terminal resize: update the live width and fire the "resize" event
+   * Ink and width-reading hooks listen for, so reactive-width tests can drive it. */
+  resize = (columns: number): void => {
+    this.columns = columns;
+    this.emit("resize");
+  };
 }
 
 class Stdin extends EventEmitter {
@@ -83,5 +90,6 @@ export function renderForTest(
     stdin,
     frames: stdout.frames,
     lastFrame: stdout.lastFrame,
+    resize: stdout.resize,
   };
 }

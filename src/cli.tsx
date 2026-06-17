@@ -10,6 +10,7 @@ import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
 import { realUrlOpener } from "./ui/urlOpener.js";
+import { createDetailReader } from "./ui/detailReader.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
@@ -165,6 +166,13 @@ function runBoard(): void {
   // the same base the feature branch was created from. A `gh`/`git` failure surfaces
   // loudly in the status line; the new PR shows via the overlay on the next scan.
   const openPr = createOpenPr(root, realOpenPrDeps());
+  // The detail modal (ADR 0014): `v` reads the selected card's frontmatter-stripped
+  // body off the watched root on demand — the PRD's `prd.md` at the board level, the
+  // selected Issue's file when zoomed — and renders it through marked-terminal. A
+  // pure read seam (no spawn, no write); the body is never carried in the Board model
+  // (ADR 0003), so it always shows the file's current content. A vanished file makes
+  // the keypress a harmless no-op.
+  const detailReader = createDetailReader(root);
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
@@ -197,6 +205,7 @@ function runBoard(): void {
       rollback={rollback}
       killer={killer}
       openPr={openPr}
+      detailReader={detailReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
     />,

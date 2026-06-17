@@ -46,6 +46,7 @@ export interface KeyPress {
  * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` open the matching preview.
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
  * - `toggleAutoRun` flips the global auto-run brake.
+ * - `viewDetail` opens the selected card's body in the detail modal.
  * - `showHelp` opens the keybind reference; `quit` backs out or exits.
  */
 export interface KeybindHandlers {
@@ -59,6 +60,7 @@ export interface KeybindHandlers {
   readonly openPr: () => void;
   readonly goToPr: () => void;
   readonly toggleAutoRun: () => void;
+  readonly viewDetail: () => void;
   readonly showHelp: () => void;
   readonly quit: () => void;
 }
@@ -174,6 +176,13 @@ export const KEYBINDS: readonly Keybind[] = [
     level: "both",
     matches: (p) => p.input === "a",
     action: (h) => h.toggleAutoRun(),
+  },
+  {
+    key: "v",
+    label: "View the selected card's body",
+    level: "both",
+    matches: (p) => p.input === "v",
+    action: (h) => h.viewDetail(),
   },
   {
     key: "?",

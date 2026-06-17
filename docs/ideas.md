@@ -576,6 +576,60 @@ territory — the review reactor — not a prompt tweak. It pairs with "Use a fr
 agent for each review iteration" above (both reshape what the reviewer does and when it
 escalates) and should be designed alongside it if both are pursued.
 
+### Design-aware evaluation for frontend Issues (pre / during / post coding)
+
+Overseer's implement→review loop is **design-blind**: an implementor reads the Issue +
+PRD prose and writes code, and the reviewer loops `/code-review` over the diff
+(`reviewerPrompt.ts` → How to review). Nothing in that loop knows what the frontend was
+*supposed to look like*. For backend Issues that's fine — correctness is in the code and
+the tests. For **frontend** Issues it leaves the highest-value question unasked: does the
+built UI actually match an intended design? A `/code-review` pass can bless code that
+compiles, tests green, and renders something — while looking nothing like what was wanted.
+
+The idea: a **design-aware track for frontend Issues** that threads an intended design
+through the whole lifecycle, touching multiple layers rather than being one prompt tweak:
+
+1. **Pre-coding — ask for a design first.** A frontend Issue should not dispatch straight
+   to an implementor with only prose. It should first **solicit a design** (a mockup,
+   reference image, component spec, or at minimum an explicit written design intent) so
+   the implementor has a target. Open question: is the design a *human* input gathered at
+   authoring time (the `overseer-to-issues` / grill stage attaches it), or does a
+   design-agent generate one for human sign-off before coding? Either way this is a new
+   **gate before dispatch** for design-bearing Issues — a frontend Issue with no design is
+   not yet `ready-for-agent`.
+2. **During coding — adhere to the design.** The implementor prompt
+   (`buildImplementorPrompt`) must carry the design into the build and instruct the agent
+   to build *to* it, not just to the prose. That means the design artifact has to travel
+   with the Issue (where does it live — an attachment in the PRD folder, a path in the
+   Issue frontmatter?) and be referenced in the prompt the way the PRD body is today.
+3. **Post-coding — review *against* the design.** The reviewer's `/code-review` loop
+   checks code, not appearance. A design-aware review needs to **render the built UI and
+   compare it to the design** — which means the reviewer gains a capability it has never
+   had: actually *running* the frontend and looking at it (screenshot diffing, a
+   vision-model "does this match the mockup?" pass, or visual-regression tooling), not
+   just reading the diff. Convergence for a frontend Issue would then mean "code-review
+   clean **and** matches design," with a mismatch as its own escalation — plausibly a new
+   `human_review_reason` (e.g. `design-mismatch`) alongside the existing
+   deviation / non-convergence / conflict set (`reviewerPrompt.ts` reason vocabulary).
+
+Why it's cross-cutting and not a quick win: it touches **authoring** (capture/attach a
+design), **dispatch eligibility** (a frontend Issue isn't ready without one), the
+**implementor prompt** (build to the design), and the **review loop** (a wholly new
+evaluation mode that renders and visually compares — the reviewer's first capability
+beyond reading code). It also raises the **classification** question: how does Overseer
+know an Issue is "frontend" and therefore design-gated — a label/tag, a heuristic, an
+explicit Issue field? That gate is the linchpin; without it the track can't selectively
+apply.
+
+Pairs with several existing review-loop ideas. "Use a fresh reviewer agent for each
+review iteration" and "Configurable AI-review turns and effort" are the same review-loop
+surface this would extend — a visual-comparison pass is one more thing a (possibly fresh)
+reviewer does, under its own config knob. And it shares the "reviewer gains a new
+capability beyond reading files" shape with "Per-agent logs from a card" (subprocess /
+new IO from a read-only-ish loop). This is ADR 0005 territory (the review reactor) plus a
+new pre-dispatch gate — a meaty multi-layer feature deserving its own grill + PRD, not a
+prompt edit.
+
 ### Viewport scrolling (overflow on the alternate screen)
 
 "Always full screen" (UI Polish part 1) renders the board on the terminal's
@@ -676,3 +730,53 @@ open design questions are the interesting part:
 Pairs with the "Central keybind registry" idea (this touches the same input layer)
 and benefits from being designed alongside the selection-highlight rework, since both
 are about how the *current* card is identified and moved.
+
+### Surface "needs human intervention" on the board-level PRD card
+
+At the **board level** the cards are PRDs across three derived columns (backlog /
+in-progress / done) and they carry **no markers at all** — every marker family
+(liveness, suppressed, human-review reason, malformed-status) is an *Issue-level*
+overlay, visible only once you zoom into a PRD. So a PRD with an Issue parked in
+`human-review` — the one column in the whole pipeline that is *blocked on a human*
+(CONTEXT.md → Review outcome) — looks, from the board, exactly like a PRD that is
+humming along under the reactor. The single most important thing a PRD could tell
+you ("the automated pipeline has stalled here and is waiting on *you*") is the one
+thing the board-level card cannot currently show. You only discover it by zooming
+into each in-progress PRD and hunting.
+
+The idea: a **board-level PRD card marker** that lights up when *anything inside that
+PRD needs human intervention* — most concretely, ≥1 Issue in `human-review`, but
+worth deciding whether it also covers the other "stuck, needs a human" states
+(`ready-for-human` waiting to be picked up; an [Orphan](#); a `⚠ bad status` Issue).
+It rolls an Issue-level fact *up* to the PRD card so the board answers "which PRDs
+need me?" at a glance, without zooming.
+
+Open questions:
+
+- **What counts as "needs intervention"?** The tightest definition is *any Issue in
+  `human-review`* (the genuine human-attention queue). A looser one also rolls up
+  `ready-for-human` (HITL work not yet done), orphans (`R`-recoverable), and
+  malformed-status Issues (frontmatter to fix). Each is a real "a human must act"
+  state, but they want *different* actions — so a single undifferentiated marker may
+  under-inform. Does the PRD marker collapse them into one "⚠ needs you" glyph, or
+  carry a count / the dominant reason?
+- **It's a derived roll-up, not stored state.** Like every other marker it must be
+  computed from the Issues at scan time (ADR 0002 / ADR 0003) — the PRD has no field
+  of its own. The board already derives a PRD's *column* from its Issues; this is the
+  same shape (derive a PRD-level *marker* from its Issues), so it fits the existing
+  derivation pass and writes nothing.
+- **Where it sits.** The board-level PRD card is currently marker-free except the
+  `done`-only [Linked PR](#) overlay. This would be the **first Issue→PRD roll-up
+  marker** and the first marker an *in-progress* PRD card carries — worth confirming
+  it reads as its own line (the established marker idiom) and how it coexists with the
+  Linked PR marker (disjoint columns — Linked PR is `done`-only, human-review implies
+  not-done — so they likely never co-render, same as the Issue-level families).
+- **Counting.** If several Issues in one PRD need a human, does the marker show a
+  count ("⚠ 2 need you") or just presence? A count makes the board a triage surface;
+  presence is simpler.
+
+Pairs tightly with the "Jump straight to an Issue needing human review" idea above —
+that one *navigates* to the escalated Issue; this one *reveals at the board level
+which PRD holds it*. Together they answer "where is the work blocked on me?" both at a
+glance (this marker) and with a keypress (that jump). Designed together, the marker is
+the signal and the jump is the action it invites.

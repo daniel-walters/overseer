@@ -38,6 +38,13 @@ interface ColumnProps {
    * its window, so the board never renders every card of every column.
    */
   selectedRow?: number;
+  /**
+   * The column's width in terminal cells, distributed across the level's visible
+   * columns by {@link useColumnWidth} (never below the 24 floor). The board and
+   * Issue levels feed it their own column count, so the same terminal yields
+   * different widths per level.
+   */
+  width: number;
 }
 
 /**
@@ -54,6 +61,7 @@ export function Column({
   selectedId,
   availableHeight,
   selectedRow,
+  width,
 }: ColumnProps) {
   // Without a height the column is unbounded — render every card, as before.
   // With one, slice to the visible window, anchored on the selected row (or the
@@ -71,7 +79,7 @@ export function Column({
         })();
 
   return (
-    <Box flexDirection="column" width={24} marginRight={1}>
+    <Box flexDirection="column" width={width} marginRight={1}>
       <Text bold>{heading}</Text>
       {visible.map((card) => (
         <Card
