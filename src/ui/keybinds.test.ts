@@ -33,6 +33,7 @@ function spyHandlers(): KeybindHandlers {
     redispatch: vi.fn(),
     kill: vi.fn(),
     openPr: vi.fn(),
+    deletePrd: vi.fn(),
     goToPr: vi.fn(),
     toggleAutoRun: vi.fn(),
     viewDetail: vi.fn(),
@@ -101,6 +102,21 @@ describe("keybind registry", () => {
     const p = press("P");
     matchKeybind(p, "board")?.action(handlers, p);
     expect(handlers.openPr).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches the delete binding only at the board level (whole-PRD, board-level)", () => {
+    // Delete is a board-level, `done`-gated action like Open PR's `P`; the registry
+    // gates only the level, the App-side handler gates the `done` column. It is
+    // scoped to whole PRDs, never a single Issue, so it is inert when zoomed.
+    expect(matchKeybind(press("X"), "board")?.label).toContain("Delete");
+    expect(matchKeybind(press("X"), "issues")).toBeUndefined();
+  });
+
+  it("routes the delete binding to the deletePrd handler", () => {
+    const handlers = spyHandlers();
+    const p = press("X");
+    matchKeybind(p, "board")?.action(handlers, p);
+    expect(handlers.deletePrd).toHaveBeenCalledTimes(1);
   });
 
   it("matches a 'both'-level binding at either level", () => {
