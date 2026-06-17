@@ -138,10 +138,10 @@ function scanPrd(
   // a PRD with nothing in human-review stays unmarked (no `needsReview: false`
   // noise), mirroring the other overlays. It is disjoint from the `done`-only
   // Linked PR marker (needs-review implies the PRD is not yet `done`).
-  const needsReview = derivePrdNeedsReview(issues);
-  const prd: PRD = needsReview
-    ? { id: dirName, title, lane, issues, needsReview }
-    : { id: dirName, title, lane, issues };
+  const base: PRD = { id: dirName, title, lane, issues };
+  const prd: PRD = derivePrdNeedsReview(issues)
+    ? { ...base, needsReview: true }
+    : base;
   // The Linked PR overlay rides only on a `done` PRD, keyed by its absolute dir
   // path (ADR 0013). The `done` gate both scopes the marker to PRDs that can have
   // a feature-branch PR and bounds the per-scan `gh` query to finished work — a

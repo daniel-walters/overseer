@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { ReadyFor, HumanReviewReason, Liveness, LinkedPr } from "../model.js";
+import { REASON_MARKER } from "../model.js";
 
 interface CardProps {
   title: string;
@@ -55,18 +56,6 @@ interface CardProps {
 const BADGE: Record<ReadyFor, string> = {
   human: "🧑",
   agent: "🤖",
-};
-
-/**
- * The escalation marker shown on a human-review card: a glyph for at-a-glance
- * scanning plus the reason word so the three exits read distinctly. Kept short
- * because the card line truncates — the marker is the attention signal that
- * earns its place ahead of the title.
- */
-export const REASON_MARKER: Record<HumanReviewReason, string> = {
-  deviation: "⚠ deviation",
-  "non-convergence": "↻ non-convergence",
-  conflict: "✗ conflict",
 };
 
 /**

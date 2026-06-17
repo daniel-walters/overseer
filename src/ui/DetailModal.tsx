@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { CardDetail } from "./detailReader.js";
-import { composeDetailMarkdown, renderDetailLines } from "./markdown.js";
+import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 
 /**
@@ -60,14 +60,16 @@ interface DetailModalProps {
  * scroll keys against it, since the offset can't move).
  */
 export function DetailModal({ detail, scrollOffset = 0, viewportRows, lines }: DetailModalProps) {
-  // "Has content" spans the composed markdown — the human-review header (reason +
-  // note) as well as the body — so a `human-review` Issue with a note but an empty
-  // file body shows the header, not the placeholder.
-  const hasBody = composeDetailMarkdown(detail).trim().length > 0;
   // Use the App-supplied lines when present; otherwise render here (standalone
   // tests, which don't pre-render). `renderDetailLines` returns the same lines the
   // App sizes `maxOffset` from, so the clamp and this window never drift.
   const bodyLines = lines ?? renderDetailLines(detail);
+  // "Has content" is decided from the very lines we window — not a second
+  // composeDetailMarkdown(detail).trim() pass — so the placeholder branch can't
+  // disagree with what renders. `renderDetailLines` already yields `[]` exactly
+  // when the composed markdown (header + note + body) renders to nothing, so an
+  // empty file body with a note still shows the header, never the placeholder.
+  const hasBody = bodyLines.length > 0;
   const rows = viewportRows ?? bodyLines.length;
   const window = scrollDetail(bodyLines, scrollOffset, rows);
 

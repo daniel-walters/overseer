@@ -188,6 +188,22 @@ export const HUMAN_REVIEW_REASONS = [
 export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
 
 /**
+ * The user-facing escalation marker for each reason: a glyph for at-a-glance
+ * scanning plus the reason word. Lives here beside {@link HumanReviewReason}
+ * rather than in a component because two presentation surfaces share it — the
+ * card's terse marker (`Card.tsx`) and the detail view's header heading
+ * (`markdown.ts`) — and the text/markdown module must not depend on the React
+ * component to read it (that would drag Ink into the markdown layer). Kept short
+ * because the card line truncates; the marker is the attention signal that earns
+ * its place ahead of the title.
+ */
+export const REASON_MARKER: Record<HumanReviewReason, string> = {
+  deviation: "⚠ deviation",
+  "non-convergence": "↻ non-convergence",
+  conflict: "✗ conflict",
+};
+
+/**
  * The liveness overlay on an Issue card: whether the agent Overseer spawned for
  * it is still in Claude's live session registry (CONTEXT.md, ADR 0008 / 0009).
  * Derived on each board open by joining the recorded `--bg` handles against

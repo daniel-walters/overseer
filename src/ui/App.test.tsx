@@ -1587,8 +1587,9 @@ describe("App detail modal", () => {
     stdin.write("v");
     await tick();
 
-    // The board reader is asked for the selected PRD with no issue id (board level).
-    expect(detailReader.readDetail).toHaveBeenCalledWith("auth");
+    // The board reader is asked for the selected PRD with no issue id (board level);
+    // the single readDetail call passes `undefined` for the issue id off the board.
+    expect(detailReader.readDetail).toHaveBeenCalledWith("auth", undefined);
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("AuthPRD");
     expect(frame).toContain("Problem");

@@ -155,6 +155,46 @@ describe("DetailModal", () => {
       expect(frame).not.toContain("deviation");
     });
 
+    it("renders the note even when the reason is absent (note is independent of reason)", () => {
+      // The scanner lands a human_review_note independently of the reason — a
+      // missing or unrecognized human_review_reason must not drop the note. With
+      // no reason the header falls back to a neutral heading but the note shows.
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{
+            title: "T",
+            body: "the body",
+            humanReviewNote: "couldn't isolate the flake",
+          }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      expect(frame).toContain("human-review"); // neutral fallback heading
+      expect(frame).toContain("couldn't isolate the flake"); // the note still surfaces
+      expect(frame).toContain("the body");
+    });
+
+    it("renders the note verbatim, not reinterpreted as markdown", () => {
+      // A note quoting agent output with markdown metacharacters (a bare ---, a
+      // leading #, a fence) must read literally and must not collide with the
+      // header/body --- separator or swallow the body into a code block.
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{
+            title: "T",
+            body: "REAL_BODY_TEXT",
+            humanReviewReason: "conflict",
+            humanReviewNote: "diff showed\n---\n# FAIL\n```\nstack\n```",
+          }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      // The literal note characters survive…
+      expect(frame).toContain("# FAIL");
+      // …and the body is still reachable (a stray fence didn't swallow it).
+      expect(frame).toContain("REAL_BODY_TEXT");
+    });
+
     it("scrolls the note alongside the body rather than truncating it", () => {
       // A long multi-line note must be reachable by scrolling, not clipped to a
       // card-sized snippet. With the header composed into the scrollable stream, a
