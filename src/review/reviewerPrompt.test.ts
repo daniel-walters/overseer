@@ -56,39 +56,56 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain(issue.worktree!);
   });
 
-  it("encodes the /code-review loop at the default medium effort with a cap of 3 passes", () => {
+  it("runs a single /code-review pass at the default medium effort", () => {
     const prompt = build();
     expect(prompt).toContain("/code-review");
     expect(prompt.toLowerCase()).toContain("medium");
-    expect(prompt).toContain("3");
   });
 
-  it("uses the configured cap in the loop instructions, not a hardcoded 3", () => {
+  it("reviews the inherited worktree FIRST, before fixing anything", () => {
+    // Independence is a pass-boundary property: the fresh pass agent reviews the
+    // code it inherited before it fixes anything, so it never reviews its own
+    // fixes. The prompt must put the review instruction before the fix.
+    const prompt = build().toLowerCase();
+    const reviewIdx = prompt.indexOf("/code-review");
+    const fixIdx = prompt.indexOf("fix");
+    expect(reviewIdx).toBeGreaterThanOrEqual(0);
+    expect(fixIdx).toBeGreaterThanOrEqual(0);
+    expect(reviewIdx).toBeLessThan(fixIdx);
+  });
+
+  it("drives a single pass: no internal /code-review loop", () => {
+    // The Reactor (not the prompt) drives each pass as its own spawn, so the
+    // prompt must not tell the agent to loop /code-review or repeat the review.
+    const prompt = build().toLowerCase();
+    expect(prompt).not.toMatch(/\bloop\b|\brepeat\b|run it again|up to/);
+  });
+
+  it("does not name the cap as a loop bound", () => {
+    // The cap / non-convergence escalation moved into the Reactor; a non-default
+    // cap must not leak into the prompt as a pass bound at all.
     const prompt = buildWithReview({ cap: 5, effort: "medium" });
-    // The configured cap appears; the old hardcoded literal does not leak in.
-    expect(prompt).toContain("5");
-    expect(prompt).not.toMatch(/capped at 3 passes|within 3 passes|in 3 passes/);
+    expect(prompt).not.toMatch(/\bcap\b|\bpasses\b|\bconverge/i);
+    expect(prompt).not.toContain("5");
   });
 
-  it("uses the configured effort in the loop instructions, not a hardcoded medium", () => {
+  it("does not escalate non-convergence itself (that is the Reactor's job)", () => {
+    // The prompt owns deviation and conflict escalations only; non-convergence
+    // is enforced by the Reactor reading the sidecar count.
+    const prompt = build().toLowerCase();
+    expect(prompt).not.toContain("non-convergence");
+    expect(prompt).not.toMatch(/converge/);
+  });
+
+  it("uses the configured effort, not a hardcoded medium", () => {
     const prompt = buildWithReview({ cap: 3, effort: "high" });
     expect(prompt.toLowerCase()).toContain("high");
-    // The loop instruction names HIGH effort, not the old MEDIUM literal.
+    // The pass instruction names HIGH effort, not the old MEDIUM literal.
     expect(prompt).toContain("HIGH effort");
     expect(prompt).not.toContain("MEDIUM effort");
   });
 
-  it("threads cap and effort together when both are configured", () => {
-    const prompt = buildWithReview({ cap: 2, effort: "low" });
-    expect(prompt.toLowerCase()).toContain("low");
-    expect(prompt).toContain("2");
-  });
-
-  it("defines convergence as a pass that reports zero findings", () => {
-    expect(build().toLowerCase()).toMatch(/zero findings|no findings/);
-  });
-
-  it("instructs fixing findings as it goes", () => {
+  it("instructs fixing findings", () => {
     expect(build().toLowerCase()).toContain("fix");
   });
 
@@ -115,17 +132,31 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain(`git -C ${issue.repo} merge --abort`);
   });
 
-  it("routes a clean converged pass with no deviation to merge then done", () => {
+  it("routes a zero-findings pass with no deviation to merge then done", () => {
     const prompt = build();
     expect(prompt).toContain("done");
     // The clean path merges then sets done.
     expect(prompt.toLowerCase()).toContain("merge");
   });
 
-  it("routes non-convergence and merge conflict to human-review", () => {
-    const prompt = build().toLowerCase();
-    expect(prompt).toContain("human-review");
-    expect(prompt).toMatch(/conflict/);
+  it("defines the clean exit as a pass that reports zero findings", () => {
+    expect(build().toLowerCase()).toMatch(/zero findings|no findings/);
+  });
+
+  it("routes a pass WITH findings to fix then set ready-for-review", () => {
+    // The between-passes return: a pass that found and fixed issues sets the
+    // Issue back to ready-for-review so the Reactor spawns the next pass.
+    const prompt = build();
+    expect(prompt).toContain("ready-for-review");
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("fix");
+    expect(lower).toContain("ready-for-review");
+  });
+
+  it("routes a merge conflict to human-review with reason conflict", () => {
+    const prompt = build();
+    expect(prompt.toLowerCase()).toContain("human-review");
+    expect(prompt).toContain("conflict");
   });
 
   it("writes the final status into the Issue file by its path", () => {
@@ -148,10 +179,9 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain("human_review_reason");
   });
 
-  it("names each of the three escalation reasons the marker distinguishes", () => {
+  it("names the deviation and conflict escalation reasons it owns", () => {
     const prompt = build();
     expect(prompt).toContain("deviation");
-    expect(prompt).toContain("non-convergence");
     expect(prompt).toContain("conflict");
   });
 
@@ -160,13 +190,13 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain("human_review_note");
   });
 
-  it("instructs writing the note for all three escalation reasons, not only deviation", () => {
-    // The note must be written even when escalating for non-convergence or
-    // conflict — the reasons that otherwise carry no prose at all.
+  it("instructs writing the note for both escalation reasons it owns", () => {
+    // The note must be written for conflict as well as deviation — conflict
+    // otherwise carries no prose at all.
     const prompt = build().toLowerCase();
-    expect(prompt).toMatch(/all three|every|each|regardless of/);
-    expect(prompt).toContain("non-convergence");
+    expect(prompt).toMatch(/both|each|either|regardless of/);
     expect(prompt).toContain("conflict");
+    expect(prompt).toContain("deviation");
   });
 
   it("on a deviation, instructs folding the implementor's deviation note into the single human_review_note", () => {
