@@ -8,6 +8,7 @@
  */
 
 import type { Level, MoveDir } from "./navigation.js";
+import type { BindContext } from "./eligibility.js";
 
 /**
  * A binding's level gate: a single nav {@link Level} (`board` / `issues`), or
@@ -82,6 +83,16 @@ export interface Keybind {
   readonly matches: (press: KeyPress) => boolean;
   /** Run the binding against the App's wired handlers (and the live keypress). */
   readonly action: (handlers: KeybindHandlers, press: KeyPress) => void;
+  /**
+   * Whether the binding is eligible for the current selection, read off the
+   * App-computed {@link BindContext} (ADR 0017). A binding with **no** `eligible`
+   * is always eligible (movement, `Enter`, `Esc`, `a`, `?`, `q`); one that defines
+   * it is **inert** — not matched, so the key does nothing — when the predicate
+   * fails. The predicate only reads the flag bag; it reaches no seam itself, so the
+   * registry stays a pure router and the seam-dependent facts are computed in the
+   * App.
+   */
+  readonly eligible?: (ctx: BindContext) => boolean;
 }
 
 /**
@@ -134,6 +145,10 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Dispatch a wave",
     level: "board",
     matches: (p) => p.input === "d",
+    // Frontier-based, not lane-based: eligible whenever the selected PRD's
+    // frontier has a spawn candidate, so `d` stays available to *resume* an
+    // in-progress PRD with newly-unblocked work when auto-run is off (ADR 0017).
+    eligible: (ctx) => ctx.dispatchable,
     action: (h) => h.dispatch(),
   },
   {
@@ -141,6 +156,8 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Open a PR for a done PRD",
     level: "board",
     matches: (p) => p.input === "P",
+    // A done PRD with no Linked PR yet — mutually exclusive with `go to PR`.
+    eligible: (ctx) => ctx.prdDone && !ctx.prdHasPr,
     action: (h) => h.openPr(),
   },
   {
@@ -148,6 +165,7 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Delete a done PRD",
     level: "board",
     matches: (p) => p.input === "X",
+    eligible: (ctx) => ctx.prdDone,
     action: (h) => h.deletePrd(),
   },
   {
@@ -155,6 +173,7 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Review the selected Issue",
     level: "issues",
     matches: (p) => p.input === "r",
+    eligible: (ctx) => ctx.issueReadyForReview,
     action: (h) => h.review(),
   },
   {
@@ -162,6 +181,7 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Re-dispatch an orphaned Issue",
     level: "issues",
     matches: (p) => p.input === "R",
+    eligible: (ctx) => ctx.issueOrphan,
     action: (h) => h.redispatch(),
   },
   {
@@ -169,6 +189,7 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Stop a live Issue's agent",
     level: "issues",
     matches: (p) => p.input === "K",
+    eligible: (ctx) => ctx.issueLive,
     action: (h) => h.kill(),
   },
   {
@@ -176,6 +197,9 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "Go to the selected PRD's PR",
     level: "board",
     matches: (p) => p.input === "g",
+    // A done PRD that already has a Linked PR (open or merged) — mutually
+    // exclusive with `P`.
+    eligible: (ctx) => ctx.prdDone && ctx.prdHasPr,
     action: (h) => h.goToPr(),
   },
   {
@@ -190,6 +214,7 @@ export const KEYBINDS: readonly Keybind[] = [
     label: "View the selected card's body",
     level: "both",
     matches: (p) => p.input === "v",
+    eligible: (ctx) => ctx.cardSelected,
     action: (h) => h.viewDetail(),
   },
   {
@@ -213,11 +238,26 @@ function levelActive(level: BindLevel, at: Level): boolean {
   return level === "both" || level === at;
 }
 
+/** True if the binding is eligible for `ctx`; an absent predicate ⇒ always eligible. */
+function eligibleFor(bind: Keybind, ctx: BindContext): boolean {
+  return bind.eligible === undefined || bind.eligible(ctx);
+}
+
 /**
- * Find the binding the keypress selects at the current nav level, or `undefined`
- * if none. The first entry whose `matches` fires and whose level gate is open
- * wins — the same precedence the old inline `if` chain had, now data-driven.
+ * Find the binding the keypress selects at the current nav level for the current
+ * selection, or `undefined` if none. The first entry whose `matches` fires, whose
+ * level gate is open, **and** whose `eligible` predicate passes for `ctx` wins.
+ * An ineligible key falls through to no match and is therefore genuinely **inert**
+ * — pressing it does nothing because nothing is bound, not because a handler
+ * silently no-ops (ADR 0017). Bindings with no predicate are always eligible, so
+ * movement / `Enter` / `Esc` / `a` / `?` / `q` match regardless of selection.
  */
-export function matchKeybind(press: KeyPress, at: Level): Keybind | undefined {
-  return KEYBINDS.find((b) => levelActive(b.level, at) && b.matches(press));
+export function matchKeybind(
+  press: KeyPress,
+  at: Level,
+  ctx: BindContext,
+): Keybind | undefined {
+  return KEYBINDS.find(
+    (b) => levelActive(b.level, at) && b.matches(press) && eligibleFor(b, ctx),
+  );
 }

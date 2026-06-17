@@ -340,6 +340,23 @@ describe("App review", () => {
 
   const prdContext = { prdTitle: "AuthPRD", prdBody: "auth", featureBranch: "auth" };
 
+  // `r` is eligible only on a `ready-for-review` Issue (ADR 0017), so the
+  // review-flow tests select one: AuthPRD's first Issue sits in that lane (which
+  // derives the PRD to `in-progress`). A single PRD keeps it the default-selected
+  // card regardless of which board column its derived lane lands in. The reviewer's
+  // *deeper* eligibility (the skip-reason path) is a separate layer exercised
+  // through the `spyReviewer` response, independent of this card lane.
+  const reviewBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [{ id: "010-login", title: "Login", lane: "ready-for-review" }],
+      },
+    ],
+  };
+
   function reviewable(id: string): ReviewPreviewData {
     return { issue: di(id), eligibility: { reviewable: true }, ...prdContext };
   }
@@ -366,7 +383,7 @@ describe("App review", () => {
 
   it("opens a review preview on r at the Issue level for the selected Issue", async () => {
     const reviewer = spyReviewer();
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER); // zoom into AuthPRD's Issues
     await tick();
@@ -394,7 +411,7 @@ describe("App review", () => {
 
   it("shows a skip reason and spawns nothing for an ineligible Issue", async () => {
     const reviewer = spyReviewer((_p, id) => ineligible(id, "status is \"in-progress\", not ready-for-review"));
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER);
     await tick();
@@ -412,7 +429,7 @@ describe("App review", () => {
 
   it("runs the review on Enter for an eligible Issue, then closes the modal", async () => {
     const reviewer = spyReviewer();
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER); // zoom in
     await tick();
@@ -428,7 +445,7 @@ describe("App review", () => {
 
   it("cancels the review on Esc without spawning", async () => {
     const reviewer = spyReviewer();
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER);
     await tick();
@@ -903,7 +920,11 @@ describe("App go to PR (g on a done PRD)", () => {
     expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
   });
 
-  it("is a no-op (no open, no error) on a PRD with no linked PR, flashing a 'no PR' notice", async () => {
+  it("is genuinely inert on a done PRD with no linked PR (g unbound there — P owns that card)", async () => {
+    // Eligibility makes `g` mutually exclusive with `P`: on a `done` PRD with no
+    // Linked PR, `g` is not bound at all (ADR 0017), so pressing it does nothing —
+    // no open, and no 'no PR' flash (that handler no-op guard is now the matcher's
+    // inertness; `P` is the key that lights up on a no-PR done PRD).
     const opener = spyOpener();
     const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
 
@@ -913,7 +934,7 @@ describe("App go to PR (g on a done PRD)", () => {
     await tick();
 
     expect(opener.open).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("no PR");
   });
 
   it("does nothing on g at the Issue level (go to PR is board-level only)", async () => {
@@ -939,20 +960,6 @@ describe("App go to PR (g on a done PRD)", () => {
     expect(stripAnsi(lastFrame() ?? "")).toContain("AuthPRD");
   });
 
-  it("clears the 'no PR' notice on the next keypress", async () => {
-    const opener = spyOpener();
-    const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
-
-    stdin.write(ARROW_DOWN); // BillPRD, no PR
-    await tick();
-    stdin.write("g"); // flashes the notice
-    await tick();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
-
-    stdin.write("k"); // any keypress dismisses the one-shot notice
-    await tick();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("no PR");
-  });
 });
 
 
@@ -1556,7 +1563,12 @@ describe("App help", () => {
 
   it("ignores ? while a dispatch preview is open (no modal stacking)", async () => {
     const dispatcher = {
-      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      // A spawn candidate makes the selected PRD dispatchable, so `d` is eligible
+      // and opens the preview — the modal these tests then prove swallows the next key.
+      readFrontier: vi.fn(
+        () =>
+          [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
+      ),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
     const { stdin, lastFrame } = render(
@@ -1768,7 +1780,12 @@ describe("App auto-run", () => {
   it("ignores `a` while a modal is open", async () => {
     // A dispatcher whose read returns a frontier, so `d` opens a modal.
     const dispatcher = {
-      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      // A spawn candidate makes the selected PRD dispatchable, so `d` is eligible
+      // and opens the preview — the modal these tests then prove swallows the next key.
+      readFrontier: vi.fn(
+        () =>
+          [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
+      ),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
     const autoRun = spyAutoRun();
@@ -2067,7 +2084,12 @@ describe("App detail modal", () => {
 
   it("ignores v while a dispatch preview is open (at most one modal)", async () => {
     const dispatcher = {
-      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      // A spawn candidate makes the selected PRD dispatchable, so `d` is eligible
+      // and opens the preview — the modal these tests then prove swallows the next key.
+      readFrontier: vi.fn(
+        () =>
+          [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
+      ),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
     const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
