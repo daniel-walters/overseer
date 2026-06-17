@@ -44,7 +44,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, detail
   const onReconciled = useCallback(() => {
     setActivity(reactor?.activity());
   }, [reactor]);
-  const board = useLiveBoard({ ...options, onReconciled });
+  const { board, refresh } = useLiveBoard({ ...options, onReconciled });
   // Auto-run state lives here, beside the live loop that owns the Reactor — on by
   // default, in-memory, dies on unmount (ADR 0007). The `a` keybind flips it; the
   // flip drives both the indicator (this state) and the Reactor (setEnabled, whose
@@ -83,6 +83,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, detail
       autoRun={autoRun}
       urlOpener={urlOpener}
       activity={activity}
+      refresh={refresh}
     />
   );
 }

@@ -11,7 +11,21 @@ const board = (title: string): Board => ({
 
 /** A tiny probe component that renders the live board's first PRD title. */
 function Probe(props: Parameters<typeof useLiveBoard>[0]) {
-  const board = useLiveBoard(props);
+  const { board } = useLiveBoard(props);
+  return <Text>{board.prds[0]?.title ?? "(empty)"}</Text>;
+}
+
+/**
+ * A probe that exposes the hook's `refresh` through a button-less seam: it calls
+ * `onReady` with `refresh` on mount so the test can drive an on-demand re-scan
+ * the way the App does after opening a PR (issue #66) — no FS event involved.
+ */
+function RefreshProbe(
+  props: Parameters<typeof useLiveBoard>[0] & { onReady: (refresh: () => void) => void },
+) {
+  const { onReady, ...options } = props;
+  const { board, refresh } = useLiveBoard(options);
+  React.useEffect(() => onReady(refresh), [onReady, refresh]);
   return <Text>{board.prds[0]?.title ?? "(empty)"}</Text>;
 }
 
@@ -148,6 +162,66 @@ describe("useLiveBoard", () => {
       onChange();
     }).not.toThrow();
     await tick();
+  });
+
+  it("re-scans on demand when `refresh` is called, with no FS event", async () => {
+    // The on-demand path the App drives after opening a PR: a GitHub write that
+    // fires no FS event, so the watcher never re-scans (issue #66). `refresh` runs
+    // the same rebuild the watcher would.
+    let refresh = () => {};
+    const scan = vi.fn(() => board("Updated"));
+
+    const { lastFrame } = render(
+      <RefreshProbe
+        root="/root"
+        initialBoard={board("First")}
+        scan={scan}
+        watch={() => () => {}}
+        onReady={(r) => {
+          refresh = r;
+        }}
+      />,
+    );
+    expect(lastFrame()).toContain("First");
+
+    refresh();
+    await tick();
+
+    expect(scan).toHaveBeenCalledWith("/root");
+    expect(lastFrame()).toContain("Updated");
+  });
+
+  it("runs the reactor reconcile and onReconciled on a `refresh` too", async () => {
+    let refresh = () => {};
+    const order: string[] = [];
+    const reactor = {
+      reconcile: vi.fn(() => order.push("reconcile")),
+      setEnabled: vi.fn(),
+      activity: vi.fn(() => "idle" as const),
+    };
+    const onReconciled = vi.fn(() => order.push("onReconciled"));
+
+    render(
+      <RefreshProbe
+        root="/root"
+        initialBoard={board("First")}
+        scan={() => {
+          order.push("scan");
+          return board("Updated");
+        }}
+        watch={() => () => {}}
+        reactor={reactor}
+        onReconciled={onReconciled}
+        onReady={(r) => {
+          refresh = r;
+        }}
+      />,
+    );
+
+    refresh();
+    await tick();
+
+    expect(order).toEqual(["scan", "reconcile", "onReconciled"]);
   });
 
   it("tears down the watcher on unmount", () => {

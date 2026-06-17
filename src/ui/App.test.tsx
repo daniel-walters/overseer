@@ -1066,6 +1066,43 @@ describe("App open PR (P on a done PRD)", () => {
     expect(frame).toContain("https://gh/pr/new"); // the new PR url surfaced
   });
 
+  it("re-scans the board after a successful open so eligibility re-resolves (issue #66)", async () => {
+    // Opening a PR is a GitHub write that fires no FS event, so the watcher never
+    // re-scans — the App must call `refresh` itself so the new PR shows and the
+    // PRD's Open PR eligibility flips off, rather than the board staying stale.
+    const opener = spyOpenPr();
+    const refresh = vi.fn();
+    const { stdin } = render(
+      <App board={doneBoard} openPr={opener} refresh={refresh} />,
+    );
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("P");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not re-scan after a failed open (nothing changed on GitHub)", async () => {
+    const opener = spyOpenPr(() => ({ ok: false, error: "gh: not authenticated" }));
+    const refresh = vi.fn();
+    const { stdin } = render(
+      <App board={doneBoard} openPr={opener} refresh={refresh} />,
+    );
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("P");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
   it("surfaces a gh/git failure loudly in the status line, opening no PR notice", async () => {
     const opener = spyOpenPr(() => ({ ok: false, error: "gh: not authenticated" }));
     const { stdin, lastFrame } = render(<App board={doneBoard} openPr={opener} />);
