@@ -2435,3 +2435,72 @@ describe("App detail modal", () => {
     expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
   });
 });
+
+describe("App review-pass marker", () => {
+  // A PRD whose Issues exercise the three review-pass cases: a live in-review card
+  // (carries the count), an orphaned in-review card (Orphan marker wins, no count),
+  // and a done card (off the lane, no count). The scanner sets `reviewPass` only on
+  // the live in-review Issue, exactly as it would on a real board.
+  const reviewBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          {
+            id: "010-live",
+            title: "Reviewing",
+            lane: "in-review",
+            liveness: "live",
+            reviewPass: 2,
+          },
+          {
+            id: "020-orphan",
+            title: "Stuck",
+            lane: "in-review",
+            liveness: "orphaned",
+          },
+          { id: "030-done", title: "Shipped", lane: "done" },
+        ],
+      },
+    ],
+  };
+
+  /** Zoom into AuthPRD's Issue board so every Issue card renders. */
+  async function zoomIn(): Promise<ReturnType<typeof render>> {
+    const handles = render(<App board={reviewBoard} reviewCap={3} />);
+    handles.stdin.write(ENTER);
+    await tick();
+    return handles;
+  }
+
+  it("shows the N/cap marker on a live in-review card, cap sourced from config", async () => {
+    const { lastFrame } = await zoomIn();
+    const frame = stripAnsi(lastFrame() ?? "");
+
+    expect(frame).toContain("2/3");
+    expect(frame).toContain("Reviewing");
+  });
+
+  it("shows no count on an orphaned in-review card — the Orphan marker wins", async () => {
+    const { lastFrame } = await zoomIn();
+    const frame = stripAnsi(lastFrame() ?? "");
+
+    // The orphan carries its loud liveness marker and no count line. The only
+    // `N/3` anywhere is the live card's own 2/3 — no second count crept in for the
+    // orphan, so its card is countless.
+    expect(frame).toContain("⚠ orphaned");
+    expect(frame.match(/\d+\/3/g)).toEqual(["2/3"]);
+  });
+
+  it("shows no count once an Issue has left the in-review lane (done)", async () => {
+    // The done card carries no reviewPass (the scanner gates it off the lane), so
+    // only the live in-review card's 2/3 appears anywhere on the board.
+    const { lastFrame } = await zoomIn();
+    const frame = stripAnsi(lastFrame() ?? "");
+
+    expect(frame).toContain("Shipped");
+    expect(frame.match(/\d+\/3/g)).toEqual(["2/3"]);
+  });
+});

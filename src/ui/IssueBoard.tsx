@@ -22,6 +22,13 @@ interface IssueBoardProps {
    * exercise vertical overflow, where the lanes render unbounded as before.
    */
   laneHeight?: number;
+  /**
+   * The configured AI-review cap (`config.review.cap`), threaded to the In Review
+   * column as the denominator of every `N/cap` review-pass marker (ADR 0018). A
+   * board-wide constant from config; absent in board-only tests, where no card
+   * carries a count.
+   */
+  reviewCap?: number;
 }
 
 /**
@@ -29,7 +36,7 @@ interface IssueBoardProps {
  * is no Unsorted column — a missing/unknown status folds into Backlog flagged with
  * the `⚠ bad status` marker (CONTEXT.md, ADR 0003).
  */
-export function IssueBoard({ prd, selected, laneHeight }: IssueBoardProps) {
+export function IssueBoard({ prd, selected, laneHeight, reviewCap }: IssueBoardProps) {
   const byLane = groupByLane(prd.issues);
   const selectedId = cardAtCoord(prd.issues, ISSUE_LANES, selected)?.id;
   // The zoomed level divides the viewport across its seven status lanes, so each
@@ -56,6 +63,7 @@ export function IssueBoard({ prd, selected, laneHeight }: IssueBoardProps) {
             selectedRow={
               selected?.laneIndex === laneIndex ? selected.rowIndex : undefined
             }
+            reviewCap={reviewCap}
           />
         ))}
       </Box>
