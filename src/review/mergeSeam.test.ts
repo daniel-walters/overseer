@@ -20,6 +20,11 @@ class FakeMergeGit implements MergeSeam {
   readonly failCheckout = new Set<string>();
   /** Worktrees whose `removeWorktree` should throw. */
   readonly failRemove = new Set<string>();
+  /**
+   * Unmerged paths the fake reports per repo after a failed merge — non-empty ⇒
+   * the failure was a real conflict, empty ⇒ a transient git error.
+   */
+  readonly conflicts = new Map<string, readonly string[]>();
 
   readonly isWorktreeClean = vi.fn(
     (worktree: string) => !this.dirty.has(worktree),
@@ -30,6 +35,10 @@ class FakeMergeGit implements MergeSeam {
   readonly merge = vi.fn((repo: string) => {
     if (this.failMerge.has(repo)) throw new Error(`merge conflict in ${repo}`);
   });
+  readonly conflictingPaths = vi.fn(
+    (repo: string): readonly string[] => this.conflicts.get(repo) ?? [],
+  );
+  readonly abortMerge = vi.fn();
   readonly removeWorktree = vi.fn((_repo: string, worktree: string) => {
     if (this.failRemove.has(worktree)) {
       throw new Error(`worktree remove failed for ${worktree}`);
@@ -104,6 +113,64 @@ describe("mergeWorktree", () => {
 
     expect(result.outcome).toBe("failure");
     expect(git.merge).not.toHaveBeenCalled();
+  });
+
+  it("aborts the merge and reports a conflict when the merge leaves unmerged paths", () => {
+    const git = new FakeMergeGit();
+    git.failMerge.add("/repos/api");
+    git.conflicts.set("/repos/api", ["src/a.ts", "src/b.ts"]);
+
+    const result = mergeWorktree(input, git);
+
+    // A real conflict is its own outcome, distinct from a transient `failure`, and
+    // carries the conflicting paths so the caller can explain what conflicted.
+    expect(result).toEqual({
+      outcome: "conflict",
+      files: ["src/a.ts", "src/b.ts"],
+    });
+    // Overseer never auto-resolves: it aborts the merge, leaving the feature
+    // branch clean for a human to resolve.
+    expect(git.abortMerge).toHaveBeenCalledWith("/repos/api");
+  });
+
+  it("reports a transient failure (not a conflict) when the merge leaves no unmerged paths", () => {
+    const git = new FakeMergeGit();
+    git.failMerge.add("/repos/api");
+    // No unmerged paths recorded ⇒ the merge failed for some other (transient)
+    // reason, so there is nothing to abort and the outcome is a plain failure.
+
+    const result = mergeWorktree(input, git);
+
+    expect(result.outcome).toBe("failure");
+    expect(git.abortMerge).not.toHaveBeenCalled();
+  });
+
+  it("treats a checkout failure as transient, never a conflict", () => {
+    // A checkout that fails leaves no merge in progress, so there is nothing to
+    // abort and no conflicting paths to report — it is a transient failure.
+    const git = new FakeMergeGit();
+    git.failCheckout.add("/repos/api");
+
+    const result = mergeWorktree(input, git);
+
+    expect(result.outcome).toBe("failure");
+    expect(git.abortMerge).not.toHaveBeenCalled();
+  });
+
+  it("still reports the conflict when the abort itself fails", () => {
+    // A failed abort leaves the repo mid-merge, but escalating to human-review is
+    // still the right call — the human sees the conflict note — so mergeWorktree
+    // never throws and still returns the conflict outcome.
+    const git = new FakeMergeGit();
+    git.failMerge.add("/repos/api");
+    git.conflicts.set("/repos/api", ["src/a.ts"]);
+    git.abortMerge.mockImplementation(() => {
+      throw new Error("abort failed");
+    });
+
+    const result = mergeWorktree(input, git);
+
+    expect(result.outcome).toBe("conflict");
   });
 });
 

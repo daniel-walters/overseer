@@ -39,6 +39,8 @@ function fakeMergeSeam(
     isWorktreeClean: vi.fn(() => true),
     checkout: vi.fn(() => void calls.push("checkout")),
     merge: vi.fn(() => void calls.push("merge")),
+    conflictingPaths: vi.fn(() => []),
+    abortMerge: vi.fn(() => void calls.push("abortMerge")),
     removeWorktree: vi.fn(() => void calls.push("removeWorktree")),
     deleteBranch: vi.fn(() => void calls.push("deleteBranch")),
     ...overrides,
@@ -1010,6 +1012,30 @@ describe("createReactor — resolve edge", () => {
     expect(after).toContain("status: in-review");
     expect(after).not.toContain("status: done");
     // No cleanup on a failed merge.
+    expect(merge.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("escalates a clean verdict whose merge conflicts to human-review (conflict)", () => {
+    // End-to-end: a clean-verdict Issue whose merge hits a real conflict (the
+    // merge throws and leaves unmerged paths) lands in human-review with reason
+    // `conflict` — Overseer aborts the merge and escalates, never auto-resolving.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({
+      merge: vi.fn(() => {
+        throw new Error("CONFLICT (content)");
+      }),
+      conflictingPaths: vi.fn(() => ["src/x.ts"]),
+    });
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: human-review");
+    expect(after).toContain("human_review_reason: conflict");
+    expect(after).toContain("src/x.ts"); // the note names what conflicted
+    expect(after).not.toContain("status: done");
+    // The merge was aborted and the worktree left for the human — no cleanup.
+    expect(merge.abortMerge).toHaveBeenCalledWith("/repos/alpha");
     expect(merge.removeWorktree).not.toHaveBeenCalled();
   });
 
