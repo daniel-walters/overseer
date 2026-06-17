@@ -561,6 +561,12 @@ still on the table:
   framing. (The static body view itself has shipped as the detail modal; this is the
   *per-card-in-context* variant.)
 
+### Surface "stalled — auto-run off, work waiting" on the board-level PRD card
+
+Surfaced while designing **dynamic keybinds** ([ADR 0017](./adr/0017-keybind-eligibility-gates-matcher-and-hints-but-not-the-help-map.md)). Scenario: [auto-run](../CONTEXT.md#auto-run) is **off**, a PRD is **in-progress**, nothing is in flight, yet it has an unblocked `ready-for-agent` Issue waiting (a blocker just hit `done`). The pipeline is **stalled on you** — nothing will pick that work up until you press `d` (the manual re-dispatch crank). But the board cannot show this: a stalled-with-pending-work PRD looks **identical** to an in-progress-and-humming one. The activity signal says `⏸ auto-run off` / `□ at-rest` (the brake is on) but nothing says *there is dispatchable work nobody is coming for*, and the `ready-for-agent` card is only visible once you zoom in.
+
+Dynamic keybinds (ADR 0017) *partly* address discoverability — `d` lights up in the hints exactly when its frontier has a spawn candidate, and reads **"resume"** rather than "dispatch" on an in-progress PRD — so once you have the PRD selected, the affordance is legible. What remains is the **board-level, at-a-glance** signal: a PRD-card marker (the same Issue→PRD roll-up shape as the human-intervention idea below) that flags *"this PRD has unblocked agent work but nothing is running"* — so you can see *which* PRDs are stalled without selecting each one. Pairs tightly with "Surface needs human intervention on the board-level PRD card" (next) — both roll an Issue-level fact up to the PRD card to answer "where is the work blocked on me?" at the board level; this one's trigger is *unblocked-but-undispatched agent work under a released-or-braked Reactor*, that one's is *human-review*.
+
 ### Surface "needs human intervention" on the board-level PRD card
 
 At the **board level** the cards are PRDs across three derived columns (backlog /
