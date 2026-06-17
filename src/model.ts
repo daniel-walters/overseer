@@ -179,6 +179,15 @@ export const HUMAN_REVIEW_REASONS = [
 ] as const;
 
 /**
+ * The sole `review_verdict` value (ADR 0019): a review pass found zero findings.
+ * The pass agent writes it to the Issue frontmatter and leaves `status:
+ * in-review`; Overseer reads it to know the clean merge → `done` resolve may run.
+ * It is the one bit Overseer cannot derive — `deviation`, `conflict`, and
+ * `non-convergence` it already has from elsewhere — so `clean` is the only value.
+ */
+export const REVIEW_VERDICT_CLEAN = "clean";
+
+/**
  * Why an Issue was escalated to `human-review`, recorded by the reviewer when it
  * takes the human-review exit (see reviewerPrompt). The three exits the reviewer
  * can take map one-to-one onto these: a recorded implementor deviation, a review

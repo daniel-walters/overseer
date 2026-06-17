@@ -16,6 +16,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     worktree: overrides.worktree,
     branch: overrides.branch,
     deviation: overrides.deviation,
+    reviewVerdict: overrides.reviewVerdict,
     body: overrides.body ?? "",
   };
 }

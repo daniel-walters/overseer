@@ -29,6 +29,7 @@ export const FIELD = {
   worktree: "worktree",
   branch: "branch",
   deviation: "deviation",
+  reviewVerdict: "review_verdict",
   blockedBy: "blocked_by",
   humanReviewReason: "human_review_reason",
   humanReviewNote: "human_review_note",

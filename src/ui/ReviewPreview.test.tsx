@@ -19,6 +19,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     worktree: "/wt/blue-cat-fox",
     branch: "blue-cat-fox",
     deviation: undefined,
+    reviewVerdict: undefined,
     body: "",
     ...overrides,
   };

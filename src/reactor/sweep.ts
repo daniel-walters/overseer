@@ -1,5 +1,7 @@
 import { computeFrontier, type FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchIssue, DispatchView } from "../dispatch/reader.js";
+import { Status } from "../dispatch/status.js";
+import { REVIEW_VERDICT_CLEAN } from "../model.js";
 import { classifyReviewability } from "../review/eligibility.js";
 
 /**
@@ -35,6 +37,16 @@ export interface SweptPrd {
   readonly view: DispatchView;
   readonly frontier: readonly FrontierEntry[];
   readonly reviewers: readonly DispatchIssue[];
+  /**
+   * The resolve-verdict candidates: `in-review` Issues carrying
+   * `review_verdict: clean` (ADR 0019). The non-spawn third edge — the Reactor
+   * runs the clean merge → `done` resolve on each, gated on the verdict (not on
+   * liveness, so it is independent of the lingering-completed-row quirk). Unlike
+   * {@link reviewers}, surfacing one does not spawn — "exactly two spawn edges"
+   * holds. The merge handoff (repo/worktree/branch) is checked by the resolve
+   * decision, not gated here: the sweep surfaces purely on the verdict.
+   */
+  readonly resolvers: readonly DispatchIssue[];
 }
 
 /**
@@ -70,6 +82,7 @@ export function sweepFrontier(prds: readonly PrdInput[]): readonly SweptPrd[] {
     view,
     frontier: computeFrontier(view),
     reviewers: view.issues.filter(isReviewerCandidate),
+    resolvers: view.issues.filter(isResolveCandidate),
   }));
 }
 
@@ -83,4 +96,19 @@ export function sweepFrontier(prds: readonly PrdInput[]): readonly SweptPrd[] {
  */
 function isReviewerCandidate(issue: DispatchIssue): boolean {
   return classifyReviewability(issue).reviewable;
+}
+
+/**
+ * Whether an Issue is a resolve-verdict candidate (ADR 0019): `in-review` and
+ * carrying `review_verdict: clean`. Gated on the verdict, **not** on liveness —
+ * the verdict is what Overseer acts on, so a dead reviewer that nonetheless wrote
+ * the verdict still resolves, and a live one that has not yet is left alone. The
+ * merge handoff (repo/worktree/branch) is the resolve decision's concern, not a
+ * sweep gate: the decision leaves an Issue missing them untouched.
+ */
+function isResolveCandidate(issue: DispatchIssue): boolean {
+  return (
+    issue.status === Status.IN_REVIEW &&
+    issue.reviewVerdict === REVIEW_VERDICT_CLEAN
+  );
 }
