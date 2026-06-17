@@ -24,12 +24,21 @@ describe("createAgentSidecar", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("round-trips a recorded issueKey → handle", () => {
+  it("round-trips a recorded issueKey → handle (no pass)", () => {
     const sidecar = createAgentSidecar(path);
     sidecar.record("checkout/001-cart.md", "abc123");
 
     expect(createAgentSidecar(path).read()).toEqual({
-      "checkout/001-cart.md": "abc123",
+      "checkout/001-cart.md": { handle: "abc123" },
+    });
+  });
+
+  it("round-trips a recorded handle *and* review pass", () => {
+    const sidecar = createAgentSidecar(path);
+    sidecar.record("checkout/001-cart.md", "abc123", 2);
+
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": { handle: "abc123", reviewPass: 2 },
     });
   });
 
@@ -49,8 +58,8 @@ describe("createAgentSidecar", () => {
     sidecar.record("checkout/002-pay.md", "handle-b");
 
     expect(sidecar.read()).toEqual({
-      "checkout/001-cart.md": "handle-a",
-      "checkout/002-pay.md": "handle-b",
+      "checkout/001-cart.md": { handle: "handle-a" },
+      "checkout/002-pay.md": { handle: "handle-b" },
     });
   });
 
@@ -61,7 +70,7 @@ describe("createAgentSidecar", () => {
     record("checkout/001-cart.md", "abc123");
 
     expect(createAgentSidecar(path).read()).toEqual({
-      "checkout/001-cart.md": "abc123",
+      "checkout/001-cart.md": { handle: "abc123" },
     });
   });
 
@@ -70,7 +79,7 @@ describe("createAgentSidecar", () => {
     sidecar.record("checkout/001-cart.md", "stale");
     sidecar.record("checkout/001-cart.md", "fresh");
 
-    expect(sidecar.read()).toEqual({ "checkout/001-cart.md": "fresh" });
+    expect(sidecar.read()).toEqual({ "checkout/001-cart.md": { handle: "fresh" } });
   });
 
   // A corrupt sidecar — a crash mid-write, a hand-edit, or a non-object value —
@@ -99,16 +108,87 @@ describe("createAgentSidecar", () => {
     expect(createAgentSidecar(path).read()).toEqual({});
   });
 
-  it("drops entries whose value is not a string, keeping the valid ones", () => {
-    // A hand-edit / partial corruption can leave a non-string value. It must be
-    // dropped (not cast through), so a non-string handle never reaches the
-    // liveness join — exactly like parseLiveSet dropping a non-string `id`.
+  it("drops malformed entries with no usable handle, keeping the valid ones", () => {
+    // A hand-edit / partial corruption can leave a value that is neither a legacy
+    // string nor an object with a string handle. Such an entry is dropped (not cast
+    // through), so a non-string handle never reaches the liveness join — exactly
+    // like parseLiveSet dropping a non-string `id`. A legacy bare string and a
+    // well-formed object both survive.
     plant(
-      '{"checkout/001-cart.md": "abc123", "checkout/002-pay.md": 42, "checkout/003-x.md": {"nested": true}}',
+      JSON.stringify({
+        "checkout/001-cart.md": "abc123", // legacy bare string → { handle }
+        "checkout/002-pay.md": 42, // number → dropped
+        "checkout/003-x.md": { nested: true }, // object, no string handle → dropped
+        "checkout/004-y.md": { handle: "def456", reviewPass: 1 }, // well-formed → kept
+        "checkout/005-z.md": { handle: 99 }, // non-string handle → dropped
+      }),
     );
     expect(createAgentSidecar(path).read()).toEqual({
-      "checkout/001-cart.md": "abc123",
+      "checkout/001-cart.md": { handle: "abc123" },
+      "checkout/004-y.md": { handle: "def456", reviewPass: 1 },
     });
+  });
+
+  it("reads a legacy bare-string entry as a handle with no recorded pass", () => {
+    // Entries written before the sidecar carried a pass are bare strings. They
+    // must read as `{ handle }` — a handle, no pass — never an error and never a
+    // false default count, so a board that upgraded mid-flight still joins them.
+    plant('{"checkout/001-cart.md": "legacy-handle"}');
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": { handle: "legacy-handle" },
+    });
+  });
+
+  it("reads a missing reviewPass as absent — distinct from a recorded 0", () => {
+    // Absent must never coerce to a default like 0 that would render a false `0/cap`
+    // marker; it stays absent, distinguishable from an honestly-recorded 0.
+    plant(
+      JSON.stringify({
+        "checkout/001-cart.md": { handle: "h1" }, // no pass → absent
+        "checkout/002-pay.md": { handle: "h2", reviewPass: 0 }, // recorded 0
+      }),
+    );
+    const map = createAgentSidecar(path).read();
+    const noPass = map["checkout/001-cart.md"]!;
+    const recordedZero = map["checkout/002-pay.md"]!;
+    expect(noPass.reviewPass).toBeUndefined();
+    expect("reviewPass" in noPass).toBe(false);
+    expect(recordedZero.reviewPass).toBe(0);
+  });
+
+  it("ignores a non-number reviewPass, keeping the handle", () => {
+    // A hand-edited / partially-corrupt pass (a string, null, NaN) must not throw
+    // and must not render a marker — the handle survives, the pass reads as absent.
+    plant(
+      JSON.stringify({
+        "checkout/001-cart.md": { handle: "h1", reviewPass: "two" },
+        "checkout/002-pay.md": { handle: "h2", reviewPass: null },
+      }),
+    );
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": { handle: "h1" },
+      "checkout/002-pay.md": { handle: "h2" },
+    });
+  });
+
+  it("round-trips the pass across a board restart (a fresh sidecar instance)", () => {
+    // Reopening the board builds a new sidecar over the same file; the in-flight
+    // pass recovers from disk rather than resetting (PRD: recover the count on
+    // restart).
+    createAgentSidecar(path).record("checkout/001-cart.md", "abc123", 3);
+    expect(createAgentSidecar(path).read()).toEqual({
+      "checkout/001-cart.md": { handle: "abc123", reviewPass: 3 },
+    });
+  });
+
+  it("re-recording without a pass clears a previously-recorded pass", () => {
+    // A re-dispatch (no pass) overwrites the whole entry, so a stale review pass
+    // does not linger on an Issue that is no longer in a review pass.
+    const sidecar = createAgentSidecar(path);
+    sidecar.record("checkout/001-cart.md", "h1", 2);
+    sidecar.record("checkout/001-cart.md", "h1");
+
+    expect(sidecar.read()).toEqual({ "checkout/001-cart.md": { handle: "h1" } });
   });
 
   it("self-heals: record overwrites a corrupt sidecar with a fresh map", () => {
@@ -119,7 +199,7 @@ describe("createAgentSidecar", () => {
     record("checkout/001-cart.md", "abc123");
 
     expect(createAgentSidecar(path).read()).toEqual({
-      "checkout/001-cart.md": "abc123",
+      "checkout/001-cart.md": { handle: "abc123" },
     });
   });
 });

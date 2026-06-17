@@ -78,8 +78,21 @@ function runBoard(): void {
   // open can join a live `claude agents --json` row back to its Issue. Shared by
   // all three spawn paths (manual `d`/`r` and the Reactor) so every launched
   // agent is recorded identically; `read` feeds the liveness probe below.
-  const { record: recordHandle, read: readHandles } =
+  const { record: recordHandle, read: readEntries } =
     createAgentSidecar(defaultSidecarPath());
+  // The liveness join and the kill switch only need `issueKey → handle`; the
+  // sidecar's widened entry also carries the AI-review pass (ADR 0018), so project
+  // the entries down to handles right at the join boundary. Keeping the projection
+  // here leaves the liveness probe id-only and untouched by the schema widening —
+  // a non-string handle can never match a live session `id`, so handle membership
+  // is exactly what those two seams want.
+  const readHandles = (): Record<string, string> => {
+    const handles: Record<string, string> = {};
+    for (const [issueKey, entry] of Object.entries(readEntries())) {
+      handles[issueKey] = entry.handle;
+    }
+    return handles;
+  };
   // The liveness probe (ADR 0008 / 0009): on each call it re-queries
   // `claude agents --json`, re-reads the recorded handles, and intersects them
   // into a per-Issue trust-qualified absence (live / absent-clean /
