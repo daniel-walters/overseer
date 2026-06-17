@@ -1,5 +1,7 @@
 import { marked, setOptions, type MarkedOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
+import type { CardDetail } from "./detailReader.js";
+import { REASON_MARKER } from "./Card.js";
 
 /**
  * Render a markdown body to terminal text (ANSI styling for headings, list
@@ -26,15 +28,42 @@ export function renderMarkdown(body: string): string {
 }
 
 /**
- * Project a body to the rendered terminal lines the detail modal windows: render
- * the markdown, then split on newlines. A blank (or whitespace-only) body yields
- * no lines, so the modal shows its placeholder rather than a single empty line.
+ * Compose the markdown the detail modal renders for a card: the reviewer's
+ * human-review header (the escalation reason as a heading, the note beneath it)
+ * prepended to the frontmatter-stripped body. The header renders **only** for a
+ * `human-review` Issue carrying both a reason and a non-blank note (the App sets
+ * those from the parsed model fields — ADR 0014); a PRD's `prd.md` and every
+ * other Issue compose to the body alone, so their detail view is unchanged.
  *
- * This is the one place the body→lines transform lives: the {@link App} calls it to
- * size the scroll window's `maxOffset` and the {@link DetailModal} renders the
+ * The header is plain markdown folded into the same string as the body, so it
+ * flows through one render and one scroll window — the note scrolls like the body
+ * (a multi-sentence explanation stays fully readable, never card-truncated)
+ * rather than being pinned chrome that would need its own viewport accounting.
+ * The heading text is `Card.tsx`'s {@link REASON_MARKER}, so the detail header and
+ * the card marker read as the same signal.
+ */
+export function composeDetailMarkdown(detail: CardDetail): string {
+  const note = detail.humanReviewNote?.trim();
+  if (detail.humanReviewReason === undefined || !note) return detail.body;
+  const header = `## ${REASON_MARKER[detail.humanReviewReason]}\n\n${note}`;
+  // A blank body would otherwise leave a trailing separator with nothing under
+  // it; join only the present parts so the header stands alone when the Issue
+  // file has frontmatter but no body.
+  return detail.body.trim().length > 0 ? `${header}\n\n---\n\n${detail.body}` : header;
+}
+
+/**
+ * Project a {@link CardDetail} to the rendered terminal lines the detail modal
+ * windows: compose the header+body markdown, render it, then split on newlines. A
+ * card that composes to a blank (or whitespace-only) string yields no lines, so
+ * the modal shows its placeholder rather than a single empty line.
+ *
+ * This is the one place the detail→lines transform lives: the {@link App} calls it
+ * to size the scroll window's `maxOffset` and the {@link DetailModal} renders the
  * resulting lines, so the clamp and the rendered window operate on the *same* lines
  * (and the heavier `renderMarkdown` runs once per frame, not once per call site).
  */
-export function renderDetailLines(body: string): string[] {
-  return body.trim().length > 0 ? renderMarkdown(body).split("\n") : [];
+export function renderDetailLines(detail: CardDetail): string[] {
+  const markdown = composeDetailMarkdown(detail);
+  return markdown.trim().length > 0 ? renderMarkdown(markdown).split("\n") : [];
 }

@@ -89,4 +89,108 @@ describe("DetailModal", () => {
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).not.toMatch(/more below|more above/);
   });
+
+  describe("human-review header", () => {
+    it("renders the reason and note above the body for a human-review Issue carrying both", () => {
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{
+            title: "Stuck on auth",
+            body: "The Issue body proper.",
+            humanReviewReason: "non-convergence",
+            humanReviewNote:
+              "After 3 passes the auth test still fails intermittently; couldn't isolate the race.",
+          }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      // The reason heading matches the card's category marker word.
+      expect(frame).toContain("non-convergence");
+      // The note text renders in full (not truncated), alongside the body.
+      expect(frame).toContain("couldn't isolate the race");
+      // The body still renders beneath the header.
+      expect(frame).toContain("The Issue body proper.");
+    });
+
+    it("shows the reason word that matches the card marker for each escalation reason", () => {
+      for (const [reason, word] of [
+        ["deviation", "deviation"],
+        ["conflict", "conflict"],
+        ["non-convergence", "non-convergence"],
+      ] as const) {
+        const { lastFrame } = render(
+          <DetailModal
+            detail={{
+              title: "T",
+              body: "body",
+              humanReviewReason: reason,
+              humanReviewNote: "why a human is needed",
+            }}
+          />,
+        );
+        expect(stripAnsi(lastFrame() ?? "")).toContain(word);
+      }
+    });
+
+    it("renders no header for a non-human-review card — body only, unchanged", () => {
+      const { lastFrame } = render(
+        <DetailModal detail={{ title: "Plain", body: "Just the body." }} />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      expect(frame).toContain("Just the body.");
+      // No escalation reason words leak into a plain card's detail view.
+      expect(frame).not.toMatch(/deviation|conflict|non-convergence/);
+    });
+
+    it("renders no header when a reason is present but the note is absent", () => {
+      // The header block is the reason+note pair; without a note there is nothing
+      // to surface beyond the terse card marker, so the body shows alone.
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{ title: "T", body: "Body only.", humanReviewReason: "deviation" }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      expect(frame).toContain("Body only.");
+      expect(frame).not.toContain("deviation");
+    });
+
+    it("scrolls the note alongside the body rather than truncating it", () => {
+      // A long multi-line note must be reachable by scrolling, not clipped to a
+      // card-sized snippet. With the header composed into the scrollable stream, a
+      // later window reveals note content that the first window clips.
+      const longNote = Array.from({ length: 8 }, (_, i) => `NOTELINE${i}`).join("\n\n");
+      const top = render(
+        <DetailModal
+          detail={{
+            title: "T",
+            body: "body",
+            humanReviewReason: "conflict",
+            humanReviewNote: longNote,
+          }}
+          scrollOffset={0}
+          viewportRows={3}
+        />,
+      );
+      expect(stripAnsi(top.lastFrame() ?? "")).toContain("NOTELINE0");
+
+      // Scrolling to the end reaches the body, which sits beneath the whole note —
+      // proof the note is fully traversable rather than clipped to a card snippet.
+      const bottom = render(
+        <DetailModal
+          detail={{
+            title: "T",
+            body: "the body proper",
+            humanReviewReason: "conflict",
+            humanReviewNote: longNote,
+          }}
+          scrollOffset={99}
+          viewportRows={3}
+        />,
+      );
+      const bottomFrame = stripAnsi(bottom.lastFrame() ?? "");
+      expect(bottomFrame).toContain("the body proper");
+      expect(bottomFrame).not.toContain("NOTELINE0"); // the note's start scrolled off
+    });
+  });
 });
