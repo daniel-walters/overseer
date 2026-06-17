@@ -5,6 +5,10 @@ import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
+import { DetailModal, DETAIL_MODAL_CHROME_ROWS } from "./DetailModal.js";
+import { renderDetailLines } from "./markdown.js";
+import { scrollDetail } from "./detailScroll.js";
+import type { CardDetail } from "./detailReader.js";
 import { navReduce, initialNav } from "./navigation.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
@@ -114,16 +118,33 @@ export interface OpenPr {
 }
 
 /**
+ * The detail seam the `v` keybind drives — the read-only body view (the first
+ * presentation-only feature, ADR 0014), the passive sibling of the action seams
+ * above. `readDetail` resolves the selected card's frontmatter-stripped body off
+ * disk *when the modal opens*: with only a `prdId` (board level) it reads the
+ * PRD's `prd.md`, with an `issueId` too (zoomed) the selected Issue file. A
+ * vanished file yields `undefined`, on which `v` is a no-op (no modal) — the same
+ * scan→keypress race the action seams degrade. Unlike them it has no confirm and
+ * no write: the modal only reads, so a `CardDetail` is all it returns (the body is
+ * never carried in the `Board` model, ADR 0003).
+ */
+export interface DetailReader {
+  readonly readDetail: (prdId: string, issueId?: string) => CardDetail | undefined;
+}
+
+/**
  * What the open modal is previewing: a PRD dispatch, a single-Issue review, a
- * single-orphan re-dispatch, a single-agent kill, or a PRD Open PR. At most one
- * is ever open (the `nav.confirming` guard).
+ * single-orphan re-dispatch, a single-agent kill, a PRD Open PR, or a read-only
+ * card-body detail view. At most one is ever open (the `nav.confirming` guard for
+ * the action previews; the detail modal closes over its own input like help).
  */
 type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
   | { readonly kind: "review"; readonly preview: ReviewPreviewData }
   | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData }
   | { readonly kind: "kill"; readonly preview: KillPreviewData }
-  | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData };
+  | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData }
+  | { readonly kind: "detail"; readonly detail: CardDetail };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -161,6 +182,8 @@ interface AppProps {
   killer?: Killer;
   /** Wired in production; absent in tests that don't exercise Open PR. */
   openPr?: OpenPr;
+  /** Wired in production; absent in tests that don't exercise the detail modal. */
+  detailReader?: DetailReader;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
   /** Wired in production; absent in tests that don't exercise `go to PR`. */
@@ -183,7 +206,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, autoRun, urlOpener, activity }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, detailReader, autoRun, urlOpener, activity }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -201,6 +224,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   // alone drives the render — `nav.confirming` only owns input/navigation
   // suppression, the two are never read together.
   const [modal, setModal] = useState<ActiveModal | undefined>(undefined);
+  // The detail modal's scroll position over its body's *rendered* lines. Reset to
+  // the top when the modal opens (so a reopen never resumes a stale position) and
+  // moved by `j`/`k`/arrows while it is open, clamped to the body's bounds. Held
+  // here (not on `modal`) because the modal capture is frozen at open time, but the
+  // offset is live state the input handler updates on every keystroke.
+  const [detailScroll, setDetailScroll] = useState(0);
   // The help modal's open state, kept separate from `modal` — help is a passive
   // reference card with no frozen capture and no confirm side-effect, so it does
   // not belong in the action-preview `ActiveModal` union. The `nav.confirming`
@@ -220,6 +249,17 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   const issues = selectedPrd?.issues ?? [];
   const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
   const selectedIssue = issues[issueIndex];
+
+  // The detail modal's body region height and its current scroll window. The
+  // viewport is the terminal height minus the modal's fixed chrome (title, hints,
+  // affordance rows); the body's rendered lines are windowed through the same
+  // `scrollDetail` the modal renders from, so the App's keypress clamp and the
+  // modal's window can never disagree. Only meaningful while a detail modal is
+  // open; `maxOffset` is what `j`/`k`/arrows clamp the offset against.
+  const detailBodyRows = Math.max(1, rows - DETAIL_MODAL_CHROME_ROWS);
+  const detailLines =
+    modal?.kind === "detail" ? renderDetailLines(modal.detail.body) : [];
+  const detailMaxOffset = scrollDetail(detailLines, detailScroll, detailBodyRows).maxOffset;
 
   /**
    * The App-side closures the registry dispatches a matched keypress to. Each is
@@ -323,6 +363,26 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
       }
     },
     toggleAutoRun: () => autoRun?.toggle(),
+    viewDetail: () => {
+      // Read the selected card's body on demand and open the detail modal over it
+      // (board-level: the PRD; zoomed: the selected Issue — the registry's `both`
+      // gate lets one key serve both, the level here picks which id the seam gets).
+      // A vanished file (raced a deletion since the last scan) yields no detail, so
+      // `v` is a no-op — no modal opens, mirroring how the action seams degrade a
+      // vanished target. The frozen `CardDetail` is held on `modal` like the action
+      // previews, but `v` does not enter `nav.confirming`: the detail modal is a
+      // read-only viewer whose own input branch (below) closes it, like the help
+      // modal — there is nothing to confirm.
+      if (!detailReader || !selectedPrd) return;
+      const detail =
+        nav.level === "issues" && selectedIssue
+          ? detailReader.readDetail(selectedPrd.id, selectedIssue.id)
+          : detailReader.readDetail(selectedPrd.id);
+      if (detail) {
+        setDetailScroll(0); // always open at the top, never a stale position
+        setModal({ kind: "detail", detail });
+      }
+    },
     showHelp: () => setShowHelp(true),
     quit: () => {
       if (nav.level === "issues") dispatch({ type: "back" });
@@ -345,6 +405,29 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
       } else if (input === "q") {
         setShowHelp(false);
         exit();
+      }
+      return;
+    }
+
+    // The detail modal owns input while it is open, mirroring the help modal's
+    // dismissal contract: `v` or Esc close it (restoring the prior selection/zoom,
+    // which the modal never touched), `q` closes it and quits. `j`/`k` and the
+    // down/up arrows scroll the body, clamped to `[0, detailMaxOffset]` so the
+    // offset can never move past the start or end (and a body that fits has
+    // `maxOffset` 0, so the keys are inert). Everything else is swallowed (a stray
+    // key while reading a body never leaks to the board). It is a read-only viewer,
+    // so there is nothing to confirm — it does not go through `nav.confirming`, and
+    // closing is just clearing the frozen capture.
+    if (modal?.kind === "detail") {
+      if (input === "v" || key.escape) {
+        setModal(undefined);
+      } else if (input === "q") {
+        setModal(undefined);
+        exit();
+      } else if (input === "j" || key.downArrow) {
+        setDetailScroll((o) => Math.min(o + 1, detailMaxOffset));
+      } else if (input === "k" || key.upArrow) {
+        setDetailScroll((o) => Math.max(o - 1, 0));
       }
       return;
     }
@@ -453,6 +536,19 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, aut
   }
   if (modal?.kind === "open-pr") {
     return <OpenPrPreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "detail") {
+    // The read-only body view — a full-screen takeover like the action previews
+    // (it gives the body the whole screen, ADR 0014), rendered from the frozen
+    // capture so a re-scan that removes the card cannot blank it mid-read.
+    return (
+      <DetailModal
+        detail={modal.detail}
+        lines={detailLines}
+        scrollOffset={detailScroll}
+        viewportRows={detailBodyRows}
+      />
+    );
   }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)

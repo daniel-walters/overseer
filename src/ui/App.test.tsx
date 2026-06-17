@@ -16,10 +16,12 @@ import type {
 } from "../dispatch/kill.js";
 import type { OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
+import type { CardDetail } from "./detailReader.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
 const ARROW_DOWN = ESC + "[B";
+const ARROW_UP = ESC + "[A";
 
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
@@ -1544,5 +1546,345 @@ describe("App reactor activity", () => {
     expect(frame).not.toContain("working");
     expect(frame).not.toContain("idle");
     expect(frame).not.toContain("at-rest");
+  });
+});
+
+describe("App detail modal", () => {
+  /** A detail reader resolving a fixed body for any card; spies record the call. */
+  function spyDetailReader(detail?: CardDetail) {
+    return {
+      readDetail: vi.fn<(prdId: string, issueId?: string) => CardDetail | undefined>(
+        () => detail,
+      ),
+    };
+  }
+
+  it("opens the modal on v at the board level showing the PRD's body", async () => {
+    const detailReader = spyDetailReader({
+      title: "AuthPRD",
+      body: "## Problem\n\nThe board never shows the body.",
+    });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("v");
+    await tick();
+
+    // The board reader is asked for the selected PRD with no issue id (board level).
+    expect(detailReader.readDetail).toHaveBeenCalledWith("auth");
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD");
+    expect(frame).toContain("Problem");
+    expect(frame).toContain("The board never shows the body.");
+  });
+
+  it("opens the modal on v when zoomed showing the selected Issue's body", async () => {
+    const detailReader = spyDetailReader({
+      title: "Login",
+      body: "## What to build\n\nA login form.",
+    });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects 010-login)
+    await tick();
+    stdin.write("v");
+    await tick();
+
+    // Zoomed: the reader is asked for the selected PRD *and* Issue id.
+    expect(detailReader.readDetail).toHaveBeenCalledWith("auth", "010-login");
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("What to build");
+    expect(frame).toContain("A login form.");
+  });
+
+  it("is a no-op on v when the file vanished (readDetail → undefined)", async () => {
+    const detailReader = spyDetailReader(undefined); // file gone since the last scan
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("v");
+    await tick();
+
+    expect(detailReader.readDetail).toHaveBeenCalledTimes(1);
+    // No modal opened, no error: still on the board.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD");
+    expect(frame).toContain("BillPRD");
+    expect(frame).not.toContain("close"); // the modal's dismiss hint is absent
+  });
+
+  it("shows the empty-body placeholder rather than a blank modal", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("v");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("(no body)");
+  });
+
+  it("does nothing on v when no detail reader is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write("v");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD"); // still the board
+    expect(frame).not.toContain("close");
+  });
+
+  it("closes the modal on v (toggle) and restores the board", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("v"); // open
+    await tick();
+    stdin.write("v"); // close
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("close");
+    expect(frame).toContain("BillPRD"); // back on the board
+  });
+
+  it("closes the modal on Esc, restoring the zoom the user was in", async () => {
+    const detailReader = spyDetailReader({ title: "Login", body: "x" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("v"); // open the detail modal
+    await tick();
+    stdin.write(ESC); // close it
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("close"); // modal gone
+    // Esc returned us exactly where we were — still zoomed into the Issues.
+    expect(frame).toContain("Login");
+    expect(frame).not.toContain("BillPRD"); // not backed out to the board
+  });
+
+  it("quits on q from the modal", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
+    const { stdin, frames } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("v"); // open the modal
+    await tick();
+    stdin.write("q"); // q quits everywhere, including the modal
+    await tick();
+    const framesAfterQuit = frames.length;
+
+    // The app unmounted: further input produces no new frame.
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(frames.length).toBe(framesAfterQuit);
+  });
+
+  it("swallows other keys while the modal is open (no leak to the board)", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("v"); // open the modal on AuthPRD (first card)
+    await tick();
+    stdin.write(ARROW_DOWN); // would move selection if it leaked through
+    await tick();
+    stdin.write(ENTER); // would zoom if it leaked through
+    await tick();
+    stdin.write("v"); // close the modal
+    await tick();
+
+    // Selection never moved and we never zoomed: still board level, first card.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("AuthPRD");
+    expect(frame).toContain("BillPRD");
+    expect(frame).not.toContain("Login"); // never zoomed into Issues
+  });
+
+  it("ignores v while a dispatch preview is open (at most one modal)", async () => {
+    const dispatcher = {
+      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+    };
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
+    const { stdin, lastFrame } = render(
+      <App board={board} dispatcher={dispatcher} detailReader={detailReader} />,
+    );
+
+    stdin.write("d"); // open the dispatch preview
+    await tick();
+    stdin.write("v"); // swallowed by the preview — must not open the detail modal
+    await tick();
+
+    expect(detailReader.readDetail).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatch");
+  });
+
+  it("ignores v while the help modal is open (at most one modal)", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write("?"); // open help
+    await tick();
+    stdin.write("v"); // swallowed by help — must not open the detail modal
+    await tick();
+
+    expect(detailReader.readDetail).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Keybindings");
+  });
+
+  // A body taller than a short terminal: each marker is its own paragraph so it
+  // renders to a distinct terminal line we can assert window membership on.
+  const TALL = Array.from({ length: 20 }, (_, i) => `LINE${i}`).join("\n\n");
+  // A terminal short enough that 20+ body lines overflow the modal viewport.
+  const SHORT_ROWS = 12;
+
+  it("scrolls the body down with j and up with k", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v"); // open — windowed at the top
+    await tick();
+    const top = stripAnsi(lastFrame() ?? "");
+    expect(top).toContain("LINE0");
+    expect(top).not.toContain("LINE19"); // the end is clipped below
+
+    // Scroll down several lines — later content comes into view.
+    for (let i = 0; i < 8; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    const scrolled = stripAnsi(lastFrame() ?? "");
+    expect(scrolled).not.toContain("LINE0"); // the top is now clipped above
+
+    // Scroll back up — the top returns.
+    for (let i = 0; i < 8; i++) {
+      stdin.write("k");
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
+  });
+
+  it("scrolls with the down and up arrows too", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 8; i++) {
+      stdin.write(ARROW_DOWN);
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("LINE0");
+    for (let i = 0; i < 8; i++) {
+      stdin.write(ARROW_UP);
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
+  });
+
+  it("cannot scroll up past the start of the body", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 5; i++) {
+      stdin.write("k"); // already at the top — no movement
+      await tick();
+    }
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("LINE0"); // still at the top
+    expect(frame).not.toMatch(/more above/); // no above-affordance at the start
+  });
+
+  it("cannot scroll down past the end of the body", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 50; i++) {
+      stdin.write("j"); // far past the end — clamps at the last full window
+      await tick();
+    }
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("LINE19"); // the end is shown
+    expect(frame).not.toMatch(/more below/); // nothing left below
+  });
+
+  it("shows no scroll affordance and ignores scroll keys for a body that fits", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: "short body" });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toMatch(/more below|more above/);
+
+    stdin.write("j"); // ignored — nothing to scroll
+    await tick();
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("short body");
+    expect(frame).not.toMatch(/more above/);
+  });
+
+  it("resets the scroll position when the modal is reopened", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      240,
+      SHORT_ROWS,
+    );
+
+    stdin.write("v");
+    await tick();
+    for (let i = 0; i < 8; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("LINE0");
+
+    stdin.write("v"); // close
+    await tick();
+    stdin.write("v"); // reopen — back at the top
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
   });
 });

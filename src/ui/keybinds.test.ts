@@ -27,6 +27,7 @@ function spyHandlers(): KeybindHandlers {
     openPr: vi.fn(),
     goToPr: vi.fn(),
     toggleAutoRun: vi.fn(),
+    viewDetail: vi.fn(),
     showHelp: vi.fn(),
     quit: vi.fn(),
   };
@@ -97,6 +98,20 @@ describe("keybind registry", () => {
   it("matches a 'both'-level binding at either level", () => {
     expect(matchKeybind(press("a"), "board")?.label).toContain("auto-run");
     expect(matchKeybind(press("a"), "issues")?.label).toContain("auto-run");
+  });
+
+  it("matches the view-detail binding at either level (one gesture, both levels)", () => {
+    // `v` reads the selected card's body — a PRD's at the board level, an Issue's
+    // when zoomed — so it is a `both`-level binding like auto-run, not gated to one.
+    expect(matchKeybind(press("v"), "board")?.label).toContain("body");
+    expect(matchKeybind(press("v"), "issues")?.label).toContain("body");
+  });
+
+  it("routes the view-detail binding to the viewDetail handler", () => {
+    const handlers = spyHandlers();
+    const p = press("v");
+    matchKeybind(p, "board")?.action(handlers, p);
+    expect(handlers.viewDetail).toHaveBeenCalledTimes(1);
   });
 
   it("matches movement keys (arrows and hjkl) as a 'both'-level binding", () => {
