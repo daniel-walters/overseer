@@ -52,7 +52,7 @@ const BADGE: Record<ReadyFor, string> = {
  * because the card line truncates — the marker is the attention signal that
  * earns its place ahead of the title.
  */
-const REASON_MARKER: Record<HumanReviewReason, string> = {
+export const REASON_MARKER: Record<HumanReviewReason, string> = {
   deviation: "⚠ deviation",
   "non-convergence": "↻ non-convergence",
   conflict: "✗ conflict",

@@ -1616,6 +1616,67 @@ describe("App detail modal", () => {
     expect(frame).toContain("A login form.");
   });
 
+  it("renders the human-review reason+note header above the body when zoomed", async () => {
+    // The header is sourced from the parsed model fields on the selected Issue,
+    // not the file; `readDetail` still supplies the frontmatter-stripped body.
+    const reviewBoard: Board = {
+      prds: [
+        {
+          id: "auth",
+          title: "AuthPRD",
+          lane: "in-progress",
+          issues: [
+            {
+              id: "010-login",
+              title: "Login",
+              lane: "human-review",
+              humanReviewReason: "non-convergence",
+              humanReviewNote: "The auth test stays flaky after 3 passes.",
+            },
+          ],
+        },
+      ],
+    };
+    const detailReader = spyDetailReader({
+      title: "Login",
+      body: "## What to build\n\nA login form.",
+    });
+    const { stdin, lastFrame } = render(
+      <App board={reviewBoard} detailReader={detailReader} />,
+    );
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects the human-review Issue)
+    await tick();
+    stdin.write("v");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("non-convergence"); // reason heading, matching the card marker
+    expect(frame).toContain("The auth test stays flaky after 3 passes."); // the note
+    expect(frame).toContain("A login form."); // the body still renders beneath
+  });
+
+  it("renders no header on a non-human-review Issue — body only, unchanged", async () => {
+    // The shared `board`'s 010-login is a plain backlog Issue (no reason/note), so
+    // zooming + v shows the body alone with no escalation words leaking in.
+    const detailReader = spyDetailReader({
+      title: "Login",
+      body: "## What to build\n\nA login form.",
+    });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+    );
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects 010-login, backlog)
+    await tick();
+    stdin.write("v");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("A login form.");
+    expect(frame).not.toMatch(/deviation|conflict|non-convergence/);
+  });
+
   it("is a no-op on v when the file vanished (readDetail → undefined)", async () => {
     const detailReader = spyDetailReader(undefined); // file gone since the last scan
     const { stdin, lastFrame } = render(
