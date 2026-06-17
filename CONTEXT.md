@@ -156,7 +156,7 @@ The implementor agent stops at **`ready-for-review`** (it does *not* write `in-r
 Everything is **AI-reviewable by default**. A **human review** is required when *either*:
 
 1. The implementor recorded a [Deviation](#deviation) — it strayed from the Issue's plan to complete the work.
-2. The AI review could not converge — the reviewer loops `/code-review` at **medium** effort (fixing as it goes), where one iteration is a single `/code-review` pass plus its fixes and convergence is a pass that reports **zero** findings. After a hardcoded cap of **3** passes still finding issues, it escalates to a human. (The cap and effort are deliberately hardcoded for v1; making them configurable is in `docs/ideas.md`.)
+2. The AI review could not converge — the reviewer loops `/code-review` at the configured effort (default **medium**, fixing as it goes), where one iteration is a single `/code-review` pass plus its fixes and convergence is a pass that reports **zero** findings. After a configurable cap (`config.review.cap`, default **3**) of passes still finding issues, it escalates to a human. (The cap and effort are knobs in the `[review]` TOML table — `config.review.cap` / `config.review.effort` — not hardcoded.)
 
 Every Issue entering `in-review` gets the AI review loop **first**, regardless — a Deviation never skips it. The cleaned-up diff then takes one of two exits:
 

@@ -352,27 +352,50 @@ one at `3/3` is about to either pass clean or land in `human-review` for
 non-convergence.
 
 The catch: **that count does not exist anywhere Overseer can read it today.** The
-3-pass loop runs entirely *inside a single reviewer agent's session* — the reviewer
-spawns once, loops `/code-review` up to 3 times in-process, and writes back only a
-*terminal* status (`done`, or `human-review` with a reason like `non-convergence`).
-The iteration number lives in the agent's head, never on the Issue file or a sidecar
-(CONTEXT.md → Review outcome). So this is **not a rendering tweak** — it needs the
-count *exposed* first. Two shapes for that, each with a cost:
+loop runs entirely *inside a single reviewer agent's session* — the reviewer spawns
+once, loops `/code-review` up to the cap in-process, and writes back only a *terminal*
+status (`done`, or `human-review` with a reason like `non-convergence`). The iteration
+number lives in the agent's head, never on the Issue file or a sidecar (CONTEXT.md →
+Review outcome). So this is **not a rendering tweak** — it needs the count *exposed*
+first, and the cleanest way to expose it is to stop the agent owning the loop at all.
 
-- **The reviewer writes its progress to the Issue** (e.g. a `review_pass: 2`
-  frontmatter field, updated each pass). Simplest to read, but it makes the reviewer
-  write to the watched root *mid-loop* — today it writes only the one terminal edit,
-  and per-pass writes would each fire a re-scan and add churn. Stays within ADR 0002
-  (agents write, viewer reads) but increases write frequency.
-- **The reviewer reports progress out-of-band** (a sidecar keyed by Issue, like the
-  liveness handle), and the board overlays it like the other markers. Keeps the Issue
-  file clean and matches the liveness/suppressed overlay pattern, but adds a second
-  thing the reviewer must emit and the board must join.
+**Resolved design (grill session, 2026-06-17): build this together with "Use a fresh
+reviewer agent for each review iteration" below — they are one change to the review
+loop, not two.** Once each pass is its own spawn driven by the Reactor, the count is a
+near-free rider:
 
-Pairs tightly with "Configurable AI-review turns and effort" above: the moment the cap
-is a `config.toml` knob, the denominator in `N/cap` must read that config, not a
-hardcoded 3 — so if both are built, build them together (one source of truth for the
-cap, consumed by the loop, the marker, and the config).
+- **Loop ownership inverts.** The `/code-review` loop moves out of the reviewer prompt
+  and into the Reactor. Each pass is its own spawn on the *existing* review edge.
+- **Between passes, the Issue returns to `ready-for-review`.** A pass that found-and-
+  fixed issues sets status back to `ready-for-review`; the Reactor re-picks it up. No
+  new status — the awaiting→active flip stays the idempotency lock. The card visibly
+  oscillates `ready-for-review ⇄ in-review`, one hop per pass; accepted as honest
+  (column = on-disk status, the viewer invariant holds).
+- **The count lives in the agent sidecar (`agents.json`), Overseer-written per spawn.**
+  Because the Reactor drives each pass, *Overseer* increments and records the count at
+  spawn time — no agent ever writes the sidecar, so the "only Overseer writes
+  `agents.json`" invariant (ADR 0008) survives untouched. The value grows from
+  `string` (handle) to `{ handle, reviewPass }`. This sidesteps the earlier dilemma
+  (agent-writes-the-Issue vs agent-writes-a-sidecar) entirely: the *agent* never writes
+  the count under this model.
+- **The count is both control and display.** Overseer reads `reviewPass = N`: if
+  `N ≥ config.review.cap` it routes to `human-review` (non-convergence) instead of
+  spawning; else it spawns pass `N+1` and records it. The card marker is that same
+  number — one source of truth for control, marker, and the cap config.
+
+The marker itself: `N/cap`, where **N = the currently-running pass** (starts at
+`1/cap`) and **cap = `config.review.cap`** (already configurable today — see the
+correction note below; it is *not* a hardcoded 3). Rendered **neutral**, deliberately
+outside the yellow "needs-a-human" and red `⊘` "nothing-ran" marker families — it is
+the healthy in-progress path, not a warning. **Live-gated, like all sidecar overlays:**
+the marker shows only for a *live* `in-review` agent. If the agent dies mid-loop the
+Issue becomes an `in-review` Orphan — the **Orphan marker wins and the count is
+hidden** (a dead agent is not "on pass 2" of anything).
+
+> **Doc correction:** "Configurable AI-review turns and effort" has **shipped** —
+> `config.review.cap` / `config.review.effort` (the `[review]` TOML table, default cap
+> 3 / effort medium) is built and tested (`src/config.ts`, `src/review/reviewConfig.ts`).
+> CONTEXT.md still says the cap is "deliberately hardcoded for v1"; that line is stale.
 
 ### Use a fresh reviewer agent for each review iteration
 
@@ -393,9 +416,15 @@ anyway.
 
 Costs / open questions to weigh:
 
-- **Who fixes?** If each reviewer only *reviews*, something else has to apply fixes
-  between passes — re-dispatch the implementor? a dedicated fixer agent? That's a new
-  loop edge, not just swapping the spawn.
+- **Who fixes?** *(Resolved, grill session 2026-06-17: the same per-pass agent both
+  reviews and fixes — but it **reviews first**, so there is no author-reviewer bias.)*
+  Each pass agent reviews the worktree *as it inherited it* (code written by the
+  previous pass's agent, or the implementor on pass 1) — it has no stake in that code —
+  and only *then* fixes the findings it reported. The independence the fresh-reviewer
+  idea is after holds at the **pass boundary**, not within a pass: the agent that fixes
+  in pass N is gone by pass N+1, so pass N+1's fresh agent reviews those fixes with no
+  memory of making them. No separate fixer agent, no new loop edge — every agent only
+  ever *judges* code it did not write.
 - **State handoff.** A single session carries context across passes for free; separate
   agents need the findings/fixes passed between them (via the worktree commits, or an
   explicit handoff artifact). The worktree *is* the shared state, so a fresh reviewer
@@ -403,14 +432,92 @@ Costs / open questions to weigh:
 - **Cost & latency.** N spawns instead of 1 per Issue, each paying cold-start +
   worktree checkout. Wider fan-out against the same shared-checkout concerns dispatch
   already navigates.
-- **Liveness/iteration tracking interacts.** Each pass becoming its own spawn means
-  each has its own handle — which would actually make the iteration count (the `N/3`
-  idea above) *naturally* visible as distinct spawns, rather than something the single
-  agent must self-report. The two ideas reinforce each other.
+
+**Resolved with the iteration-count idea (grill session, 2026-06-17): build the two
+together.** Each pass becoming its own Reactor-driven spawn is what makes the count
+(`N/cap`) clean — *Overseer* records the pass number in `agents.json` at spawn time, so
+no agent self-reports it, and the same number both drives the cap (spawn pass N+1 vs.
+escalate at `N ≥ cap`) and renders the marker. The loop moves from the reviewer prompt
+into the Reactor; between passes the Issue returns to `ready-for-review` and the Reactor
+re-picks it up (no new status). See the full resolved design under "Show the AI-review
+iteration count" above.
 
 This is a meaningful change to the review model (ADR 0005 territory — the review
-reactor), not a prompt tweak; it deserves its own design pass on the review loop's
-shape if pursued.
+reactor), not a prompt tweak; the combined design above is that design pass.
+
+### Overseer owns the review merge + terminal status write (not the agent)
+
+**Motivated by a real dogfood failure (2026-06-17):** Issue 002 of the
+`reviewer-iteration-count` PRD got **wedged in `in-review`**. The reviewer agent ran
+`/code-review`, found nothing, committed — and then simply *stopped*, never running the
+two terminal steps the prompt instructs: merge the worktree branch into the feature
+branch and write `status: done`. The work sat committed on the branch, the merge was
+conflict-free, no deviation was recorded — a textbook clean exit — yet the Issue stayed
+`in-review` forever and had to be finished by hand (`overseer-merge`).
+
+The root cause is structural, not a flaky run. Overseer flips an Issue
+`ready-for-review → in-review` *before* spawning (flip-before-spawn is the idempotency
+lock, [ADR 0002](./adr/0002-agents-write-the-root-viewer-stays-readonly.md)), and from
+that point **the agent is the only thing that ever writes the terminal status** — Overseer
+never merges or sets `done` itself. The Reactor only re-spawns reviewers for
+`ready-for-review` Issues, so once an Issue is `in-review` the Reactor never touches it
+again. Result: a reviewer that dies, runs out of turns, or just stops after reviewing but
+before the merge+`done` hop leaves the Issue **permanently stuck with no retry and no
+board signal that anything is wrong**. (The liveness Orphan verdict only fires for
+`in-progress`/`in-review` *with a recorded handle*; even then it tells you the agent is
+gone, not that the merge it should have done is undone.)
+
+The idea: **move the merge and the terminal status write off the agent and into
+Overseer.** The pass agent reports a *verdict* — clean / findings-fixed / deviation /
+conflict — and Overseer performs the merge and writes `done` (or `human-review` with the
+reason). This kills the whole class of "agent reviewed but never finished" bugs at the
+source: the terminal transition becomes a deterministic, Overseer-owned step that either
+happens or visibly fails, never silently half-completes.
+
+This is the same direction as
+[ADR 0018](./adr/0018-reactor-owns-the-review-loop-not-the-agent.md) (the Reactor owns the
+review *loop*) taken one step further — note that **0018 as written does *not* fix this**:
+even under per-pass spawns, the *clean exit* (merge + `done`) is still the agent's job, so
+a pass agent that stops before the merge wedges identically.
+
+**This is a deliberate follow-up *to* 0018, not part of it.** 0018 is in flight; the two
+are separable axes — 0018 decides *who drives the passes* (the Reactor), this decides *who
+writes the terminal state* (Overseer). Bundling them would let the harder verdict-handoff
+design (below) block the loop rework that already works, and 0018 doesn't make this any
+harder to add afterward (same review edge). At the observed ~1/35 failure rate it does not
+justify halting in-flight work — so let 0018 land single-pass-prompt + Reactor-cap as
+scoped, then pick this up as its own slice. (Cheap interim while it waits: a detection
+backstop that surfaces a stalled `in-review` — dead handle, no terminal status — on the
+board, so the next occurrence is *visible in seconds* instead of found by luck, reusing the
+existing Orphan machinery. That converts the failure from silent-wedge to obvious-card for
+a fraction of the risk of the full inversion.)
+
+Open questions:
+
+- **How does the agent report the verdict without writing the Issue?** The whole point is
+  that the agent stops *short* of the terminal write. Options: a tiny verdict artifact in
+  the worktree the Reactor reads, the agent's exit/output parsed by Overseer, or
+  reusing the sidecar (but that reintroduces the "agent writes `agents.json`" tension
+  [ADR 0008](./adr/0008-liveness-via-claude-agents-handle-sidecar.md) forbids). The
+  verdict must be unforgeable enough that Overseer doesn't merge on a half-finished run.
+- **Who runs `git merge`?** Today the agent runs it in the repo. Moving it to Overseer
+  gives the read-only viewer its *first outward git write* to a repo (distinct from the
+  root-write contract) — but the Reactor already owns a `git` seam for the implementor
+  edge, so this extends an existing seam rather than inventing one. The conflict→abort→
+  `human-review` path moves with it.
+- **Interaction with the failed-set / idempotency lock.** If Overseer owns the merge, a
+  clean verdict that fails to merge (conflict) is *Overseer's* rollback to `human-review`,
+  not the agent's — cleaner, since it's the same actor that flipped the lock.
+- **A stalled-`in-review` reaper as a cheaper interim?** Short of the full inversion, a
+  reaper that detects an `in-review` Issue whose handle is dead and rolls it back to
+  `ready-for-review` would unstick the symptom — but it risks a double-merge if the agent
+  *had* started merging, and re-runs a clean review for nothing. The verdict-handoff above
+  is the real fix; the reaper is a band-aid worth naming so it's a conscious rejection,
+  not an oversight.
+
+Pairs with "Show the AI-review iteration count" and "Use a fresh reviewer agent for each
+review iteration" (the ADR 0018 cluster) — all three reshape who-owns-what across the
+review loop, and this one closes the gap those leave open.
 
 ### Auto-resolve trivial merge conflicts instead of always escalating
 
