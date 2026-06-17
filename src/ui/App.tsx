@@ -338,12 +338,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   const hintCtx = computeBindContext({
     selectedPrd,
     selectedIssue: nav.level === "issues" ? selectedIssue : undefined,
-    // The hints' `dispatchable` comes from the side-effect-free peek above; the
-    // frontier entries themselves are only needed by the keypress `d` action, so
-    // the hint context stands on a synthetic single-spawn frontier when dispatchable
-    // and an empty one otherwise — `computeBindContext` reads only the presence of a
-    // spawn candidate.
-    frontier: dispatchable ? DISPATCHABLE_SENTINEL : [],
+    // The hints' `dispatchable` comes from the side-effect-free peek above. The
+    // frontier *entries* are only needed by the keypress `d` action, so the hint
+    // context passes the boolean directly rather than the full frontier (the
+    // matcher path passes `frontier` instead, since `d` there must dispatch it).
+    dispatchable,
   });
   const hints = hintsFor(nav.level, hintCtx);
 
@@ -791,19 +790,6 @@ const ACTIVITY_INDICATOR: Record<
   idle: { text: "… idle", dim: true },
   "at-rest": { text: "□ at-rest", dim: true },
 };
-
-/**
- * A non-empty frontier carrying a single `spawn` entry, fed to
- * {@link computeBindContext} when the dispatcher's side-effect-free
- * {@link Dispatcher.hasDispatchable} peek reports the selected PRD has dispatchable
- * work. `computeBindContext` reads only *whether* a spawn candidate is present, so a
- * one-entry sentinel is enough to flip `dispatchable` on without the App re-reading
- * the real (full) frontier purely to render the hints — the actual frontier the `d`
- * action needs is still read by the keypress path. Frozen so it can never be mutated.
- */
-const DISPATCHABLE_SENTINEL: readonly FrontierEntry[] = Object.freeze([
-  { issue: { id: "—" } as unknown as FrontierEntry["issue"], classification: "spawn" },
-]);
 
 /**
  * The persistent board status line: the auto-run indicator and the reactor

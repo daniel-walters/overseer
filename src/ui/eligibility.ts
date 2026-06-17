@@ -30,8 +30,21 @@ export interface BindInputs {
   readonly selectedPrd: PRD | undefined;
   /** The selected Issue card (only when zoomed), or `undefined`. */
   readonly selectedIssue: Issue | undefined;
-  /** The selected PRD's dispatch frontier, reused not re-derived. */
-  readonly frontier: readonly FrontierEntry[];
+  /**
+   * The selected PRD's dispatch frontier, reused not re-derived. The matcher path
+   * passes it because a `d` press also needs the frontier *entries* to dispatch;
+   * `dispatchable` is then derived from it (a `spawn` candidate present?).
+   */
+  readonly frontier?: readonly FrontierEntry[];
+  /**
+   * Whether the selected PRD has dispatchable work, supplied directly when the
+   * caller has already computed just that fact and has no frontier entries to
+   * spare — the status-line hints read the dispatcher's side-effect-free
+   * `hasDispatchable` peek (ADR 0017) rather than the full {@link frontier}, so
+   * they pass the boolean here. Takes precedence over deriving from `frontier`;
+   * exactly one of the two is supplied.
+   */
+  readonly dispatchable?: boolean;
 }
 
 /**
@@ -79,9 +92,11 @@ export interface BindContext {
  * access — so each key's gating is unit-tested as constructed-input/expected-flag.
  */
 export function computeBindContext(inputs: BindInputs): BindContext {
-  const { selectedPrd, selectedIssue, frontier } = inputs;
+  const { selectedPrd, selectedIssue, frontier, dispatchable } = inputs;
   return {
-    dispatchable: frontier.some((e) => e.classification === "spawn"),
+    dispatchable:
+      dispatchable ??
+      (frontier?.some((e) => e.classification === "spawn") ?? false),
     prdDone: selectedPrd?.lane === "done",
     prdHasPr: selectedPrd?.linkedPr !== undefined,
     issueReadyForReview: selectedIssue?.lane === "ready-for-review",
