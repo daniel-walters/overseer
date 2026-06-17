@@ -76,6 +76,24 @@ export function createDispatcher(
       }
     },
 
+    hasDispatchable(prdId: string): boolean {
+      // The side-effect-free peek the status-line hints read each render to gate
+      // `d` (ADR 0017): whether the PRD's frontier holds ≥1 spawn candidate.
+      // Deliberately does NOT touch `lastRead` — unlike `readFrontier`, it never
+      // re-points the cached view a pending `d` confirm acts on, so the hints can
+      // call it every render without clobbering an open dispatch preview's plan. A
+      // vanished/unreadable PRD reports no dispatchable work (total, like
+      // `readFrontier`), so the hint simply hides `d` rather than throwing out of
+      // the Ink render and crashing the board.
+      try {
+        return computeFrontier(readDispatchView(join(root, prdId))).some(
+          (e) => e.classification === "spawn",
+        );
+      } catch {
+        return false;
+      }
+    },
+
     dispatch(frontier: readonly FrontierEntry[]): void {
       if (lastRead === undefined) return; // nothing was read ⇒ nothing to dispatch
       const { prdDir, view } = lastRead;

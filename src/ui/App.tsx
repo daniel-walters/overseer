@@ -1,4 +1,4 @@
-import React, { useReducer, useState } from "react";
+import React, { useMemo, useReducer, useRef, useState } from "react";
 import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "ink";
 import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
@@ -12,7 +12,8 @@ import type { CardDetail } from "./detailReader.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
-import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
+import { matchKeybind, hintsFor, hintLabel, type KeybindHandlers } from "./keybinds.js";
+import { computeBindContext } from "./eligibility.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
 import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
@@ -38,12 +39,18 @@ import type { ReactorActivity } from "../reactor/reactorActivity.js";
  * confirm flow is testable without filesystem reads or real agents.
  *
  * - `readFrontier` reads the selected PRD's dispatch view and computes its
- *   frontier for the preview (and, on confirm, the flip+spawn to act on).
+ *   frontier for the preview (and, on confirm, the flip+spawn to act on). It
+ *   caches the view it read so a confirm can build prompts from it.
+ * - `hasDispatchable` is the **side-effect-free** peek the status-line hints read
+ *   each render to gate `d` (ADR 0017): does the PRD's frontier hold ≥1 spawn
+ *   candidate? Unlike `readFrontier` it caches nothing, so calling it on every
+ *   render never clobbers the frozen capture a pending `d` confirm relies on.
  * - `dispatch` runs the dispatch over that frontier (flip each spawn candidate
  *   to in-progress, then spawn it).
  */
 export interface Dispatcher {
   readonly readFrontier: (prdId: string) => readonly FrontierEntry[];
+  readonly hasDispatchable: (prdId: string) => boolean;
   readonly dispatch: (frontier: readonly FrontierEntry[]) => void;
 }
 
@@ -281,6 +288,13 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // recovery from the silent "nothing to recover" no-op (the agent wasn't
   // actually dead, or the Issue vanished). Cleared on the next keypress.
   const [notice, setNotice] = useState<string | undefined>(undefined);
+  // The selected PRD's dispatch frontier for the *current* keypress, read once in
+  // the input handler to gate `d`'s eligibility (ADR 0017) and then reused by the
+  // `dispatch` handler to seed the preview — so a `d` press reads the frontier
+  // exactly once, not once for the gate and again to open the modal. Set on every
+  // board-level keypress just before the matched action runs; the only consumer is
+  // the synchronous `dispatch` action it gates, so there is no stale-read window.
+  const frontierRef = useRef<readonly FrontierEntry[]>([]);
 
   // Resolve the stored grid coordinate against the live board into the card it
   // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
@@ -298,6 +312,46 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // The lane shape for the level that currently owns input — what a `move`
   // carries so the pure reducer knows the grid's geometry.
   const activeShape = nav.level === "board" ? boardShape : issueShape;
+
+  // The status-line hints for the current level + selection (ADR 0017): the bottom
+  // bar renders only the keys eligible *right now*, from the same registry +
+  // `eligible` predicate the matcher gates on — never a hardcoded list, and each
+  // one's label via `hintLabel` so `d`'s context-aware "dispatch"/"resume" override
+  // surfaces here (and only here — `?` help keeps the static label). The hints
+  // recompute on every render, so they track both a selection move (a new
+  // `selectedPrd`/`selectedIssue`) and a card-state change under the selection (a
+  // re-scan that re-derives the lane, the Linked-PR overlay, or the liveness verdict).
+  //
+  // `d`'s `dispatchable` flag is the one fact not already on the card: it needs the
+  // PRD's frontier. The hints read it via `hasDispatchable` — the dispatcher's
+  // *side-effect-free* peek — so, unlike the keypress `readFrontier`, reading it each
+  // render never clobbers the frozen capture a pending `d` confirm relies on. It is
+  // only read at the board level with a PRD selected (the only place `d` can light
+  // up), memoized on the selected PRD id + the board identity so a re-scan refreshes
+  // it but an unrelated re-render (a resize, a modal toggle) does not re-touch the
+  // seam. Every other flag is a pure read off the already-derived selected cards.
+  const dispatchable = useMemo(
+    () =>
+      nav.level === "board" && dispatcher !== undefined && selectedPrd !== undefined
+        ? dispatcher.hasDispatchable(selectedPrd.id)
+        : false,
+    [nav.level, dispatcher, selectedPrd, board],
+  );
+  const hintCtx = computeBindContext({
+    selectedPrd,
+    selectedIssue: nav.level === "issues" ? selectedIssue : undefined,
+    // The hints' `dispatchable` comes from the side-effect-free peek above. The
+    // frontier *entries* are only needed by the keypress `d` action, so the hint
+    // context passes the boolean directly rather than the full frontier (the
+    // matcher path passes `frontier` instead, since `d` there must dispatch it).
+    dispatchable,
+  });
+  // Pre-render each hint to its bar text here, where `hintCtx` is in scope, so the
+  // context-aware `hintLabel` (d's dispatch/resume override) is resolved against the
+  // live selection before the strings reach the seam-free StatusLine.
+  const hintTexts = hintsFor(nav.level, hintCtx).map(
+    (b) => `${b.key} ${hintLabel(b, hintCtx)}`,
+  );
 
   // The detail modal's body region height and its current scroll window. The
   // viewport is the terminal height minus the modal's fixed chrome (title, hints,
@@ -325,7 +379,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         setModal({
           kind: "dispatch",
           prdTitle: selectedPrd.title,
-          frontier: dispatcher.readFrontier(selectedPrd.id),
+          // Reuse the frontier the input handler already read to gate `d`'s
+          // eligibility this keypress, rather than reading it a second time —
+          // `dispatcher.readFrontier` cached its `DispatchView` on that read, so a
+          // confirm still acts on the same plan.
+          frontier: frontierRef.current,
         });
         dispatch({ type: "open-preview" });
       }
@@ -376,21 +434,15 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       }
     },
     goToPr: () => {
-      // Board-level (the registry gates the level): the Linked PR overlay lives
-      // on the PRD card. Gated further on the card's own `linkedPr` overlay — the
-      // same live-query result the marker renders (open *or* merged, so a merged
-      // PR's discussion stays reachable). It introduces no new `gh` query and no
-      // outward write: it only reads the overlay's `url` and hands it to the
-      // browser seam.
-      if (!urlOpener || !selectedPrd) return;
-      const linkedPr = selectedPrd.linkedPr;
-      if (linkedPr) {
-        urlOpener.open(linkedPr.url);
-      } else {
-        // No PR to open — never an error, just a clear status-line flash so the
-        // keypress isn't indistinguishable from `g` being broken.
-        setNotice(`${selectedPrd.title} has no PR to open.`);
-      }
+      // The registry now gates `g` on eligibility (a `done` PRD *with* a Linked PR,
+      // ADR 0017), so by the time this fires the overlay is present and the handler
+      // just reads its `url` (open *or* merged, so a merged PR's discussion stays
+      // reachable) and hands it to the browser seam — no new `gh` query, no write.
+      // The overlay guard stays as a defence-in-depth backstop against a card that
+      // raced a re-scan; without a PR the key is simply inert (no misleading flash —
+      // on a no-PR `done` PRD `P` is the eligible key, not `g`).
+      if (!urlOpener || !selectedPrd?.linkedPr) return;
+      urlOpener.open(selectedPrd.linkedPr.url);
     },
     openPr: () => {
       // Open PR, board-level only (the registry gates the level). Gated further on
@@ -534,10 +586,29 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     // keypress off the central registry rather than an inline `if (input === …)`
     // chain: find the binding for this key at the current level and run its
     // action against the `handlers` bag above. The registry owns the key→action
-    // map and the level gate (board / issues / both); those handlers own the
-    // App-state gates the registry can't see — a seam being wired, an Issue being
-    // selected, a card's liveness verdict — and stay no-ops when those aren't met.
-    const bind = matchKeybind({ input, key }, nav.level);
+    // map, the level gate (board / issues / both), and — via the BindContext —
+    // the per-binding *eligibility* gate (ADR 0017): an ineligible key matches
+    // nothing and is genuinely inert. The context is computed in the App from the
+    // facts it already reads (the selected PRD's dispatch frontier, the selected
+    // card's liveness and Linked-PR overlays); the registry routes it and never
+    // reaches a seam itself. The handlers' own App-state guards remain as a
+    // defence-in-depth backstop, but the matcher gate is now the primary contract.
+    // The frontier gates exactly one binding — board-level `d` — so read it only
+    // when `d` is the key actually pressed at the board level. Every other key's
+    // eligibility ignores `dispatchable`, so reading the frontier for them would be
+    // a wasted seam touch (and would surprise tests that assert an unrelated key
+    // reaches no dispatch seam). The single read is stashed for the `dispatch`
+    // action to reuse, so a `d` press reads the frontier exactly once.
+    frontierRef.current =
+      dispatcher && selectedPrd && nav.level === "board" && input === "d"
+        ? dispatcher.readFrontier(selectedPrd.id)
+        : [];
+    const ctx = computeBindContext({
+      selectedPrd,
+      selectedIssue: nav.level === "issues" ? selectedIssue : undefined,
+      frontier: frontierRef.current,
+    });
+    const bind = matchKeybind({ input, key }, nav.level, ctx);
     bind?.action(handlers, { input, key });
   });
 
@@ -702,7 +773,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         </Box>
       )}
       <Box flexShrink={0}>
-        <StatusLine autoRun={autoRun} activity={activity} />
+        <StatusLine hints={hintTexts} autoRun={autoRun} activity={activity} />
       </Box>
     </Box>
   );
@@ -728,21 +799,6 @@ const ACTIVITY_INDICATOR: Record<
 };
 
 /**
- * The persistent bottom-row keybind hints, surfacing the primary gestures so they
- * are discoverable without opening `?`. The `d` dispatch ignition leads, followed
- * by its siblings and the `? help` pointer to the full map. A hardcoded copy of
- * the bindings the {@link App} input handler implements — a central keybind
- * registry that would feed both this and {@link HelpModal} is a logged follow-up
- * (docs/ideas.md), and this Issue does not depend on it.
- */
-const KEY_HINTS: readonly string[] = [
-  "d dispatch",
-  "r review",
-  "P open PR",
-  "? help",
-];
-
-/**
  * The persistent board status line: the auto-run indicator and the reactor
  * activity signal on the left, the keybind hints pushed to the right by a
  * {@link Spacer}, with explicit spacing between the two so they read as distinct
@@ -756,14 +812,21 @@ const KEY_HINTS: readonly string[] = [
  * board-only tests (their halves of the line simply empty), derived from
  * in-memory Reactor state, never written to disk (ADR 0002).
  *
- * The hints, by contrast, are *always* shown regardless of either seam: they are
- * what make the keybinds discoverable, so they must not hinge on a Reactor being
- * present. "auto-run"/"working"/"idle"/"at-rest" — never "reactor".
+ * The `hints` are the eligibility-filtered keybinds for the current selection
+ * (ADR 0017), each already rendered to its `key + label` bar text in the App — where
+ * the live BindContext is in scope, so `d`'s context-aware dispatch/resume
+ * label is resolved before it reaches here. The App derives them from the single
+ * {@link KEYBINDS} source — never a hardcoded list — so the bar offers exactly the
+ * keys actionable on the selected card, plus the always-on `?`. They are *always*
+ * rendered regardless of the Reactor seams: they are what make the keybinds
+ * discoverable. "auto-run"/"working"/"idle"/"at-rest" — never "reactor".
  */
 function StatusLine({
+  hints,
   autoRun,
   activity,
 }: {
+  hints: readonly string[];
   autoRun?: AutoRun;
   activity?: ReactorActivity;
 }) {
@@ -785,7 +848,7 @@ function StatusLine({
       {/* A fixed gap guarantees separation from the auto-run indicator even when
           the content-sized bar leaves the Spacer with nothing to push apart. */}
       {autoRun ? <Text>{"   "}</Text> : null}
-      <Text dimColor>{KEY_HINTS.join("  ·  ")}</Text>
+      <Text dimColor>{hints.join("  ·  ")}</Text>
     </Box>
   );
 }

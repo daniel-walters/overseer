@@ -171,12 +171,20 @@ describe("App dispatch", () => {
     ];
   }
 
-  /** A dispatcher whose two seams are spies, with a sensible default frontier. */
+  /** A dispatcher whose seams are spies, with a sensible default frontier. */
   function spyDispatcher(
     overrides: Partial<{ readFrontier: (id: string) => readonly FrontierEntry[] }> = {},
   ) {
+    const frontierFor = overrides.readFrontier ?? fakeFrontier;
     return {
-      readFrontier: vi.fn(overrides.readFrontier ?? fakeFrontier),
+      readFrontier: vi.fn(frontierFor),
+      // The hints' side-effect-free peek mirrors the frontier the matcher reads, so
+      // a fixture that is dispatchable for `d` is also dispatchable for the bar. A
+      // *separate* spy from `readFrontier` so the hints' per-render peek never
+      // inflates the strict `readFrontier` call counts the keypress tests assert.
+      hasDispatchable: vi.fn((id: string) =>
+        frontierFor(id).some((e) => e.classification === "spawn"),
+      ),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
   }
@@ -205,7 +213,7 @@ describe("App dispatch", () => {
     await tick();
 
     expect(dispatcher.readFrontier).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch AuthPRD");
   });
 
   it("suppresses navigation while the preview is open", async () => {
@@ -225,7 +233,7 @@ describe("App dispatch", () => {
     // The board selection never moved while the modal was up.
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("AuthPRD");
-    expect(frame).not.toContain("Dispatch ");
+    expect(frame).not.toContain("Dispatch AuthPRD");
   });
 
   it("runs the dispatch on Enter, then closes the modal", async () => {
@@ -239,7 +247,7 @@ describe("App dispatch", () => {
 
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(dispatcher.dispatch).toHaveBeenCalledWith(fakeFrontier("auth"));
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch AuthPRD");
   });
 
   it("runs the dispatch on y as well as Enter", async () => {
@@ -266,7 +274,7 @@ describe("App dispatch", () => {
     expect(dispatcher.dispatch).not.toHaveBeenCalled();
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("AuthPRD");
-    expect(frame).not.toContain("Dispatch ");
+    expect(frame).not.toContain("Dispatch AuthPRD");
   });
 
   it("quits on q from the modal without dispatching", async () => {
@@ -292,7 +300,7 @@ describe("App dispatch", () => {
     stdin.write("d");
     await tick();
 
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch ");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch AuthPRD");
   });
 
   it("keeps the modal up and labelled from the open-time capture if a re-scan removes its PRD", async () => {
@@ -340,6 +348,23 @@ describe("App review", () => {
 
   const prdContext = { prdTitle: "AuthPRD", prdBody: "auth", featureBranch: "auth" };
 
+  // `r` is eligible only on a `ready-for-review` Issue (ADR 0017), so the
+  // review-flow tests select one: AuthPRD's first Issue sits in that lane (which
+  // derives the PRD to `in-progress`). A single PRD keeps it the default-selected
+  // card regardless of which board column its derived lane lands in. The reviewer's
+  // *deeper* eligibility (the skip-reason path) is a separate layer exercised
+  // through the `spyReviewer` response, independent of this card lane.
+  const reviewBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [{ id: "010-login", title: "Login", lane: "ready-for-review" }],
+      },
+    ],
+  };
+
   function reviewable(id: string): ReviewPreviewData {
     return { issue: di(id), eligibility: { reviewable: true }, ...prdContext };
   }
@@ -366,7 +391,7 @@ describe("App review", () => {
 
   it("opens a review preview on r at the Issue level for the selected Issue", async () => {
     const reviewer = spyReviewer();
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER); // zoom into AuthPRD's Issues
     await tick();
@@ -394,7 +419,7 @@ describe("App review", () => {
 
   it("shows a skip reason and spawns nothing for an ineligible Issue", async () => {
     const reviewer = spyReviewer((_p, id) => ineligible(id, "status is \"in-progress\", not ready-for-review"));
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER);
     await tick();
@@ -412,7 +437,7 @@ describe("App review", () => {
 
   it("runs the review on Enter for an eligible Issue, then closes the modal", async () => {
     const reviewer = spyReviewer();
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER); // zoom in
     await tick();
@@ -428,7 +453,7 @@ describe("App review", () => {
 
   it("cancels the review on Esc without spawning", async () => {
     const reviewer = spyReviewer();
-    const { stdin, lastFrame } = render(<App board={board} reviewer={reviewer} />);
+    const { stdin, lastFrame } = render(<App board={reviewBoard} reviewer={reviewer} />);
 
     stdin.write(ENTER);
     await tick();
@@ -533,7 +558,7 @@ describe("App re-dispatch (R on an orphan)", () => {
 
     expect(rollback.rollback).toHaveBeenCalledTimes(1);
     expect(rollback.rollback).toHaveBeenCalledWith(preview("010-login"));
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch ");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch 010-login");
     // A real recovery surfaces a confirmation notice on the status line.
     expect(stripAnsi(lastFrame() ?? "")).toContain("Rolled 010-login back");
   });
@@ -556,7 +581,7 @@ describe("App re-dispatch (R on an orphan)", () => {
 
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("already advanced");
-    expect(frame).not.toContain("Re-dispatch"); // modal closed
+    expect(frame).not.toContain("Re-dispatch 010-login"); // modal closed
   });
 
   it("clears the rollback notice on the next keypress", async () => {
@@ -592,7 +617,7 @@ describe("App re-dispatch (R on an orphan)", () => {
     await tick();
 
     expect(rollback.rollback).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch 010-login");
   });
 
   it("is a no-op on R for a non-orphan card", async () => {
@@ -609,7 +634,7 @@ describe("App re-dispatch (R on an orphan)", () => {
     await tick();
 
     expect(rollback.readRollback).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch 010-login");
   });
 
   it("does nothing on R at the board level (recovery is Issue-level only)", async () => {
@@ -622,7 +647,7 @@ describe("App re-dispatch (R on an orphan)", () => {
     await tick();
 
     expect(rollback.readRollback).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch 010-login");
   });
 
   it("does nothing on R when no rollback seam is wired", async () => {
@@ -633,7 +658,7 @@ describe("App re-dispatch (R on an orphan)", () => {
     stdin.write("R");
     await tick();
 
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Re-dispatch 010-login");
   });
 });
 
@@ -818,7 +843,8 @@ describe("App kill (K on a live card)", () => {
     await tick();
 
     expect(killer.readKill).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop ");
+    // The kill preview for the (orphaned) selected card never opens.
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop 010-login");
   });
 
   it("does nothing on K at the board level (kill is Issue-level only)", async () => {
@@ -841,7 +867,9 @@ describe("App kill (K on a live card)", () => {
     stdin.write("K");
     await tick();
 
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop ");
+    // No killer seam ⇒ the kill preview for the live card never opens (the bar may
+    // still offer the K hint, which is the registry label, not this preview header).
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop 020-oauth");
   });
 });
 
@@ -903,7 +931,11 @@ describe("App go to PR (g on a done PRD)", () => {
     expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
   });
 
-  it("is a no-op (no open, no error) on a PRD with no linked PR, flashing a 'no PR' notice", async () => {
+  it("is genuinely inert on a done PRD with no linked PR (g unbound there — P owns that card)", async () => {
+    // Eligibility makes `g` mutually exclusive with `P`: on a `done` PRD with no
+    // Linked PR, `g` is not bound at all (ADR 0017), so pressing it does nothing —
+    // no open, and no 'no PR' flash (that handler no-op guard is now the matcher's
+    // inertness; `P` is the key that lights up on a no-PR done PRD).
     const opener = spyOpener();
     const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
 
@@ -913,7 +945,7 @@ describe("App go to PR (g on a done PRD)", () => {
     await tick();
 
     expect(opener.open).not.toHaveBeenCalled();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("no PR");
   });
 
   it("does nothing on g at the Issue level (go to PR is board-level only)", async () => {
@@ -939,20 +971,6 @@ describe("App go to PR (g on a done PRD)", () => {
     expect(stripAnsi(lastFrame() ?? "")).toContain("AuthPRD");
   });
 
-  it("clears the 'no PR' notice on the next keypress", async () => {
-    const opener = spyOpener();
-    const { stdin, lastFrame } = render(<App board={prBoard} urlOpener={opener} />);
-
-    stdin.write(ARROW_DOWN); // BillPRD, no PR
-    await tick();
-    stdin.write("g"); // flashes the notice
-    await tick();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("no PR");
-
-    stdin.write("k"); // any keypress dismisses the one-shot notice
-    await tick();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("no PR");
-  });
 });
 
 
@@ -1500,7 +1518,7 @@ describe("App full screen", () => {
     const frame = stripAnsi(lastFrame() ?? "");
 
     expect(frame).toContain("auto-run on");
-    expect(frame).toContain("? help");
+    expect(frame).toContain("? Show this help");
   });
 });
 
@@ -1556,7 +1574,13 @@ describe("App help", () => {
 
   it("ignores ? while a dispatch preview is open (no modal stacking)", async () => {
     const dispatcher = {
-      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      // A spawn candidate makes the selected PRD dispatchable, so `d` is eligible
+      // and opens the preview — the modal these tests then prove swallows the next key.
+      readFrontier: vi.fn(
+        () =>
+          [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
+      ),
+      hasDispatchable: vi.fn(() => true),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
     const { stdin, lastFrame } = render(
@@ -1636,7 +1660,7 @@ describe("App help", () => {
     // The hint's discoverability must not depend on the auto-run seam — it shows
     // whenever the board is up, at both levels (the status line is shared).
     const { lastFrame } = render(<App board={board} />);
-    expect(stripAnsi(lastFrame() ?? "")).toContain("? help");
+    expect(stripAnsi(lastFrame() ?? "")).toContain("? Show this help");
   });
 
   it("overlays the help on the board (board still visible) rather than replacing it", async () => {
@@ -1669,48 +1693,210 @@ describe("App help", () => {
   });
 });
 
-describe("App bottom-row keybind hints", () => {
-  it("surfaces the d dispatch keybind as a persistent bottom-row hint, without opening help", () => {
-    // The primary ignition gesture must be discoverable on the board itself, not
-    // only behind `?`. The hint shows whenever the board is up.
-    const { lastFrame } = render(<App board={board} />);
-    const frame = stripAnsi(lastFrame() ?? "");
+describe("App bottom-row keybind hints — eligibility-driven (ADR 0017)", () => {
+  // The bottom bar no longer renders a hardcoded list: it renders the registry
+  // filtered through each binding's `eligible` predicate at the current level +
+  // selection (the same predicate the matcher gates on). So it shows *only* the
+  // keys actionable on the selected card — they appear and vanish as the selection
+  // moves and as a card's state changes underneath it. Each hint reads its `key`
+  // and registry `label` from the single source. `?` is always present.
 
-    // The bottom row carries the dispatch binding and its siblings — visible
-    // without ever opening the help modal.
-    expect(frame).toContain("d dispatch");
+  /** A dispatcher whose frontier presence is a spy, defaulting to dispatchable. */
+  function spyDispatcher(dispatchable = true) {
+    return {
+      readFrontier: vi.fn(() => []),
+      dispatch: vi.fn(),
+      hasDispatchable: vi.fn(() => dispatchable),
+    };
+  }
+
+  /** A done PRD with no PR, then a done PRD with an open PR. */
+  const doneBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "done",
+        issues: [{ id: "010-login", title: "Login", lane: "done" }],
+      },
+      {
+        id: "billing",
+        title: "BillPRD",
+        lane: "done",
+        issues: [{ id: "010-invoice", title: "Invoice", lane: "done" }],
+        linkedPr: { state: "open", url: "https://github.com/o/r/pull/7" },
+      },
+    ],
+  };
+
+  /** A single in-progress PRD (its frontier presence comes from the dispatcher). */
+  const inProgressBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          { id: "010-done", title: "Done", lane: "done" },
+          { id: "020-oauth", title: "OAuth", lane: "ready", readyFor: "agent" },
+        ],
+      },
+    ],
+  };
+
+  it("renders the hints from the registry, never the help modal, without opening help", () => {
+    const { lastFrame } = render(
+      <App board={inProgressBoard} dispatcher={spyDispatcher(true)} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    // The bottom bar surfaces the dispatch binding's key + registry label, and the
+    // always-on help pointer — without ever opening the modal. The board is
+    // in-progress, so `d`'s context-aware hint label reads "Resume a wave".
+    expect(frame).toContain("d");
+    expect(frame).toContain("Resume a wave");
+    expect(frame).toContain("? Show this help");
     expect(frame).not.toContain("Keybindings"); // help is not open
   });
 
-  it("includes the sibling review keybind in the bottom-row hint", () => {
-    const { lastFrame } = render(<App board={board} />);
+  it("shows P and X but not d or g on a done PRD with no PR", () => {
+    const { lastFrame } = render(<App board={doneBoard} />);
     const frame = stripAnsi(lastFrame() ?? "");
-    expect(frame).toContain("r review");
+    expect(frame).toContain("Open a PR for a done PRD"); // P
+    expect(frame).toContain("Delete a done PRD"); // X
+    expect(frame).not.toContain("Dispatch a wave"); // d hidden (not dispatchable)
+    expect(frame).not.toContain("Go to the selected PRD's PR"); // g hidden (no PR)
   });
 
-  it("keeps the bottom-row hints at the Issue level too", async () => {
-    const { stdin, lastFrame } = render(<App board={board} />);
+  it("shows go-to-PR and not Open-PR when the selection moves to a done PRD that has a PR", async () => {
+    const { stdin, lastFrame } = render(<App board={doneBoard} />);
 
-    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    // First card (AuthPRD, no PR) offers P, not g.
+    let frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Open a PR for a done PRD");
+    expect(frame).not.toContain("Go to the selected PRD's PR");
+
+    stdin.write(ARROW_DOWN); // move to BillPRD, which has an open PR
+    await tick();
+
+    // Moving the selection updates the hints to the new card's eligible keys.
+    frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Go to the selected PRD's PR"); // g
+    expect(frame).not.toContain("Open a PR for a done PRD"); // P gone
+  });
+
+  it("shows d (labelled 'resume') on an in-progress PRD with dispatchable frontier work", () => {
+    // On an in-progress PRD `d` re-dispatches newly-unblocked work — the manual
+    // resume crank — so its context-aware hint reads "Resume a wave", not "Dispatch".
+    const { lastFrame } = render(
+      <App board={inProgressBoard} dispatcher={spyDispatcher(true)} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Resume a wave");
+    expect(frame).not.toContain("Dispatch a wave");
+  });
+
+  it("labels d 'dispatch' on a backlog PRD with dispatchable frontier work (first ignition)", () => {
+    // The same key on a backlog PRD is first ignition, so its hint reads "Dispatch
+    // a wave" — the dispatch/resume wording keys off the selected PRD's lane.
+    const backlogBoard: Board = {
+      prds: [
+        {
+          id: "auth",
+          title: "AuthPRD",
+          lane: "backlog",
+          issues: [{ id: "010-login", title: "Login", lane: "ready", readyFor: "agent" }],
+        },
+      ],
+    };
+    const { lastFrame } = render(
+      <App board={backlogBoard} dispatcher={spyDispatcher(true)} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch a wave");
+    expect(frame).not.toContain("Resume a wave");
+  });
+
+  it("hides d entirely on a PRD whose frontier has no spawn candidate (empty wave never advertised)", () => {
+    const { lastFrame } = render(
+      <App board={inProgressBoard} dispatcher={spyDispatcher(false)} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    // Neither label surfaces: the binding is filtered out, not merely relabelled.
+    expect(frame).not.toContain("Resume a wave");
+    expect(frame).not.toContain("Dispatch a wave");
+  });
+
+  it("recomputes the hints when a card's state changes under the selection (PR opens)", async () => {
+    // No selection move: a re-scan flips the selected done PRD from no-PR to
+    // has-PR, and the bar must swap P for go-to-PR on its own.
+    const donePrd = {
+      id: "auth",
+      title: "AuthPRD",
+      lane: "done" as const,
+      issues: [{ id: "010-login", title: "Login", lane: "done" as const }],
+    };
+    const noPr: Board = { prds: [donePrd] };
+    const withPr: Board = {
+      prds: [
+        { ...donePrd, linkedPr: { state: "open", url: "https://github.com/o/r/pull/3" } },
+      ],
+    };
+    const { rerender, lastFrame } = render(<App board={noPr} />);
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Open a PR for a done PRD");
+
+    rerender(<App board={withPr} />); // a live re-scan finds the PR
     await tick();
 
     const frame = stripAnsi(lastFrame() ?? "");
-    expect(frame).toContain("d dispatch");
+    expect(frame).toContain("Go to the selected PRD's PR");
+    expect(frame).not.toContain("Open a PR for a done PRD");
+  });
+
+  it("offers the issue-level action keys only at the issue level, gated by state", async () => {
+    const liveBoard: Board = {
+      prds: [
+        {
+          id: "auth",
+          title: "AuthPRD",
+          lane: "in-progress",
+          issues: [
+            { id: "010-run", title: "Run", lane: "in-progress", liveness: "live" },
+          ],
+        },
+      ],
+    };
+    const { stdin, lastFrame } = render(<App board={liveBoard} />);
+
+    // At the board level, the issue-only keys are absent.
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop a live Issue's agent");
+
+    stdin.write(ENTER); // zoom into the Issues
+    await tick();
+
+    // The selected Issue is live, so K (kill) is offered.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Stop a live Issue's agent");
+  });
+
+  it("always keeps the ? help pointer regardless of selection", async () => {
+    // A backlog PRD with no dispatcher offers no action keys at all, but `?` stays.
+    const { stdin, lastFrame } = render(<App board={board} />);
+    expect(stripAnsi(lastFrame() ?? "")).toContain("? Show this help");
+
+    stdin.write(ENTER); // zoom in — still no eligible action keys, ? remains
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("? Show this help");
   });
 
   it("separates the auto-run indicator from the keybind hints with spacing", () => {
-    // The auto indicator and the `? help` hint used to render flush; they must
-    // read as distinct elements. With both on the bottom bar there is visible
-    // whitespace between the indicator text and the first hint.
+    // The auto indicator and the help hint must read as distinct elements: with
+    // both on the bar there is visible whitespace between them.
     const { lastFrame } = render(
       <App board={board} autoRun={{ enabled: true, toggle: () => {} }} />,
     );
     const frame = stripAnsi(lastFrame() ?? "");
     const barLine = frame.split("\n").find((l) => l.includes("auto-run on"));
     expect(barLine).toBeDefined();
-    // The indicator and the hints are not jammed together — there is whitespace
-    // between the end of "auto-run on" and the start of the keybind hints.
-    expect(barLine).toMatch(/auto-run on\s{2,}.*\? help/);
+    expect(barLine).toMatch(/auto-run on\s{2,}.*Show this help/);
   });
 });
 
@@ -1762,13 +1948,19 @@ describe("App auto-run", () => {
     );
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("auto-run on");
-    expect(frame).toContain("? help");
+    expect(frame).toContain("? Show this help");
   });
 
   it("ignores `a` while a modal is open", async () => {
     // A dispatcher whose read returns a frontier, so `d` opens a modal.
     const dispatcher = {
-      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      // A spawn candidate makes the selected PRD dispatchable, so `d` is eligible
+      // and opens the preview — the modal these tests then prove swallows the next key.
+      readFrontier: vi.fn(
+        () =>
+          [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
+      ),
+      hasDispatchable: vi.fn(() => true),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
     const autoRun = spyAutoRun();
@@ -1822,7 +2014,7 @@ describe("App reactor activity", () => {
     const frame = stripAnsi(lastFrame() ?? "");
     expect(frame).toContain("auto-run on");
     expect(frame).toContain("idle");
-    expect(frame).toContain("? help");
+    expect(frame).toContain("? Show this help");
   });
 
   it("shows no activity indicator when none is wired (board-only tests)", () => {
@@ -2067,7 +2259,13 @@ describe("App detail modal", () => {
 
   it("ignores v while a dispatch preview is open (at most one modal)", async () => {
     const dispatcher = {
-      readFrontier: vi.fn(() => [] as readonly FrontierEntry[]),
+      // A spawn candidate makes the selected PRD dispatchable, so `d` is eligible
+      // and opens the preview — the modal these tests then prove swallows the next key.
+      readFrontier: vi.fn(
+        () =>
+          [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
+      ),
+      hasDispatchable: vi.fn(() => true),
       dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
     };
     const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
