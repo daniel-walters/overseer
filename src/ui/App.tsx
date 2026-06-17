@@ -1,4 +1,4 @@
-import React, { useReducer, useState } from "react";
+import React, { useReducer, useRef, useState } from "react";
 import { Box, Spacer, Text, useApp, useInput, useWindowSize } from "ink";
 import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
@@ -13,6 +13,7 @@ import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
+import { computeBindContext } from "./eligibility.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
 import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
@@ -281,6 +282,13 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // recovery from the silent "nothing to recover" no-op (the agent wasn't
   // actually dead, or the Issue vanished). Cleared on the next keypress.
   const [notice, setNotice] = useState<string | undefined>(undefined);
+  // The selected PRD's dispatch frontier for the *current* keypress, read once in
+  // the input handler to gate `d`'s eligibility (ADR 0017) and then reused by the
+  // `dispatch` handler to seed the preview — so a `d` press reads the frontier
+  // exactly once, not once for the gate and again to open the modal. Set on every
+  // board-level keypress just before the matched action runs; the only consumer is
+  // the synchronous `dispatch` action it gates, so there is no stale-read window.
+  const frontierRef = useRef<readonly FrontierEntry[]>([]);
 
   // Resolve the stored grid coordinate against the live board into the card it
   // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
@@ -325,7 +333,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         setModal({
           kind: "dispatch",
           prdTitle: selectedPrd.title,
-          frontier: dispatcher.readFrontier(selectedPrd.id),
+          // Reuse the frontier the input handler already read to gate `d`'s
+          // eligibility this keypress, rather than reading it a second time —
+          // `dispatcher.readFrontier` cached its `DispatchView` on that read, so a
+          // confirm still acts on the same plan.
+          frontier: frontierRef.current,
         });
         dispatch({ type: "open-preview" });
       }
@@ -376,21 +388,15 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       }
     },
     goToPr: () => {
-      // Board-level (the registry gates the level): the Linked PR overlay lives
-      // on the PRD card. Gated further on the card's own `linkedPr` overlay — the
-      // same live-query result the marker renders (open *or* merged, so a merged
-      // PR's discussion stays reachable). It introduces no new `gh` query and no
-      // outward write: it only reads the overlay's `url` and hands it to the
-      // browser seam.
-      if (!urlOpener || !selectedPrd) return;
-      const linkedPr = selectedPrd.linkedPr;
-      if (linkedPr) {
-        urlOpener.open(linkedPr.url);
-      } else {
-        // No PR to open — never an error, just a clear status-line flash so the
-        // keypress isn't indistinguishable from `g` being broken.
-        setNotice(`${selectedPrd.title} has no PR to open.`);
-      }
+      // The registry now gates `g` on eligibility (a `done` PRD *with* a Linked PR,
+      // ADR 0017), so by the time this fires the overlay is present and the handler
+      // just reads its `url` (open *or* merged, so a merged PR's discussion stays
+      // reachable) and hands it to the browser seam — no new `gh` query, no write.
+      // The overlay guard stays as a defence-in-depth backstop against a card that
+      // raced a re-scan; without a PR the key is simply inert (no misleading flash —
+      // on a no-PR `done` PRD `P` is the eligible key, not `g`).
+      if (!urlOpener || !selectedPrd?.linkedPr) return;
+      urlOpener.open(selectedPrd.linkedPr.url);
     },
     openPr: () => {
       // Open PR, board-level only (the registry gates the level). Gated further on
@@ -534,10 +540,29 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     // keypress off the central registry rather than an inline `if (input === …)`
     // chain: find the binding for this key at the current level and run its
     // action against the `handlers` bag above. The registry owns the key→action
-    // map and the level gate (board / issues / both); those handlers own the
-    // App-state gates the registry can't see — a seam being wired, an Issue being
-    // selected, a card's liveness verdict — and stay no-ops when those aren't met.
-    const bind = matchKeybind({ input, key }, nav.level);
+    // map, the level gate (board / issues / both), and — via the BindContext —
+    // the per-binding *eligibility* gate (ADR 0017): an ineligible key matches
+    // nothing and is genuinely inert. The context is computed in the App from the
+    // facts it already reads (the selected PRD's dispatch frontier, the selected
+    // card's liveness and Linked-PR overlays); the registry routes it and never
+    // reaches a seam itself. The handlers' own App-state guards remain as a
+    // defence-in-depth backstop, but the matcher gate is now the primary contract.
+    // The frontier gates exactly one binding — board-level `d` — so read it only
+    // when `d` is the key actually pressed at the board level. Every other key's
+    // eligibility ignores `dispatchable`, so reading the frontier for them would be
+    // a wasted seam touch (and would surprise tests that assert an unrelated key
+    // reaches no dispatch seam). The single read is stashed for the `dispatch`
+    // action to reuse, so a `d` press reads the frontier exactly once.
+    frontierRef.current =
+      dispatcher && selectedPrd && nav.level === "board" && input === "d"
+        ? dispatcher.readFrontier(selectedPrd.id)
+        : [];
+    const ctx = computeBindContext({
+      selectedPrd,
+      selectedIssue: nav.level === "issues" ? selectedIssue : undefined,
+      frontier: frontierRef.current,
+    });
+    const bind = matchKeybind({ input, key }, nav.level, ctx);
     bind?.action(handlers, { input, key });
   });
 
