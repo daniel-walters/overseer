@@ -90,6 +90,19 @@ describe("HelpModal — the deliberate eligibility exception (ADR 0017)", () => 
     }
   });
 
+  it("shows d's static label and never its context-aware hint override", () => {
+    // `d` is the lone binding with a `labelFor` (dispatch vs resume by lane), but
+    // that override is for the status-line hints only (ADR 0017): help has no live
+    // selection to key a dynamic label off, so it keeps the static "Dispatch a
+    // wave" and must never surface the "Resume a wave" hint wording. Locks the
+    // help-vs-hints label asymmetry so a future change can't route `?` through
+    // `labelFor`.
+    const { lastFrame } = render(<HelpModal />);
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch a wave");
+    expect(frame).not.toContain("Resume a wave");
+  });
+
   it("renders each key's level context (board / issues / both)", () => {
     // The level tag is part of "where does this key work?" — a learning cue the
     // hints don't carry. Every registered level string must show somewhere.

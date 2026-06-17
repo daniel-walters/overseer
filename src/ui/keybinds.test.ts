@@ -3,6 +3,7 @@ import {
   KEYBINDS,
   matchKeybind,
   hintsFor,
+  hintLabel,
   type KeyPress,
   type KeybindHandlers,
 } from "./keybinds.js";
@@ -403,5 +404,41 @@ describe("hintsFor — the status-line subset, eligibility-filtered", () => {
     for (const k of ["h j k l / arrows", "Enter", "a", "q"]) {
       expect(keys).not.toContain(k);
     }
+  });
+});
+
+describe("hintLabel — d's context-aware dispatch/resume label (ADR 0017)", () => {
+  // `d` is the lone binding with a `labelFor(ctx)` override, consulted by the
+  // status-line hints only. Its hint reads "dispatch" on a backlog PRD (first
+  // ignition) and "resume" on an in-progress PRD (re-dispatching newly-unblocked
+  // work — the manual crank when auto-run is off). Every other binding keeps its
+  // plain static label. The `?` help map never consults `labelFor` (a separate
+  // completeness test locks that).
+
+  const d = KEYBINDS.find((b) => b.key === "d");
+  if (d === undefined) throw new Error("the d binding must exist");
+
+  it("reads 'dispatch' when the selected PRD's lane is backlog", () => {
+    expect(hintLabel(d, ctx({ prdLane: "backlog" })).toLowerCase()).toContain("dispatch");
+    expect(hintLabel(d, ctx({ prdLane: "backlog" })).toLowerCase()).not.toContain("resume");
+  });
+
+  it("reads 'resume' when the selected PRD's lane is in-progress", () => {
+    expect(hintLabel(d, ctx({ prdLane: "in-progress" })).toLowerCase()).toContain("resume");
+    expect(hintLabel(d, ctx({ prdLane: "in-progress" })).toLowerCase()).not.toContain("dispatch");
+  });
+
+  it("falls back to the static label for every binding without a labelFor", () => {
+    // Only `d` carries `labelFor`; the rest must resolve to their plain `label`
+    // regardless of context, so no other key gains a dynamic label.
+    for (const b of KEYBINDS) {
+      if (b.key === "d") continue;
+      expect(hintLabel(b, ctx())).toBe(b.label);
+    }
+  });
+
+  it("only the d binding defines a labelFor override", () => {
+    const withLabelFor = KEYBINDS.filter((b) => b.labelFor !== undefined);
+    expect(withLabelFor.map((b) => b.key)).toEqual(["d"]);
   });
 });

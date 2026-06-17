@@ -1750,9 +1750,10 @@ describe("App bottom-row keybind hints — eligibility-driven (ADR 0017)", () =>
     );
     const frame = stripAnsi(lastFrame() ?? "");
     // The bottom bar surfaces the dispatch binding's key + registry label, and the
-    // always-on help pointer — without ever opening the modal.
+    // always-on help pointer — without ever opening the modal. The board is
+    // in-progress, so `d`'s context-aware hint label reads "Resume a wave".
     expect(frame).toContain("d");
-    expect(frame).toContain("Dispatch a wave");
+    expect(frame).toContain("Resume a wave");
     expect(frame).toContain("? Show this help");
     expect(frame).not.toContain("Keybindings"); // help is not open
   });
@@ -1783,18 +1784,46 @@ describe("App bottom-row keybind hints — eligibility-driven (ADR 0017)", () =>
     expect(frame).not.toContain("Open a PR for a done PRD"); // P gone
   });
 
-  it("shows d (dispatch) on an in-progress PRD with dispatchable frontier work", () => {
+  it("shows d (labelled 'resume') on an in-progress PRD with dispatchable frontier work", () => {
+    // On an in-progress PRD `d` re-dispatches newly-unblocked work — the manual
+    // resume crank — so its context-aware hint reads "Resume a wave", not "Dispatch".
     const { lastFrame } = render(
       <App board={inProgressBoard} dispatcher={spyDispatcher(true)} />,
     );
-    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatch a wave");
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Resume a wave");
+    expect(frame).not.toContain("Dispatch a wave");
   });
 
-  it("hides d on a PRD whose frontier has no spawn candidate (empty wave never advertised)", () => {
+  it("labels d 'dispatch' on a backlog PRD with dispatchable frontier work (first ignition)", () => {
+    // The same key on a backlog PRD is first ignition, so its hint reads "Dispatch
+    // a wave" — the dispatch/resume wording keys off the selected PRD's lane.
+    const backlogBoard: Board = {
+      prds: [
+        {
+          id: "auth",
+          title: "AuthPRD",
+          lane: "backlog",
+          issues: [{ id: "010-login", title: "Login", lane: "ready", readyFor: "agent" }],
+        },
+      ],
+    };
+    const { lastFrame } = render(
+      <App board={backlogBoard} dispatcher={spyDispatcher(true)} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatch a wave");
+    expect(frame).not.toContain("Resume a wave");
+  });
+
+  it("hides d entirely on a PRD whose frontier has no spawn candidate (empty wave never advertised)", () => {
     const { lastFrame } = render(
       <App board={inProgressBoard} dispatcher={spyDispatcher(false)} />,
     );
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatch a wave");
+    const frame = stripAnsi(lastFrame() ?? "");
+    // Neither label surfaces: the binding is filtered out, not merely relabelled.
+    expect(frame).not.toContain("Resume a wave");
+    expect(frame).not.toContain("Dispatch a wave");
   });
 
   it("recomputes the hints when a card's state changes under the selection (PR opens)", async () => {
