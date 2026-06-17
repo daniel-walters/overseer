@@ -65,6 +65,50 @@ describe("eligibility — computeBindContext", () => {
     });
   });
 
+  describe("d — the direct `dispatchable` boolean (the hints' side-effect-free path)", () => {
+    // The status-line hints can't spare the full frontier — they pass the boolean
+    // from the dispatcher's `hasDispatchable` peek straight in. That direct branch
+    // is what the App's hints path uses in production, so lock it at the unit level.
+
+    it("takes the supplied `dispatchable: true` with no frontier", () => {
+      const ctx = computeBindContext({
+        selectedPrd: prd({ lane: "in-progress" }),
+        selectedIssue: undefined,
+        dispatchable: true,
+      });
+      expect(ctx.dispatchable).toBe(true);
+    });
+
+    it("takes the supplied `dispatchable: false` with no frontier", () => {
+      const ctx = computeBindContext({
+        selectedPrd: prd(),
+        selectedIssue: undefined,
+        dispatchable: false,
+      });
+      expect(ctx.dispatchable).toBe(false);
+    });
+
+    it("defaults to false when neither frontier nor dispatchable is supplied", () => {
+      const ctx = computeBindContext({
+        selectedPrd: prd(),
+        selectedIssue: undefined,
+      });
+      expect(ctx.dispatchable).toBe(false);
+    });
+
+    it("lets the explicit `dispatchable` win over the frontier when both are supplied", () => {
+      // The two callers each pass exactly one, but the precedence is part of the
+      // contract: the explicit boolean is authoritative.
+      const ctx = computeBindContext({
+        selectedPrd: prd(),
+        selectedIssue: undefined,
+        dispatchable: false,
+        frontier: [entry("spawn")],
+      });
+      expect(ctx.dispatchable).toBe(false);
+    });
+  });
+
   describe("P / go-to-PR — mutually exclusive on a done PRD", () => {
     it("no-PR done PRD ⇒ only P (prdDone && !prdHasPr)", () => {
       const ctx = computeBindContext({
