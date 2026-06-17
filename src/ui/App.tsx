@@ -240,6 +240,14 @@ interface AppProps {
    * is wired), where its half of the status line is simply empty.
    */
   activity?: ReactorActivity;
+  /**
+   * The configured AI-review cap (`config.review.cap`), threaded to the zoomed
+   * IssueBoard as the denominator of every `N/cap` review-pass marker (ADR 0018) —
+   * the same value the Reactor's cap check reads, so the marker and the loop share
+   * one source of truth. Wired in production from config; absent in board-only
+   * tests, where no card carries a review-pass count anyway.
+   */
+  reviewCap?: number;
 }
 
 /**
@@ -249,7 +257,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, autoRun, urlOpener, refresh, activity }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -737,6 +745,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         prd={selectedPrd}
         selected={issueSel}
         laneHeight={laneHeight(rows, "issues")}
+        reviewCap={reviewCap}
       />
     ) : (
       <BoardView

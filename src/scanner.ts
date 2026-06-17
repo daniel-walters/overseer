@@ -44,6 +44,24 @@ export type LivenessLookup = (issuePath: string) => Absence | undefined;
 export type SuppressedLookup = (path: string, edge: SpawnEdgeKind) => boolean;
 
 /**
+ * The review-pass overlay lookup (the Reviewer Iteration Count PRD, ADR 0018):
+ * the currently-running AI-review pass Overseer recorded for one Issue, keyed by
+ * its absolute path — the same `prdDir/filename` key the sidecar records (ADR
+ * 0008), the same key {@link LivenessLookup} uses. `undefined` when no pass is
+ * recorded (the spawn/record gap, a legacy entry, or simply not under review) —
+ * **absent ≠ `0`**, so the card never renders a false `0/cap` from a default.
+ *
+ * The third Issue-level overlay lookup, mirroring {@link LivenessLookup} and
+ * {@link SuppressedLookup}. Recomputed and passed in on each rebuild, never read
+ * from the Issue files (ADR 0002). The scanner consults it **only for a *live*
+ * `in-review` Issue** — the count is the healthy in-progress signal, so an
+ * orphaned (dead) agent's card shows the Orphan marker instead and an off-lane
+ * card carries no count. Total by construction — an empty sidecar answers
+ * `undefined` for every path and never throws out of the board rebuild.
+ */
+export type ReviewPassLookup = (path: string) => number | undefined;
+
+/**
  * The Linked PR overlay lookup ({@link LinkedPr}), keyed by a PRD's absolute
  * directory path. `undefined` when the PRD has no PR (no marker), and the only
  * value it ever returns is for a PR that is open or merged. The scanner consults
@@ -87,12 +105,20 @@ export type LinkedPrLookup = (prdDir: string) => LinkedPr | undefined;
  * `done` PRD, so a `gh` query fires solely for finished work. Like the other two
  * it is recomputed each rebuild and never read from disk; omitting it leaves every
  * PRD's `linkedPr` unset.
+ *
+ * `lookupReviewPass` is the Issue-level review-pass overlay (ADR 0018), consulted
+ * only for an Issue the liveness gate already resolved to a *live* `in-review`
+ * card: it joins the sidecar's recorded pass onto the Issue as the `N/cap` marker's
+ * numerator. Gated to live-and-in-review so an orphaned agent's card keeps its
+ * Orphan marker and an off-lane card carries no count. Recomputed each rebuild and
+ * never read from disk; omitting it leaves every Issue's `reviewPass` unset.
  */
 export function scanBoard(
   root: string,
   lookupLiveness?: LivenessLookup,
   lookupSuppressed?: SuppressedLookup,
   lookupPr?: LinkedPrLookup,
+  lookupReviewPass?: ReviewPassLookup,
 ): Board {
   const entries = readdirSync(root, { withFileTypes: true });
 
@@ -100,7 +126,14 @@ export function scanBoard(
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = join(root, entry.name);
-    const prd = scanPrd(dir, entry.name, lookupLiveness, lookupSuppressed, lookupPr);
+    const prd = scanPrd(
+      dir,
+      entry.name,
+      lookupLiveness,
+      lookupSuppressed,
+      lookupPr,
+      lookupReviewPass,
+    );
     if (prd) prds.push(prd);
   }
 
@@ -114,6 +147,7 @@ function scanPrd(
   lookupLiveness?: LivenessLookup,
   lookupSuppressed?: SuppressedLookup,
   lookupPr?: LinkedPrLookup,
+  lookupReviewPass?: ReviewPassLookup,
 ): PRD | null {
   const prdPath = join(dir, "prd.md");
 
@@ -126,7 +160,7 @@ function scanPrd(
 
   const { data } = safeMatter(raw);
   const title = readString(data, FIELD.title) ?? dirName;
-  const issues = scanIssues(dir, lookupLiveness, lookupSuppressed);
+  const issues = scanIssues(dir, lookupLiveness, lookupSuppressed, lookupReviewPass);
   // A PRD carries no stored status (ADR 0003); its lane is derived from its
   // Issues, collapsing to backlog / in-progress / done.
   const lane = derivePrdLane(issues);
@@ -164,6 +198,7 @@ function scanIssues(
   dir: string,
   lookupLiveness?: LivenessLookup,
   lookupSuppressed?: SuppressedLookup,
+  lookupReviewPass?: ReviewPassLookup,
 ): Issue[] {
   const files = readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isFile() && e.name.endsWith(".md") && e.name !== "prd.md")
@@ -171,7 +206,7 @@ function scanIssues(
     .sort();
 
   return files.map((name) =>
-    scanIssue(join(dir, name), name, lookupLiveness, lookupSuppressed),
+    scanIssue(join(dir, name), name, lookupLiveness, lookupSuppressed, lookupReviewPass),
   );
 }
 
@@ -184,6 +219,7 @@ function scanIssue(
   fileName: string,
   lookupLiveness?: LivenessLookup,
   lookupSuppressed?: SuppressedLookup,
+  lookupReviewPass?: ReviewPassLookup,
 ): Issue {
   const { data } = safeMatter(readFileSync(path, "utf8"));
   const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
@@ -217,7 +253,16 @@ function scanIssue(
     lookupSuppressed,
   );
 
-  if (lane !== "human-review") return withSuppressed;
+  // The review-pass overlay rides only on a *live* `in-review` card (ADR 0018) —
+  // the healthy in-progress signal — reusing the liveness verdict just computed
+  // rather than re-probing: an orphaned or unknown in-review agent keeps its
+  // liveness marker and shows no count, and an off-lane card is never even
+  // consulted. Applied after liveness because it gates on that verdict; an
+  // `in-review` card is never `human-review`, so the count survives the branch
+  // below untouched.
+  const withReviewPass = applyReviewPass(withSuppressed, path, lane, lookupReviewPass);
+
+  if (lane !== "human-review") return withReviewPass;
   // The escalation reason (an enum, drives the card marker) and the free-text
   // note (the reviewer's "why", surfaced in the detail view) are parsed
   // independently: each only lands on a human-review card, each treats an
@@ -265,6 +310,41 @@ function applyLiveness(
 ): Issue {
   if (!lookupLiveness || !LIVENESS_LANES.has(lane)) return issue;
   return { ...issue, liveness: livenessFromAbsence(lookupLiveness(path)) };
+}
+
+/**
+ * Add the review-pass count to an Issue, but only on a **live `in-review`** card
+ * (the Reviewer Iteration Count PRD, ADR 0018) — the read side of the count the
+ * Reactor writes per spawn, surfaced as the `N/cap` marker's numerator.
+ *
+ * The gate is the crux. The count is the *healthy in-progress* signal, so it rides
+ * exactly the card a live reviewer owns and nowhere else:
+ *
+ * - **Lane `in-review`** — the one lane an AI-review pass runs in. An off-lane card
+ *   (still `ready-for-review`, converged to `done`, escalated to `human-review`) is
+ *   returned unchanged: it left the in-review lane, so it carries no count.
+ * - **Liveness `live`** — reuses the verdict {@link applyLiveness} just stamped
+ *   rather than re-probing. An **orphaned** in-review card (its agent died
+ *   mid-loop) keeps its loud Orphan marker and shows *no* count — a dead agent is
+ *   not "on pass N" of anything — and an **unknown** card stays countless too.
+ * - **A recorded pass** — a missing pass (`undefined`: the spawn/record gap, a
+ *   legacy entry) leaves the field unset, never a false `0/cap`: absent ≠ `0`.
+ *
+ * Any card failing a gate — or any card when no lookup is wired in — is returned
+ * unchanged. Because the gate requires the live verdict, the count can never
+ * co-render with the Orphan/unknown liveness marker on one card.
+ */
+function applyReviewPass(
+  issue: Issue,
+  path: string,
+  lane: Lane,
+  lookupReviewPass?: ReviewPassLookup,
+): Issue {
+  if (!lookupReviewPass || lane !== "in-review" || issue.liveness !== "live") {
+    return issue;
+  }
+  const reviewPass = lookupReviewPass(path);
+  return reviewPass === undefined ? issue : { ...issue, reviewPass };
 }
 
 /**

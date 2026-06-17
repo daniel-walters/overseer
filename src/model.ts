@@ -298,6 +298,22 @@ export interface Issue {
    * recognised status.
    */
   readonly malformedStatus?: boolean;
+  /**
+   * The currently-running AI-review pass for this Issue (the Reviewer Iteration
+   * Count PRD, ADR 0018): the `reviewPass` Overseer recorded in the sidecar per
+   * spawn, surfaced on the card as a neutral `N/cap` marker (the cap from
+   * `config.review.cap`). `1` the instant review begins, ticking up per pass.
+   *
+   * Set **only on a *live* `in-review` card** — the read side joins the sidecar
+   * count onto the Issue behind the same liveness verdict the marker is gated by,
+   * so it is the join's analogue of {@link liveness}. Deliberately absent when the
+   * in-review agent is an Orphan (the Orphan {@link liveness} marker wins — a dead
+   * agent is not "on pass 2" of anything), when the Issue has left the in-review
+   * lane (converged to `done`, escalated to `human-review`), and when no pass was
+   * recorded (no false `0/cap` from a default — absent ≠ `0`). A derived overlay
+   * recomputed on each board open, never written to the Issue file (ADR 0002).
+   */
+  readonly reviewPass?: number;
 }
 
 export interface PRD {

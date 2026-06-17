@@ -148,6 +148,13 @@ function runBoard(): void {
       },
       isSuppressed,
       lookupPr,
+      // The review-pass overlay (ADR 0018): the scanner joins the recorded pass
+      // onto a *live* in-review card as the `N/cap` marker's numerator, reading the
+      // very same `readReviewPass` projection the review loop's cap check reads —
+      // one source of truth for control and display. A pure sidecar read, gated to
+      // live-and-in-review by the scanner, so it never co-renders with the Orphan
+      // marker and never persists into the Issue files (ADR 0002).
+      readReviewPass,
     );
   };
   const initialBoard = scanWithOverlays(root);
@@ -241,6 +248,7 @@ function runBoard(): void {
       detailReader={detailReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
+      reviewCap={review.cap}
     />,
     { alternateScreen: true },
   );

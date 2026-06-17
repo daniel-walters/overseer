@@ -425,6 +425,131 @@ describe("scanBoard liveness overlay", () => {
   });
 });
 
+describe("scanBoard review-pass overlay", () => {
+  /**
+   * A throwaway root with one in-review Issue (the only lane the count rides) plus
+   * a done and a ready-for-review Issue the overlay must never touch. The review-pass
+   * lookup is keyed by the Issue's absolute path — the same `prdDir/filename` key
+   * the sidecar records (ADR 0008/0018) — exactly like the liveness lookup.
+   */
+  function reviewRoot(): { root: string; pathOf: (file: string) => string } {
+    const root = mkdtempSync(join(tmpdir(), "overseer-revpass-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
+    writeFileSync(join(dir, "002-awaiting.md"), "---\nstatus: ready-for-review\n---\nbody\n");
+    writeFileSync(join(dir, "003-shipped.md"), "---\nstatus: done\n---\nbody\n");
+    writeFileSync(
+      join(dir, "004-escalated.md"),
+      "---\nstatus: human-review\nhuman_review_reason: non-convergence\n---\nbody\n",
+    );
+    return { root, pathOf: (file) => join(dir, file) };
+  }
+
+  function featureIssues(board: ReturnType<typeof scanBoard>): readonly Issue[] {
+    return prdById(board.prds, "feature").issues;
+  }
+
+  it("overlays the recorded pass on a live in-review Issue", () => {
+    // The healthy path: a live in-review agent on pass 2 carries the count. The
+    // liveness lookup resolves the Issue to live (its handle is in the registry),
+    // and the review-pass lookup supplies the recorded pass.
+    const { root, pathOf } = reviewRoot();
+    const board = scanBoard(
+      root,
+      (path) => (path === pathOf("001-reviewing.md") ? "live" : undefined),
+      undefined,
+      undefined,
+      (path) => (path === pathOf("001-reviewing.md") ? 2 : undefined),
+    );
+
+    expect(issueById(featureIssues(board), "001-reviewing.md").reviewPass).toBe(2);
+  });
+
+  it("reads the first pass as 1 (the moment review begins)", () => {
+    const { root, pathOf } = reviewRoot();
+    const board = scanBoard(
+      root,
+      () => "live",
+      undefined,
+      undefined,
+      (path) => (path === pathOf("001-reviewing.md") ? 1 : undefined),
+    );
+
+    expect(issueById(featureIssues(board), "001-reviewing.md").reviewPass).toBe(1);
+  });
+
+  it("hides the count on an orphaned in-review Issue — the Orphan marker wins", () => {
+    // A dead in-review agent is not "on pass N" of anything: even with a recorded
+    // pass, an absent-clean (⇒ orphaned) verdict suppresses the count so the loud
+    // Orphan marker stands alone (ADR 0018).
+    const { root, pathOf } = reviewRoot();
+    const board = scanBoard(
+      root,
+      (path) => (path === pathOf("001-reviewing.md") ? "absent-clean" : undefined),
+      undefined,
+      undefined,
+      () => 2,
+    );
+    const issue = issueById(featureIssues(board), "001-reviewing.md");
+
+    expect(issue.liveness).toBe("orphaned");
+    expect(issue.reviewPass).toBeUndefined();
+  });
+
+  it("hides the count on an in-review Issue whose liveness is unknown", () => {
+    // An agent the session can't see (no recorded handle / degraded query) reads
+    // unknown — the count is gated to a positive live verdict, so it stays hidden.
+    const { root } = reviewRoot();
+    const board = scanBoard(root, () => undefined, undefined, undefined, () => 2);
+    const issue = issueById(featureIssues(board), "001-reviewing.md");
+
+    expect(issue.liveness).toBe("unknown");
+    expect(issue.reviewPass).toBeUndefined();
+  });
+
+  it("never overlays the count off the in-review lane", () => {
+    // The lookup claims a pass for every Issue and the liveness lookup says live —
+    // but a ready-for-review or done card is not an in-review card, so neither
+    // carries the count (it left the lane: still awaiting, or converged to done).
+    const { root } = reviewRoot();
+    const board = scanBoard(root, () => "live", undefined, undefined, () => 2);
+    const issues = featureIssues(board);
+
+    expect(issueById(issues, "002-awaiting.md").reviewPass).toBeUndefined();
+    expect(issueById(issues, "003-shipped.md").reviewPass).toBeUndefined();
+  });
+
+  it("never overlays the count on a card escalated to human-review", () => {
+    // A non-converged loop escalates to human-review: the count stops, the yellow
+    // escalation marker takes over (the loop is no longer running). Even with the
+    // lookup claiming a pass and a live verdict, an escalated card carries none.
+    const { root } = reviewRoot();
+    const board = scanBoard(root, () => "live", undefined, undefined, () => 3);
+
+    expect(issueById(featureIssues(board), "004-escalated.md").reviewPass).toBeUndefined();
+  });
+
+  it("shows no count for a live in-review Issue with no recorded pass (no false 0/cap)", () => {
+    // The lookup has no pass for the Issue (the spawn/record gap, a legacy entry):
+    // absent ≠ 0, so the card carries no count rather than a false 0/cap.
+    const { root } = reviewRoot();
+    const board = scanBoard(root, () => "live", undefined, undefined, () => undefined);
+
+    expect(issueById(featureIssues(board), "001-reviewing.md").reviewPass).toBeUndefined();
+  });
+
+  it("leaves the count unset when no review-pass lookup is provided", () => {
+    // The default scan (board-only tests, the eager first render) carries no
+    // overlay even on a live in-review card.
+    const { root } = reviewRoot();
+    const board = scanBoard(root, () => "live");
+
+    expect(issueById(featureIssues(board), "001-reviewing.md").reviewPass).toBeUndefined();
+  });
+});
+
 describe("scanBoard suppressed overlay", () => {
   /**
    * A throwaway root with one Issue in each lane that matters to the suppressed

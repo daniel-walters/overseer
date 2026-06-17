@@ -49,6 +49,24 @@ interface CardProps {
    * co-renders with neither.
    */
   needsReview?: boolean;
+  /**
+   * The currently-running AI-review pass for a live `in-review` card (the Reviewer
+   * Iteration Count PRD, ADR 0018): the `reviewPass` Overseer recorded in the
+   * sidecar, surfaced together with {@link reviewCap} as a neutral `N/cap` marker.
+   * `1` the moment review begins, ticking up per pass. Absent on every card that is
+   * not a live in-review pass — so an Orphaned in-review card (whose Orphan marker
+   * wins) and an Issue off the in-review lane carry no count, and a missing pass
+   * never renders a false `0/cap`. Joined onto the card by the scanner behind the
+   * live-and-in-review gate; the Card only renders what it is handed.
+   */
+  reviewPass?: number;
+  /**
+   * The configured AI-review cap (`config.review.cap`) — the denominator of the
+   * `N/cap` marker, and the very value the Reactor's cap check reads (one source of
+   * truth). A board-wide constant threaded down from config, not a per-card field;
+   * the marker renders only when both it and {@link reviewPass} are present.
+   */
+  reviewCap?: number;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -119,6 +137,28 @@ const LINKED_PR_MARKER: Record<LinkedPr["state"], { text: string; color: string 
  */
 const NEEDS_REVIEW_MARKER = "⚠ needs review";
 
+/**
+ * The glyph leading the review-pass `N/cap` marker (the Reviewer Iteration Count
+ * PRD, ADR 0018). Deliberately **neutral**: `◷` (a partial-clock "in progress")
+ * reads apart from the yellow "needs a human" warning family (`⚠ orphaned`,
+ * `⚠ deviation`, `↻ non-convergence`, `✗ conflict`, `⚠ bad status`) and the red
+ * `⊘ suppressed` "nothing ran" family, because this is the *healthy in-progress*
+ * path — a card actively moving through review, not a warning. Rendered in a
+ * neutral colour ({@link REVIEW_PASS_COLOR}) for the same reason; the marker reads
+ * `◷ N/cap`, the count composed from the two props the scanner and config supply.
+ */
+const REVIEW_PASS_GLYPH = "◷";
+
+/**
+ * The neutral colour of the review-pass marker — outside the yellow warning family
+ * and the red suppressed family. `cyan` is the board's other neutral "there's
+ * something here, not an alarm" colour (a `done` PRD's open-PR marker, the
+ * selection border), so it reads as the healthy in-progress signal the PRD asks
+ * for, never an escalation cue. (Tests assert the family by glyph, since the test
+ * renderer strips ANSI; the colour is the on-screen reinforcement.)
+ */
+const REVIEW_PASS_COLOR = "cyan";
+
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
@@ -129,6 +169,8 @@ export function Card({
   malformedStatus,
   linkedPr,
   needsReview,
+  reviewPass,
+  reviewCap,
   selected = false,
 }: CardProps) {
   return (
@@ -199,6 +241,19 @@ export function Card({
         // it co-renders with none of them.
         <Text wrap="truncate-end" color="yellow">
           {NEEDS_REVIEW_MARKER}
+        </Text>
+      )}
+      {reviewPass !== undefined && reviewCap !== undefined && !suppressed && (
+        // Its own truncating line, neutral cyan — the `N/cap` review-pass marker on
+        // a live in-review card (ADR 0018). The scanner gates this to a *live*
+        // in-review Issue, so an Orphan (whose loud liveness marker renders above)
+        // and any off-lane card never carry the count; the `reviewPass !== undefined`
+        // guard also means a card with no recorded pass shows no false `0/cap`. The
+        // `!suppressed` guard is the same last-line-of-defence the other markers
+        // carry — disjoint lanes mean the scanner never co-sets them, but if both
+        // ever arrive the card still reads as one coherent state (suppressed wins).
+        <Text wrap="truncate-end" color={REVIEW_PASS_COLOR}>
+          {`${REVIEW_PASS_GLYPH} ${reviewPass}/${reviewCap}`}
         </Text>
       )}
     </Box>

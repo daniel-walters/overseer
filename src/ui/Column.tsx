@@ -17,6 +17,12 @@ export interface CardItem {
   readonly linkedPr?: LinkedPr;
   /** The needs-review overlay, set only on a PRD card with an Issue in human-review. */
   readonly needsReview?: boolean;
+  /**
+   * The review-pass count, set only on a *live* `in-review` Issue card (ADR 0018):
+   * the numerator of the `N/cap` marker. Paired with the column-level
+   * {@link ColumnProps.reviewCap} for the denominator.
+   */
+  readonly reviewPass?: number;
 }
 
 interface ColumnProps {
@@ -47,6 +53,13 @@ interface ColumnProps {
    * different widths per level.
    */
   width: number;
+  /**
+   * The configured AI-review cap (`config.review.cap`), the denominator of every
+   * `N/cap` review-pass marker in this column (ADR 0018). A board-wide constant
+   * threaded straight through to the Card; absent in board-only tests, where a
+   * card carries no count anyway.
+   */
+  reviewCap?: number;
 }
 
 /**
@@ -64,6 +77,7 @@ export function Column({
   availableHeight,
   selectedRow,
   width,
+  reviewCap,
 }: ColumnProps) {
   // Without a height the column is unbounded — render every card, as before.
   // With one, slice to the visible window, anchored on the selected row (or the
@@ -94,6 +108,8 @@ export function Column({
           malformedStatus={card.malformedStatus}
           linkedPr={card.linkedPr}
           needsReview={card.needsReview}
+          reviewPass={card.reviewPass}
+          reviewCap={reviewCap}
           selected={card.id === selectedId}
         />
       ))}
