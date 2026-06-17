@@ -126,6 +126,24 @@ export function derivePrdLane(
   return "backlog";
 }
 
+/**
+ * Derive a PRD's board-level **needs-review** overlay from its Issues: `true`
+ * iff ≥1 Issue is parked in `human-review` — the one pipeline lane genuinely
+ * *blocked on a human* — and `false` otherwise (including an empty PRD). It
+ * rolls an Issue-level fact up to the PRD card so the board answers "which PRDs
+ * are blocked on me?" without zooming.
+ *
+ * Like {@link derivePrdLane} it is a pure, side-effect-free derivation over the
+ * Issues, recomputed each scan and never written to `prd.md` (ADR 0002 / 0003).
+ * It is **presence-only** (no count) and **reason-agnostic** — any escalation
+ * reason counts, since `human-review` is the signal, not why. Deliberately
+ * scoped to `human-review` only, not the broader needs-a-human set
+ * (`ready-for-human`, orphan, malformed-status, suppressed).
+ */
+export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
+  return issues.some((i) => i.lane === "human-review");
+}
+
 /** The lanes that promote a PRD to in-progress (in-progress or later). */
 const IN_PROGRESS_OR_LATER = new Set<Lane>([
   "in-progress",
@@ -168,6 +186,22 @@ export const HUMAN_REVIEW_REASONS = [
  * marker on the card so a human knows what attention it needs before opening it.
  */
 export type HumanReviewReason = (typeof HUMAN_REVIEW_REASONS)[number];
+
+/**
+ * The user-facing escalation marker for each reason: a glyph for at-a-glance
+ * scanning plus the reason word. Lives here beside {@link HumanReviewReason}
+ * rather than in a component because two presentation surfaces share it — the
+ * card's terse marker (`Card.tsx`) and the detail view's header heading
+ * (`markdown.ts`) — and the text/markdown module must not depend on the React
+ * component to read it (that would drag Ink into the markdown layer). Kept short
+ * because the card line truncates; the marker is the attention signal that earns
+ * its place ahead of the title.
+ */
+export const REASON_MARKER: Record<HumanReviewReason, string> = {
+  deviation: "⚠ deviation",
+  "non-convergence": "↻ non-convergence",
+  conflict: "✗ conflict",
+};
 
 /**
  * The liveness overlay on an Issue card: whether the agent Overseer spawned for
@@ -220,6 +254,16 @@ export interface Issue {
   readonly readyFor?: ReadyFor;
   /** Set only when `lane === "human-review"`; drives the escalation marker. */
   readonly humanReviewReason?: HumanReviewReason;
+  /**
+   * The reviewer's free-text explanation of *why* this Issue needs human
+   * attention, written at the human-review exit for all three escalation reasons
+   * (for a deviation, it folds in the implementor's own `deviation` note). Set
+   * only when `lane === "human-review"` and the frontmatter carries a non-blank
+   * `human_review_note`; absent otherwise — additive to and independent of
+   * {@link humanReviewReason} (the enum that drives the card marker). The detail
+   * view renders it beneath the reason; the card stays terse.
+   */
+  readonly humanReviewNote?: string;
   /**
    * The derived liveness overlay, set only on an `in-progress` / `in-review`
    * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
@@ -282,6 +326,19 @@ export interface PRD {
    * {@link lane} unchanged (`done` stays `done`).
    */
   readonly linkedPr?: LinkedPr;
+  /**
+   * The needs-review overlay: `true` on a PRD with ≥1 Issue parked in
+   * `human-review`, the one pipeline lane genuinely blocked on a human
+   * ({@link derivePrdNeedsReview}). The first Issue→PRD roll-up marker, and the
+   * first marker an *in-progress* PRD card carries — it lets the board answer
+   * "which PRDs are blocked on me?" without zooming in. Set at scan/derivation
+   * time from the Issues; a derived overlay like {@link linkedPr}, recomputed
+   * each scan and never read from or written to `prd.md` (ADR 0002 / 0003), so a
+   * resolved escalation clears it automatically on the next scan. Presence-only
+   * (no count) and reason-agnostic. Disjoint from the `done`-only {@link linkedPr}
+   * marker (needs-review implies not-`done`), so the two never co-render.
+   */
+  readonly needsReview?: boolean;
 }
 
 export interface Board {

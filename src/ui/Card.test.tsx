@@ -264,3 +264,32 @@ describe("Card linked-PR marker", () => {
     expect(frame).toContain("Unopened");
   });
 });
+
+describe("Card needs-review marker", () => {
+  it("marks a PRD whose Issues need review with a 'needs review' marker", () => {
+    const frame = frameOf(<Card title="Blocked" needsReview />);
+
+    expect(frame).toContain("⚠ needs review");
+    expect(frame).toContain("Blocked");
+  });
+
+  it("shows no needs-review marker on a PRD that does not need review", () => {
+    const frame = frameOf(<Card title="Humming" />);
+
+    expect(frame).not.toContain("needs review");
+    expect(frame).toContain("Humming");
+  });
+
+  it("never co-renders the needs-review marker with the Linked PR marker", () => {
+    // The two PRD-level markers live in disjoint columns — Linked PR is `done`-only,
+    // needs-review implies not-done — so a real card never carries both. Even if a
+    // card is handed both, the two must not collide: the needs-review marker shows
+    // and the Linked PR marker does not leak through.
+    const both = frameOf(
+      <Card title="Conflict" needsReview linkedPr={{ state: "merged", url: "https://gh/3" }} />,
+    );
+
+    expect(both).toContain("⚠ needs review");
+    expect(both).not.toMatch(/PR open|PR merged/);
+  });
+});

@@ -31,6 +31,7 @@ export const FIELD = {
   deviation: "deviation",
   blockedBy: "blocked_by",
   humanReviewReason: "human_review_reason",
+  humanReviewNote: "human_review_note",
 } as const;
 
 /** The untyped frontmatter bag gray-matter parses out of a file. */

@@ -274,7 +274,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   // open; `maxOffset` is what `j`/`k`/arrows clamp the offset against.
   const detailBodyRows = Math.max(1, rows - DETAIL_MODAL_CHROME_ROWS);
   const detailLines =
-    modal?.kind === "detail" ? renderDetailLines(modal.detail.body) : [];
+    modal?.kind === "detail" ? renderDetailLines(modal.detail) : [];
   const detailMaxOffset = scrollDetail(detailLines, detailScroll, detailBodyRows).maxOffset;
 
   /**
@@ -387,13 +387,30 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
       // read-only viewer whose own input branch (below) closes it, like the help
       // modal — there is nothing to confirm.
       if (!detailReader || !selectedPrd) return;
-      const detail =
-        nav.level === "issues" && selectedIssue
-          ? detailReader.readDetail(selectedPrd.id, selectedIssue.id)
-          : detailReader.readDetail(selectedPrd.id);
+      const zoomed = nav.level === "issues" && selectedIssue !== undefined;
+      // One `readDetail` call: an undefined issue id resolves the PRD's `prd.md`,
+      // a present one the zoomed Issue's file — no duplicated board-level arm.
+      const detail = detailReader.readDetail(
+        selectedPrd.id,
+        zoomed ? selectedIssue.id : undefined,
+      );
       if (detail) {
         setDetailScroll(0); // always open at the top, never a stale position
-        setModal({ kind: "detail", detail });
+        // Source the human-review header from the parsed model fields, not the
+        // file: the body still comes from `readDetail` (frontmatter stripped, ADR
+        // 0014), but the reason + note ride the Issue model the scanner already
+        // parsed. Attached only when zoomed on the selected Issue; a PRD's `prd.md`
+        // carries neither, so its detail view stays body-only.
+        setModal({
+          kind: "detail",
+          detail: zoomed
+            ? {
+                ...detail,
+                humanReviewReason: selectedIssue.humanReviewReason,
+                humanReviewNote: selectedIssue.humanReviewNote,
+              }
+            : detail,
+        });
       }
     },
     showHelp: () => setShowHelp(true),

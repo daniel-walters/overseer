@@ -155,6 +155,29 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain("conflict");
   });
 
+  it("instructs writing a free-text human_review_note alongside the status and reason", () => {
+    const prompt = build();
+    expect(prompt).toContain("human_review_note");
+  });
+
+  it("instructs writing the note for all three escalation reasons, not only deviation", () => {
+    // The note must be written even when escalating for non-convergence or
+    // conflict — the reasons that otherwise carry no prose at all.
+    const prompt = build().toLowerCase();
+    expect(prompt).toMatch(/all three|every|each|regardless of/);
+    expect(prompt).toContain("non-convergence");
+    expect(prompt).toContain("conflict");
+  });
+
+  it("on a deviation, instructs folding the implementor's deviation note into the single human_review_note", () => {
+    const prompt = build({ deviation: "Used a queue instead of inline send." });
+    // The implementor's recorded deviation is handed to the reviewer, and the
+    // reviewer is told to fold it into the one user-facing note.
+    expect(prompt).toContain("Used a queue instead of inline send.");
+    expect(prompt.toLowerCase()).toContain("fold");
+    expect(prompt).toContain("human_review_note");
+  });
+
   it("does NOT instruct the reviewer to set in-review (the trigger already did)", () => {
     // The review trigger flips ready-for-review → in-review before spawning, so
     // the reviewer inherits in-review and must never set it. Assert over the

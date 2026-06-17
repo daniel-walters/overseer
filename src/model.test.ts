@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
-import { placeStatus, derivePrdLane, ISSUE_LANES, type Lane, type Issue } from "./model.js";
+import {
+  placeStatus,
+  derivePrdLane,
+  derivePrdNeedsReview,
+  ISSUE_LANES,
+  type Lane,
+  type Issue,
+  type HumanReviewReason,
+} from "./model.js";
 
 /** Build a minimal Issue carrying just the lane the derivation reads. */
 function issue(lane: Lane): Issue {
@@ -118,5 +126,41 @@ describe("derivePrdLane", () => {
     // ...and a done + malformed PRD is in-progress, not done: an unknown-status
     // Issue can never silently complete a PRD, exactly as Unsorted blocked it.
     expect(derivePrdLane([issue("done"), malformedIssue()])).toBe("in-progress");
+  });
+});
+
+/** An Issue parked in `human-review` carrying a given escalation reason. */
+function humanReviewIssue(reason: HumanReviewReason): Issue {
+  return { id: `${reason}.md`, title: reason, lane: "human-review", humanReviewReason: reason };
+}
+
+/**
+ * The board-level needs-review roll-up: a PRD needs review iff ≥1 of its Issues
+ * is parked in `human-review` — the one lane genuinely blocked on a human. A
+ * derived overlay computed from the Issues each scan, never written to `prd.md`
+ * (ADR 0002 / 0003). Presence-only, scoped to `human-review` only, and
+ * reason-agnostic.
+ */
+describe("derivePrdNeedsReview", () => {
+  it("is true when at least one Issue is in human-review", () => {
+    expect(
+      derivePrdNeedsReview([issue("in-progress"), humanReviewIssue("conflict")]),
+    ).toBe(true);
+  });
+
+  it("is false when no Issue is in human-review", () => {
+    expect(derivePrdNeedsReview([issue("backlog"), issue("in-progress"), issue("done")])).toBe(
+      false,
+    );
+  });
+
+  it("is false for an empty PRD", () => {
+    expect(derivePrdNeedsReview([])).toBe(false);
+  });
+
+  it("is true regardless of which escalation reason the human-review Issue carries", () => {
+    for (const reason of ["deviation", "non-convergence", "conflict"] as const) {
+      expect(derivePrdNeedsReview([humanReviewIssue(reason)])).toBe(true);
+    }
   });
 });

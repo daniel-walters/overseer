@@ -1,5 +1,7 @@
 import { marked, setOptions, type MarkedOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
+import type { CardDetail } from "./detailReader.js";
+import { REASON_MARKER } from "../model.js";
 
 /**
  * Render a markdown body to terminal text (ANSI styling for headings, list
@@ -26,15 +28,72 @@ export function renderMarkdown(body: string): string {
 }
 
 /**
- * Project a body to the rendered terminal lines the detail modal windows: render
- * the markdown, then split on newlines. A blank (or whitespace-only) body yields
- * no lines, so the modal shows its placeholder rather than a single empty line.
+ * The heading shown above a human-review note. When the scanner parsed a
+ * recognized escalation reason we reuse its {@link REASON_MARKER} so the detail
+ * header and the card marker read as the same signal; when the reason is absent
+ * or unrecognized — which the scanner tolerates while still landing the note
+ * (the note is additive, independent of the reason) — we fall back to a neutral
+ * `human-review` heading so the note never gets dropped with the reason.
+ */
+function headerHeading(reason: CardDetail["humanReviewReason"]): string {
+  return reason === undefined ? "⚠ human-review" : REASON_MARKER[reason];
+}
+
+/**
+ * Escape a reviewer's free-text note so it renders **verbatim** rather than being
+ * reinterpreted as markdown. The note routinely quotes agent output — a bare
+ * `---` line, an unclosed ``` fence, a leading `#` or `-` — which would otherwise
+ * parse as a rule, swallow the real body into a code block, or become a heading,
+ * and could collide with the `---` separator the composer inserts. Backslash-
+ * escaping the block- and inline-significant characters keeps the prose literal
+ * while still flowing through the one render + one scroll window the body uses.
+ */
+function escapeNoteMarkdown(note: string): string {
+  // Backslash-escape every block- and inline-significant character; once each
+  // `-`/`_`/`*` in a `---`-style run is escaped, it can no longer read as a
+  // thematic break, so a single pass suffices.
+  return note.replace(/([\\`*_{}[\]()#+\-.!|>~])/g, "\\$1");
+}
+
+/**
+ * Compose the markdown the detail modal renders for a card: the reviewer's
+ * human-review header (the escalation reason as a heading, the note beneath it)
+ * prepended to the frontmatter-stripped body. The header renders for any card
+ * carrying a non-blank `humanReviewNote` (the App sets it from the parsed model
+ * field — ADR 0014); the reason only chooses the heading text and may be absent,
+ * since the scanner lands the note independently of the reason. A PRD's `prd.md`
+ * and every Issue without a note compose to the body alone, so their detail view
+ * is unchanged.
  *
- * This is the one place the body→lines transform lives: the {@link App} calls it to
- * size the scroll window's `maxOffset` and the {@link DetailModal} renders the
+ * The header is plain markdown folded into the same string as the body, so it
+ * flows through one render and one scroll window — the note scrolls like the body
+ * (a multi-sentence explanation stays fully readable, never card-truncated)
+ * rather than being pinned chrome that would need its own viewport accounting.
+ * The note itself is escaped ({@link escapeNoteMarkdown}) so quoted agent output
+ * renders literally and can't collide with the `---` separator.
+ */
+export function composeDetailMarkdown(detail: CardDetail): string {
+  const note = detail.humanReviewNote?.trim();
+  if (!note) return detail.body;
+  const header = `## ${headerHeading(detail.humanReviewReason)}\n\n${escapeNoteMarkdown(note)}`;
+  // A blank body would otherwise leave a trailing separator with nothing under
+  // it; join only the present parts so the header stands alone when the Issue
+  // file has frontmatter but no body.
+  return detail.body.trim().length > 0 ? `${header}\n\n---\n\n${detail.body}` : header;
+}
+
+/**
+ * Project a {@link CardDetail} to the rendered terminal lines the detail modal
+ * windows: compose the header+body markdown, render it, then split on newlines. A
+ * card that composes to a blank (or whitespace-only) string yields no lines, so
+ * the modal shows its placeholder rather than a single empty line.
+ *
+ * This is the one place the detail→lines transform lives: the {@link App} calls it
+ * to size the scroll window's `maxOffset` and the {@link DetailModal} renders the
  * resulting lines, so the clamp and the rendered window operate on the *same* lines
  * (and the heavier `renderMarkdown` runs once per frame, not once per call site).
  */
-export function renderDetailLines(body: string): string[] {
-  return body.trim().length > 0 ? renderMarkdown(body).split("\n") : [];
+export function renderDetailLines(detail: CardDetail): string[] {
+  const markdown = composeDetailMarkdown(detail);
+  return markdown.trim().length > 0 ? renderMarkdown(markdown).split("\n") : [];
 }

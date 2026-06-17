@@ -1,6 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { ReadyFor, HumanReviewReason, Liveness, LinkedPr } from "../model.js";
+import { REASON_MARKER } from "../model.js";
 
 interface CardProps {
   title: string;
@@ -37,6 +38,17 @@ interface CardProps {
    * liveness / suppressed / human-review marker), so it never co-renders with them.
    */
   linkedPr?: LinkedPr;
+  /**
+   * Needs-review marker, present only on a PRD card with ≥1 Issue parked in
+   * `human-review` (CONTEXT.md; {@link import("../model.js").derivePrdNeedsReview}).
+   * The first Issue→PRD roll-up marker and the first marker an in-progress PRD
+   * carries — it tells the board "this PRD is blocked on you" without zooming.
+   * A PRD-level marker like {@link linkedPr}, disjoint from the Issue-level
+   * markers above (a PRD card carries none of them) and disjoint from the
+   * `done`-only Linked PR marker (needs-review implies not-`done`), so it
+   * co-renders with neither.
+   */
+  needsReview?: boolean;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -44,18 +56,6 @@ interface CardProps {
 const BADGE: Record<ReadyFor, string> = {
   human: "🧑",
   agent: "🤖",
-};
-
-/**
- * The escalation marker shown on a human-review card: a glyph for at-a-glance
- * scanning plus the reason word so the three exits read distinctly. Kept short
- * because the card line truncates — the marker is the attention signal that
- * earns its place ahead of the title.
- */
-const REASON_MARKER: Record<HumanReviewReason, string> = {
-  deviation: "⚠ deviation",
-  "non-convergence": "↻ non-convergence",
-  conflict: "✗ conflict",
 };
 
 /**
@@ -109,6 +109,16 @@ const LINKED_PR_MARKER: Record<LinkedPr["state"], { text: string; color: string 
   merged: { text: "✔ PR merged", color: "green" },
 };
 
+/**
+ * The needs-review marker on a PRD card with ≥1 Issue in `human-review`, following
+ * the same own-line truncating idiom as the other markers (CONTEXT.md). Yellow and
+ * `⚠` place it in the "needs a human" warning family — the same family as the
+ * human-review reason markers it rolls up — so the board reads it as "blocked on
+ * you". A PRD-level marker, disjoint from the Issue-level marker families and from
+ * the `done`-only Linked PR marker, so it co-renders with none of them.
+ */
+const NEEDS_REVIEW_MARKER = "⚠ needs review";
+
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
@@ -118,6 +128,7 @@ export function Card({
   suppressed,
   malformedStatus,
   linkedPr,
+  needsReview,
   selected = false,
 }: CardProps) {
   return (
@@ -168,12 +179,26 @@ export function Card({
           {MALFORMED_STATUS_MARKER}
         </Text>
       )}
-      {linkedPr && (
+      {linkedPr && !needsReview && (
         // Its own truncating line — a `done` PRD's Linked PR overlay. A PRD-level
         // marker (the Issue-level fields above are never set on a PRD card), so it
         // co-renders with none of them; cyan for open, green for merged (ADR 0013).
+        // The `!needsReview` guard is the last line of defence between the two
+        // PRD-level markers: their lanes are disjoint (Linked PR is `done`-only,
+        // needs-review implies not-`done`), so the scanner never co-sets them, but
+        // even handed both the card reads as one coherent state — needs-review wins.
         <Text wrap="truncate-end" color={LINKED_PR_MARKER[linkedPr.state].color}>
           {LINKED_PR_MARKER[linkedPr.state].text}
+        </Text>
+      )}
+      {needsReview && (
+        // Its own truncating line, yellow — a PRD with ≥1 Issue parked in
+        // `human-review`, rolled up to the board so it reads "blocked on you"
+        // without zooming. A PRD-level marker, disjoint from the Issue-level marker
+        // families and from the `done`-only Linked PR marker (the guard above), so
+        // it co-renders with none of them.
+        <Text wrap="truncate-end" color="yellow">
+          {NEEDS_REVIEW_MARKER}
         </Text>
       )}
     </Box>

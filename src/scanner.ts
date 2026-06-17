@@ -1,10 +1,11 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIELD, readString, safeMatter } from "./issueFile.js";
+import { FIELD, readString, readPresentString, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
   placeStatus,
   derivePrdLane,
+  derivePrdNeedsReview,
   type Board,
   type PRD,
   type Issue,
@@ -130,7 +131,17 @@ function scanPrd(
   // Issues, collapsing to backlog / in-progress / done.
   const lane = derivePrdLane(issues);
 
-  const prd: PRD = { id: dirName, title, lane, issues };
+  // The needs-review overlay is the board's first Issue→PRD roll-up: `true` when
+  // ≥1 Issue is parked in `human-review` (derivePrdNeedsReview). Derived from the
+  // same Issues, never read from or written to `prd.md` (ADR 0002 / 0003), so a
+  // resolved escalation clears it on the next scan. Only `true` stamps the field —
+  // a PRD with nothing in human-review stays unmarked (no `needsReview: false`
+  // noise), mirroring the other overlays. It is disjoint from the `done`-only
+  // Linked PR marker (needs-review implies the PRD is not yet `done`).
+  const base: PRD = { id: dirName, title, lane, issues };
+  const prd: PRD = derivePrdNeedsReview(issues)
+    ? { ...base, needsReview: true }
+    : base;
   // The Linked PR overlay rides only on a `done` PRD, keyed by its absolute dir
   // path (ADR 0013). The `done` gate both scopes the marker to PRDs that can have
   // a feature-branch PR and bounds the per-scan `gh` query to finished work — a
@@ -207,10 +218,20 @@ function scanIssue(
   );
 
   if (lane !== "human-review") return withSuppressed;
+  // The escalation reason (an enum, drives the card marker) and the free-text
+  // note (the reviewer's "why", surfaced in the detail view) are parsed
+  // independently: each only lands on a human-review card, each treats an
+  // absent/blank value as absent, and the note is additive — present or not
+  // regardless of which reason the card carries.
   const humanReviewReason = parseHumanReviewReason(data[FIELD.humanReviewReason]);
-  return humanReviewReason === undefined
-    ? withSuppressed
-    : { ...withSuppressed, humanReviewReason };
+  const humanReviewNote = readPresentString(data, FIELD.humanReviewNote);
+  const withReason =
+    humanReviewReason === undefined
+      ? withSuppressed
+      : { ...withSuppressed, humanReviewReason };
+  return humanReviewNote === undefined
+    ? withReason
+    : { ...withReason, humanReviewNote };
 }
 
 /**

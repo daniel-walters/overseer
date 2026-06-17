@@ -202,6 +202,40 @@ describe("scanBoard Issues", () => {
     expect(issue.humanReviewReason).toBeUndefined();
   });
 
+  it("records the human-review note on a human-review Issue that carries one", () => {
+    const issue = issueById(authIssues(), "009-needs-human.md");
+
+    expect(issue.humanReviewNote).toBe(
+      "Swapped the inline send for a queue to avoid a deadlock.",
+    );
+  });
+
+  it("records the note independently of the reason — present on a non-deviation escalation", () => {
+    // 012 escalates for non-convergence (not a deviation) yet still carries a
+    // note; the note must surface regardless of which reason drives the marker.
+    const issue = issueById(authIssues(), "012-stuck-with-note.md");
+
+    expect(issue.humanReviewReason).toBe("non-convergence");
+    expect(issue.humanReviewNote).toBe(
+      "After 3 passes the auth test still fails intermittently; couldn't isolate the race.",
+    );
+  });
+
+  it("treats a blank human-review note as absent", () => {
+    const issue = issueById(authIssues(), "013-blank-note.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.humanReviewNote).toBeUndefined();
+  });
+
+  it("carries no human-review note when the frontmatter omits it", () => {
+    // 010 is in human-review but has no note field at all.
+    const issue = issueById(authIssues(), "010-bad-reason.md");
+
+    expect(issue.lane).toBe("human-review");
+    expect(issue.humanReviewNote).toBeUndefined();
+  });
+
   it("folds an Issue with an unrecognized status into backlog, flagged malformed", () => {
     const issue = issueById(authIssues(), "005-mystery.md");
 
@@ -650,5 +684,63 @@ describe("scanBoard linked-PR overlay", () => {
     }));
 
     expect(prdById(board.prds, "shipped").lane).toBe("done");
+  });
+});
+
+describe("scanBoard needs-review overlay", () => {
+  /**
+   * Build a throwaway PRD whose single Issue carries the given status, so the
+   * needs-review roll-up can be exercised against an Issue parked (or not) in
+   * `human-review`. The overlay is derived from the Issues at scan time — never
+   * read from `prd.md` (ADR 0002 / 0003).
+   */
+  function prdWithIssueStatus(status: string): string {
+    const root = mkdtempSync(join(tmpdir(), "overseer-nr-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(dir, "001-a.md"), `---\nstatus: ${status}\n---\nbody\n`);
+    return root;
+  }
+
+  it("sets needsReview on a PRD with an Issue in human-review", () => {
+    const board = scanBoard(prdWithIssueStatus("human-review"));
+
+    expect(prdById(board.prds, "feature").needsReview).toBe(true);
+  });
+
+  it("leaves needsReview unset on a PRD with no Issue in human-review", () => {
+    const board = scanBoard(prdWithIssueStatus("in-progress"));
+
+    expect(prdById(board.prds, "feature").needsReview).toBeUndefined();
+  });
+
+  it("leaves needsReview unset on an empty PRD", () => {
+    const root = mkdtempSync(join(tmpdir(), "overseer-nr-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+
+    const board = scanBoard(root);
+
+    expect(prdById(board.prds, "feature").needsReview).toBeUndefined();
+  });
+
+  it("derives needsReview from the Issues regardless of any prd.md frontmatter", () => {
+    // The overlay is a derived roll-up, never read from prd.md (ADR 0002 / 0003):
+    // a prd.md asserting needs_review: false cannot suppress a genuine escalation,
+    // and one asserting it true cannot fabricate a marker.
+    const root = mkdtempSync(join(tmpdir(), "overseer-nr-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "prd.md"),
+      "---\ntitle: Feature\nneeds_review: false\n---\nbody\n",
+    );
+    writeFileSync(join(dir, "001-a.md"), "---\nstatus: human-review\n---\nbody\n");
+
+    const board = scanBoard(root);
+
+    expect(prdById(board.prds, "feature").needsReview).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import type { HumanReviewReason } from "../model.js";
 import { readDispatchIssue, readPrdMeta } from "../dispatch/reader.js";
 
 /**
@@ -42,6 +43,23 @@ export interface CardDetail {
   readonly title: string;
   /** The markdown body with the YAML frontmatter block stripped. */
   readonly body: string;
+  /**
+   * The escalation reason for a `human-review` Issue, sourced from the **parsed
+   * model field** (`Issue.humanReviewReason`) — not re-parsed from the file — so
+   * the detail header reads from the same data that drives the card marker (ADR
+   * 0014: the body comes from the file, this header from the model). Set by the
+   * {@link App} only when zooming a `human-review` Issue that carries a note;
+   * absent on a PRD's `prd.md` and on every non-`human-review` Issue, so the
+   * detail view then shows the body alone, exactly as before.
+   */
+  readonly humanReviewReason?: HumanReviewReason;
+  /**
+   * The reviewer's free-text "why a human is needed" note, sourced from
+   * `Issue.humanReviewNote` (the parsed model field). Paired with
+   * {@link humanReviewReason} as the detail header block; absent when the Issue
+   * carries no note (then no header renders, regardless of the reason).
+   */
+  readonly humanReviewNote?: string;
 }
 
 /**
