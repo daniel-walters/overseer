@@ -12,7 +12,7 @@ import type { CardDetail } from "./detailReader.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
-import { matchKeybind, hintsFor, hintLabel, type Keybind, type KeybindHandlers } from "./keybinds.js";
+import { matchKeybind, hintsFor, hintLabel, type KeybindHandlers } from "./keybinds.js";
 import { computeBindContext } from "./eligibility.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
