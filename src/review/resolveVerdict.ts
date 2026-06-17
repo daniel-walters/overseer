@@ -15,6 +15,17 @@ export interface ResolveVerdictDeps {
   readonly cleanUp: (input: MergeInput) => void;
   /** Rewrite the Issue file's `status` frontmatter, preserving the rest. */
   readonly writeStatus: (path: string, status: string) => void;
+  /**
+   * Escalate the Issue to `human-review`, recording the reason and a free-text
+   * note alongside the status — the deviation fork's terminal write. Mirrors
+   * {@link import("../issueFile.js").writeHumanReview}: the Reactor injects that
+   * real fs writer, the decision's own tests a recorder.
+   */
+  readonly writeHumanReview: (
+    path: string,
+    reason: string,
+    note: string,
+  ) => void;
 }
 
 /**
@@ -25,15 +36,21 @@ export interface ResolveVerdictDeps {
  * the terminal status write.
  *
  * The caller (the Reactor's resolve sweep) has already gated this on the verdict:
- * the Issue is `in-review` with `review_verdict: clean`. This slice handles the
- * **clean merge → done** path only:
+ * the Issue is `in-review` with `review_verdict: clean`. The decision forks on the
+ * implementor's `deviation` field, then runs the merge:
  *
- * 1. Guard that the merge handoff is present — a verdict-bearing Issue should
+ * 1. A recorded `deviation` forecloses the clean auto-merge (a human owns every
+ *    deviation). Overseer reads the implementor's field itself and routes the
+ *    Issue to `human-review` with reason `deviation`, folding the implementor's
+ *    note into the `human_review_note` so the human reads one coherent reason —
+ *    no merge. This is why the reviewer prompt no longer mentions deviations: the
+ *    agent writes `review_verdict: clean` regardless, and Overseer owns the fork.
+ *    Checked before the merge handoff guard because routing a deviation needs no
+ *    worktree/branch — it never merges. The implementor's raw `deviation` field is
+ *    left untouched (the dispatch reader's audit trail).
+ * 2. Guard that the merge handoff is present — a verdict-bearing Issue should
  *    carry the implementor's `repo`, `worktree`, and `branch`, but a hand-edited
  *    one may not. Without them there is nothing to merge, so leave it untouched.
- * 2. A recorded `deviation` forecloses the clean auto-merge (a human owns every
- *    deviation). Routing it to `human-review` is a later slice; until then the
- *    decision simply leaves it rather than wrongly merging it.
  * 3. Run the merge. On `merged`, write `status: done` — the durable idempotency
  *    lock that removes the Issue from the verdict frontier (as flip-before-spawn
  *    does for spawns) — then clean up the worktree. A non-`merged` outcome
@@ -42,19 +59,31 @@ export interface ResolveVerdictDeps {
  *
  * Total: it runs synchronously inside the Reactor's reconcile (the watcher
  * callback), which has no try/catch around it, so a vanished Issue file (ENOENT
- * on the `done` write) is swallowed — the merge is idempotent (`--no-ff`), so the
- * next reconcile retries — and nothing escapes to crash the board.
+ * on the `done` or `human-review` write) is swallowed — the merge is idempotent
+ * (`--no-ff`), so the next reconcile retries — and nothing escapes to crash the
+ * board.
  */
 export function resolveVerdict(
   issue: DispatchIssue,
   featureBranch: string,
   deps: ResolveVerdictDeps,
 ): void {
-  const { repo, worktree, branch, path } = issue;
+  const { repo, worktree, branch, path, deviation } = issue;
+
+  // A deviation defers the merge to a human (ADR 0019). It never merges, so it is
+  // resolved before the merge-handoff guard — the worktree/branch are irrelevant
+  // to a human-review write.
+  if (hasValue(deviation)) {
+    try {
+      deps.writeHumanReview(path, "deviation", deviationNote(deviation));
+    } catch {
+      // The Issue file vanished between the sweep and this write; the next
+      // reconcile re-evaluates it. Nothing escapes the watcher callback.
+    }
+    return;
+  }
+
   if (!hasValue(repo) || !hasValue(worktree) || !hasValue(branch)) return;
-  // A deviation routes to human-review without merging; that fork is deferred, so
-  // for now leave the Issue rather than auto-merge over a recorded deviation.
-  if (hasValue(issue.deviation)) return;
 
   const input: MergeInput = { repo, worktree, branch, featureBranch };
   const result = deps.merge(input);
@@ -69,4 +98,19 @@ export function resolveVerdict(
     return;
   }
   deps.cleanUp(input); // best-effort, after the durable `done` lock
+}
+
+/**
+ * The `human_review_note` for the deviation fork: fold the implementor's recorded
+ * deviation into one coherent reason the human can read off the card without
+ * opening the raw field, matching the prose {@link
+ * import("./escalate.js").escalateNonConvergence} records for `non-convergence`.
+ */
+function deviationNote(deviation: string): string {
+  return (
+    `The implementor recorded a deviation from the planned approach: ` +
+    `"${deviation}". The AI review passed clean, but a deviation needs a human ` +
+    `to confirm before the merge. Review the change against the Issue, then run ` +
+    `the merge skill.`
+  );
 }

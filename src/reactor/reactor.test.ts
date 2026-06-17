@@ -1013,6 +1013,34 @@ describe("createReactor — resolve edge", () => {
     expect(merge.removeWorktree).not.toHaveBeenCalled();
   });
 
+  it("routes a clean verdict carrying a deviation to human-review (deviation), no merge", () => {
+    // Overseer reads the implementor's deviation field itself and routes to
+    // human-review with reason `deviation`, folding the note in — no merge. The
+    // raw `deviation` field is left intact as the audit trail (ADR 0019).
+    writePrd(root, "alpha", {
+      "001-rev.md": fm({
+        status: "in-review",
+        repo: "/repos/alpha",
+        worktree: "/wt/issue",
+        branch: "issue-branch",
+        review_verdict: "clean",
+        deviation: "swapped the queue for a poll loop",
+      }),
+    });
+    const merge = fakeMergeSeam();
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: human-review");
+    expect(after).toContain("human_review_reason: deviation");
+    expect(after).toContain("swapped the queue for a poll loop");
+    // The raw implementor field survives as the audit trail.
+    expect(after).toContain("deviation: swapped the queue for a poll loop");
+    // No merge ran — the deviation forecloses the clean auto-merge.
+    expect(merge.calls).toEqual([]);
+  });
+
   it("once done, a second reconcile does not re-resolve (done drops it off the frontier)", () => {
     // `writeStatus(done)` is the durable idempotency lock: the Issue leaves the
     // verdict frontier, so an overlapping/later reconcile can't double-act.

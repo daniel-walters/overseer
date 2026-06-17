@@ -26,20 +26,25 @@ function deps(
   merges: MergeInput[];
   cleanups: MergeInput[];
   writes: [string, string][];
+  humanReviews: { path: string; reason: string; note: string }[];
 } {
   const merges: MergeInput[] = [];
   const cleanups: MergeInput[] = [];
   const writes: [string, string][] = [];
+  const humanReviews: { path: string; reason: string; note: string }[] = [];
   return {
     merges,
     cleanups,
     writes,
+    humanReviews,
     merge: (input): MergeResult => {
       merges.push(input);
       return { outcome: "merged" };
     },
     cleanUp: (input) => cleanups.push(input),
     writeStatus: (path, status) => writes.push([path, status]),
+    writeHumanReview: (path, reason, note) =>
+      humanReviews.push({ path, reason, note }),
     ...overrides,
   };
 }
@@ -90,15 +95,43 @@ describe("resolveVerdict", () => {
     expect(d.cleanups).toEqual([]);
   });
 
-  it("does not merge an Issue carrying a deviation (deferred to a later slice)", () => {
-    // A recorded deviation must route to human-review without merging; that fork
-    // is deferred, so for now the decision simply leaves it untouched rather than
-    // wrongly auto-merging it.
-    const d = deps({ deviation: undefined });
-    resolveVerdict(issue({ deviation: "took a shortcut" }), FEATURE, d);
+  it("routes an Issue carrying a deviation to human-review (deviation), no merge", () => {
+    // A recorded deviation forecloses the clean auto-merge: Overseer reads the
+    // implementor's field itself and routes to human-review with reason
+    // `deviation` — the same outcome as before, but decided by Overseer, not the
+    // reviewer agent. It must NOT merge or write `done`.
+    const d = deps();
+    resolveVerdict(issue({ deviation: "took a shortcut on the cache" }), FEATURE, d);
 
     expect(d.merges).toEqual([]);
     expect(d.writes).toEqual([]);
+    expect(d.cleanups).toEqual([]);
+    expect(d.humanReviews).toHaveLength(1);
+    expect(d.humanReviews[0]!.path).toBe("/root/prd/001-a.md");
+    expect(d.humanReviews[0]!.reason).toBe("deviation");
+  });
+
+  it("folds the implementor's deviation note into the human_review_note", () => {
+    // The human reads one coherent reason: the implementor's recorded note is
+    // quoted into the human_review_note rather than left only in the raw field.
+    const d = deps();
+    resolveVerdict(issue({ deviation: "swapped the queue for a poll loop" }), FEATURE, d);
+
+    expect(d.humanReviews[0]!.note).toContain("swapped the queue for a poll loop");
+  });
+
+  it("does not throw when the human-review write fails on a deviation", () => {
+    // The Issue file vanished from the watched root before the human-review write:
+    // it must not throw out of the watcher callback; the next reconcile retries.
+    const d = deps({
+      writeHumanReview: () => {
+        throw new Error("ENOENT");
+      },
+    });
+    expect(() =>
+      resolveVerdict(issue({ deviation: "x" }), FEATURE, d),
+    ).not.toThrow();
+    expect(d.merges).toEqual([]);
   });
 
   it("does nothing for an Issue missing the worktree/branch needed to merge", () => {
