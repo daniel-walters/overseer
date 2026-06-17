@@ -14,6 +14,13 @@ const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
+// The SGR code Ink emits for a cyan foreground — the selected card's border,
+// which is the sole selection cue (no ▶ pointer; see Card.test.tsx). Counting
+// its runs counts selected cards (Ink emits it once per bordered line).
+const CYAN = ESC + "[36m";
+const cyanRuns = (raw: string): number =>
+  (raw.match(new RegExp(ESC + "\\[36m", "g")) ?? []).length;
+
 const HEADINGS = ["Backlog", "In Progress", "Done"];
 
 /**
@@ -74,6 +81,34 @@ describe("BoardView", () => {
     expect(columnOf(frame, "DoneCard")).toBe("Done");
   });
 
+  it("highlights the card at the selected (lane, row) coordinate, and no other", () => {
+    // Two cards stacked in the in-progress lane; row 1 (the second) is selected.
+    const board: Board = {
+      prds: [
+        prd({ id: "todo", title: "TodoCard", lane: "backlog" }),
+        prd({ id: "first", title: "FirstInProgress", lane: "in-progress" }),
+        prd({ id: "second", title: "SecondInProgress", lane: "in-progress" }),
+      ],
+    };
+
+    const frame =
+      render(<BoardView board={board} selected={{ laneIndex: 1, rowIndex: 1 }} />)
+        .lastFrame() ?? "";
+
+    // The cyan-border selection cue marks the second in-progress card and no
+    // other: the rendered cyan runs equal exactly one selected card's worth (a
+    // board with a single card selected).
+    const oneSelected =
+      render(
+        <BoardView
+          board={{ prds: [prd({ id: "x", title: "Only", lane: "backlog" })] }}
+          selected={{ laneIndex: 0, rowIndex: 0 }}
+        />,
+      ).lastFrame() ?? "";
+    expect(stripAnsi(frame)).toContain("SecondInProgress");
+    expect(cyanRuns(frame)).toBe(cyanRuns(oneSelected));
+  });
+
   it("renders a done PRD's Linked PR marker on its board card", () => {
     // The overlay reaches the board card end-to-end: a `done` PRD carrying a
     // merged Linked PR shows the marker under the Done column (ADR 0013).
@@ -92,6 +127,67 @@ describe("BoardView", () => {
 
     expect(frame).toContain("PR merged");
     expect(columnOf(frame, "PR merged")).toBe("Done");
+  });
+
+  it("renders only the visible window of an overflowing lane", () => {
+    // A backlog lane far taller than the available height: with `laneHeight`
+    // wired the board renders only the lane's window, not every card (ADR 0015).
+    const prds = Array.from({ length: 20 }, (_, i) =>
+      prd({ id: `b${i}`, title: `Backlog-${i}`, lane: "backlog" }),
+    );
+
+    const frame =
+      render(
+        <BoardView
+          board={{ prds }}
+          selected={{ laneIndex: 0, rowIndex: 0 }}
+          laneHeight={5}
+        />,
+      ).lastFrame() ?? "";
+
+    expect(frame).toContain("Backlog-0");
+    expect(frame).not.toContain("Backlog-19");
+  });
+
+  it("scrolls a tall lane to keep the selected card in view", () => {
+    // Selecting a card past the window's bottom scrolls it into view, so no card
+    // is unreachable on a short terminal.
+    const prds = Array.from({ length: 20 }, (_, i) =>
+      prd({ id: `b${i}`, title: `Backlog-${i}`, lane: "backlog" }),
+    );
+
+    const frame =
+      render(
+        <BoardView
+          board={{ prds }}
+          selected={{ laneIndex: 0, rowIndex: 18 }}
+          laneHeight={5}
+        />,
+      ).lastFrame() ?? "";
+    // The selected card (Backlog-18) scrolled into the window carrying the
+    // cyan-border cue, and the top of the lane scrolled away.
+    expect(stripAnsi(frame)).toContain("Backlog-18");
+    expect(frame).toContain(CYAN);
+    expect(stripAnsi(frame)).not.toContain("Backlog-0");
+  });
+
+  it("renders every card of a lane that fits the available height", () => {
+    const prds = Array.from({ length: 3 }, (_, i) =>
+      prd({ id: `b${i}`, title: `Backlog-${i}`, lane: "backlog" }),
+    );
+
+    const frame =
+      render(
+        <BoardView
+          board={{ prds }}
+          selected={{ laneIndex: 0, rowIndex: 0 }}
+          laneHeight={10}
+        />,
+      ).lastFrame() ?? "";
+
+    for (let i = 0; i < 3; i++) {
+      expect(frame).toContain(`Backlog-${i}`);
+    }
   });
 
   it("renders no PR marker on a done PRD without a linked PR", () => {

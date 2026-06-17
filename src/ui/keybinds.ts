@@ -7,7 +7,7 @@
  * structural fact, not a property a guard test had to assert.
  */
 
-import type { Level } from "./navigation.js";
+import type { Level, MoveDir } from "./navigation.js";
 
 /**
  * A binding's level gate: a single nav {@link Level} (`board` / `issues`), or
@@ -30,6 +30,8 @@ export interface KeyPress {
     readonly escape: boolean;
     readonly upArrow: boolean;
     readonly downArrow: boolean;
+    readonly leftArrow: boolean;
+    readonly rightArrow: boolean;
   };
 }
 
@@ -39,7 +41,7 @@ export interface KeyPress {
  * wires to its reducer/seams. This keeps the registry pure and testable: a test
  * passes spies and asserts the right one fired.
  *
- * - `move` steps the selection by a signed delta (movement keys derive it).
+ * - `move` steps the selection one square in a spatial direction (movement keys derive it).
  * - `zoom` / `back` drive the level reducer (Enter zooms in, Esc backs out).
  * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` open the matching preview.
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
@@ -48,7 +50,7 @@ export interface KeyPress {
  * - `showHelp` opens the keybind reference; `quit` backs out or exits.
  */
 export interface KeybindHandlers {
-  readonly move: (delta: number) => void;
+  readonly move: (dir: MoveDir) => void;
   readonly zoom: () => void;
   readonly back: () => void;
   readonly dispatch: () => void;
@@ -81,12 +83,18 @@ export interface Keybind {
   readonly action: (handlers: KeybindHandlers, press: KeyPress) => void;
 }
 
-/** Translate a movement keypress into a selection delta: -1, +1, or 0. */
-function moveDelta(press: KeyPress): number {
+/**
+ * Translate a movement keypress into a spatial direction, or `undefined` if the
+ * key isn't a movement key. The four `hjkl` keys and the four arrows map onto the
+ * four directions, all distinct: ←/`h` left, →/`l` right, ↑/`k` up, ↓/`j` down.
+ */
+function moveDir(press: KeyPress): MoveDir | undefined {
   const { input, key } = press;
-  if (key.upArrow || input === "k" || input === "h") return -1;
-  if (key.downArrow || input === "j" || input === "l") return 1;
-  return 0;
+  if (key.leftArrow || input === "h") return "left";
+  if (key.rightArrow || input === "l") return "right";
+  if (key.upArrow || input === "k") return "up";
+  if (key.downArrow || input === "j") return "down";
+  return undefined;
 }
 
 /**
@@ -100,8 +108,11 @@ export const KEYBINDS: readonly Keybind[] = [
     key: "h j k l / arrows",
     label: "Move selection",
     level: "both",
-    matches: (p) => moveDelta(p) !== 0,
-    action: (h, p) => h.move(moveDelta(p)),
+    matches: (p) => moveDir(p) !== undefined,
+    action: (h, p) => {
+      const dir = moveDir(p);
+      if (dir) h.move(dir);
+    },
   },
   {
     key: "Enter",

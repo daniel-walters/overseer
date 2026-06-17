@@ -9,12 +9,15 @@ import { DetailModal, DETAIL_MODAL_CHROME_ROWS } from "./DetailModal.js";
 import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
-import { navReduce, initialNav } from "./navigation.js";
+import { navReduce, initialNav, selectedCoord } from "./navigation.js";
+import { laneShape, cardAtCoord } from "./lanes.js";
+import { laneHeight } from "./laneHeight.js";
 import { matchKeybind, type KeybindHandlers } from "./keybinds.js";
 import { RedispatchPreview } from "./RedispatchPreview.js";
 import { KillPreview } from "./KillPreview.js";
 import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
+import { BOARD_LANES, ISSUE_LANES } from "../model.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
@@ -211,8 +214,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
   // pinned to the window height with the status line pushed to the bottom row.
-  // Overflow beyond the viewport clips — the alt screen has no scrollback, and
-  // in-app scrolling is a logged follow-up (docs/ideas.md).
+  // The same reactive read drives the vertical viewport scroll: each lane's
+  // available card-row height is `rows` minus the chrome, recomputed on every
+  // resize, so an overflowing lane scrolls to keep the selection in view rather
+  // than clipping unreachable cards (ADR 0015). Horizontal overflow still clips —
+  // the alt screen has no scrollback (ADR 0001) and horizontal paging is a logged
+  // follow-up (docs/ideas.md).
   const { rows } = useWindowSize();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
   // The plan captured when a preview opened — the dispatch frontier / review
@@ -242,13 +249,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   // actually dead, or the Issue vanished). Cleared on the next keypress.
   const [notice, setNotice] = useState<string | undefined>(undefined);
 
-  // Clamp the stored selection against the current board so a shrunk board
-  // (after a live refresh) can never leave us pointing past the last card.
-  const boardIndex = Math.min(nav.boardIndex, Math.max(0, board.prds.length - 1));
-  const selectedPrd = board.prds[boardIndex];
+  // Resolve the stored grid coordinate against the live board into the card it
+  // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
+  // here on the render side and threaded into both the reducer's `move` action
+  // and the view's highlight, so the reducer never sees the Board. `selectedCoord`
+  // snaps the coordinate onto a real card under a live re-scan (an emptied lane,
+  // or a row past a now-shorter lane), so selection never rests on nothing.
+  const boardShape = laneShape(board.prds, BOARD_LANES);
+  const boardSel = selectedCoord(nav.board, boardShape);
+  const selectedPrd = cardAtCoord(board.prds, BOARD_LANES, boardSel);
   const issues = selectedPrd?.issues ?? [];
-  const issueIndex = Math.min(nav.issueIndex, Math.max(0, issues.length - 1));
-  const selectedIssue = issues[issueIndex];
+  const issueShape = laneShape(issues, ISSUE_LANES);
+  const issueSel = selectedCoord(nav.issues, issueShape);
+  const selectedIssue = cardAtCoord(issues, ISSUE_LANES, issueSel);
+  // The lane shape for the level that currently owns input — what a `move`
+  // carries so the pure reducer knows the grid's geometry.
+  const activeShape = nav.level === "board" ? boardShape : issueShape;
 
   // The detail modal's body region height and its current scroll window. The
   // viewport is the terminal height minus the modal's fixed chrome (title, hints,
@@ -268,10 +284,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
    * its key matched at the right level.
    */
   const handlers: KeybindHandlers = {
-    move: (delta) => {
-      const count = nav.level === "board" ? board.prds.length : issues.length;
-      dispatch({ type: "move", delta, count });
-    },
+    move: (dir) => dispatch({ type: "move", dir, lanes: activeShape }),
     zoom: () => dispatch({ type: "zoom", issueCount: issues.length }),
     back: () => dispatch({ type: "back" }),
     dispatch: () => {
@@ -552,11 +565,23 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, det
   }
   // The live board levels share a persistent status line carrying the auto-run
   // indicator. (Modals return above, so the indicator never shows over a preview.)
+  // Each lane's available card-row height is the terminal height minus the chrome
+  // for the level on screen (the Issue level carries an extra title row); it feeds
+  // the columns' vertical scroll window. Recomputed here from the reactive `rows`,
+  // so a resize reflows the window for free.
   const view =
     nav.level === "issues" && selectedPrd ? (
-      <IssueBoard prd={selectedPrd} selectedIndex={issueIndex} />
+      <IssueBoard
+        prd={selectedPrd}
+        selected={issueSel}
+        laneHeight={laneHeight(rows, "issues")}
+      />
     ) : (
-      <BoardView board={board} selectedIndex={boardIndex} />
+      <BoardView
+        board={board}
+        selected={boardSel}
+        laneHeight={laneHeight(rows, "board")}
+      />
     );
   // The view sits in a flex-shrinking region that clips under overflow; the
   // status line is held at fixed size (flexShrink={0}) so it is never the thing

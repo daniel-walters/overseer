@@ -10,7 +10,15 @@ import {
 function press(input: string, key: Partial<KeyPress["key"]> = {}): KeyPress {
   return {
     input,
-    key: { return: false, escape: false, upArrow: false, downArrow: false, ...key },
+    key: {
+      return: false,
+      escape: false,
+      upArrow: false,
+      downArrow: false,
+      leftArrow: false,
+      rightArrow: false,
+      ...key,
+    },
   };
 }
 
@@ -115,10 +123,14 @@ describe("keybind registry", () => {
   });
 
   it("matches movement keys (arrows and hjkl) as a 'both'-level binding", () => {
-    expect(matchKeybind(press("j"), "board")?.label).toContain("Move");
-    expect(matchKeybind(press("k"), "issues")?.label).toContain("Move");
+    for (const k of ["h", "j", "k", "l"]) {
+      expect(matchKeybind(press(k), "board")?.label).toContain("Move");
+      expect(matchKeybind(press(k), "issues")?.label).toContain("Move");
+    }
     expect(matchKeybind(press("", { upArrow: true }), "board")?.label).toContain("Move");
     expect(matchKeybind(press("", { downArrow: true }), "issues")?.label).toContain("Move");
+    expect(matchKeybind(press("", { leftArrow: true }), "board")?.label).toContain("Move");
+    expect(matchKeybind(press("", { rightArrow: true }), "issues")?.label).toContain("Move");
   });
 
   it("matches Enter (zoom) at the board level and Esc (back) at the issue level", () => {
@@ -140,15 +152,24 @@ describe("keybind registry", () => {
     expect(handlers.toggleAutoRun).toHaveBeenCalledTimes(1);
   });
 
-  it("passes the keypress to the move action so it derives the right delta", () => {
-    const handlers = spyHandlers();
-    const down = press("j");
-    matchKeybind(down, "board")?.action(handlers, down);
-    expect(handlers.move).toHaveBeenCalledWith(1);
-
-    const up = press("", { upArrow: true });
-    matchKeybind(up, "issues")?.action(handlers, up);
-    expect(handlers.move).toHaveBeenCalledWith(-1);
+  it("passes the keypress to the move action so it derives the right direction", () => {
+    // hjkl and the arrows map onto the four spatial directions: ←/→ → h/l,
+    // ↑/↓ → j/k. The four keys are all distinct — no two collapse onto one axis.
+    const cases: ReadonlyArray<[KeyPress, "left" | "right" | "up" | "down"]> = [
+      [press("h"), "left"],
+      [press("l"), "right"],
+      [press("k"), "up"],
+      [press("j"), "down"],
+      [press("", { leftArrow: true }), "left"],
+      [press("", { rightArrow: true }), "right"],
+      [press("", { upArrow: true }), "up"],
+      [press("", { downArrow: true }), "down"],
+    ];
+    for (const [p, dir] of cases) {
+      const handlers = spyHandlers();
+      matchKeybind(p, "board")?.action(handlers, p);
+      expect(handlers.move).toHaveBeenCalledWith(dir);
+    }
   });
 
   it("does not match an unbound key", () => {
