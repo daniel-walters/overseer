@@ -5,7 +5,7 @@ import type { FailureRecord } from "../dispatch/dispatch.js";
 import { readReviewTarget, type ReviewPreview } from "./reviewReader.js";
 import { classifyReviewability } from "./eligibility.js";
 import { buildReviewerPrompt } from "./reviewerPrompt.js";
-import { runReview } from "./review.js";
+import { driveReviewPass } from "./review.js";
 import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
 import type { ReviewConfig } from "./reviewConfig.js";
 import type { Reviewer } from "../ui/App.js";
@@ -26,8 +26,25 @@ export interface ReviewerDeps {
   readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
-  /** Record a launched reviewer's handle against its Issue key in the sidecar. */
-  readonly recordHandle: (issueKey: string, handle: string) => void;
+  /**
+   * Record a launched reviewer's handle — and the AI-review pass this press
+   * drives — against its Issue key in the sidecar (ADR 0008 / 0018).
+   */
+  readonly recordHandle: (
+    issueKey: string,
+    handle: string,
+    reviewPass?: number,
+  ) => void;
+  /**
+   * Read the AI-review pass already recorded for an Issue, or `undefined` when
+   * none is (a fresh `ready-for-review` Issue). A manual `r` press is one pass
+   * exactly like an auto-reconcile pass (ADR 0018): it reads `N` here, then
+   * either spawns pass `N+1` (recording it) or — at the cap — escalates to
+   * human-review with `non-convergence` instead of spawning. The CLI injects the
+   * same sidecar projection the Reactor reads, so a hand-driven loop steps through
+   * the count identically to the automated one.
+   */
+  readonly readReviewPass: (issueKey: string) => number | undefined;
   /**
    * The session-scoped failed-set shared with the Reactor and the dispatcher. A
    * manual `r` launch that fails records `(path, reviewer)` here, so the next
@@ -83,7 +100,14 @@ export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
     review(preview: ReviewPreview): void {
       if (!preview.eligibility.reviewable) return; // skip-and-report happens in the UI
 
-      runReview(preview.issue, {
+      // A manual `r` press is one pass of the Reactor-owned loop (ADR 0018):
+      // `driveReviewPass` reads the recorded count and either spawns pass `N+1`
+      // (recording it) or escalates to human-review at the cap — the same decision
+      // the auto-reconcile makes, so stepping the loop by hand matches the
+      // automated cascade exactly.
+      driveReviewPass(preview.issue, {
+        readReviewPass: deps.readReviewPass,
+        review: deps.review,
         writeStatus,
         buildPrompt: (issue) =>
           buildReviewerPrompt({

@@ -1,6 +1,8 @@
 import { hasValue, type DispatchIssue } from "../dispatch/reader.js";
 import { spawnWithFlip, type FailureRecord } from "../dispatch/failureLog.js";
 import { Status } from "../dispatch/status.js";
+import { escalateNonConvergence } from "./escalate.js";
+import type { ReviewConfig } from "./reviewConfig.js";
 
 /**
  * The I/O seams a single review depends on, injected so the flip-then-spawn edge
@@ -21,8 +23,23 @@ export interface ReviewDeps {
   readonly spawn: (repo: string, prompt: string) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
-  /** Record a launched reviewer's handle against its Issue key in the sidecar. */
-  readonly recordHandle: (issueKey: string, handle: string) => void;
+  /**
+   * Record a launched reviewer's handle — and the {@link reviewPass} this spawn
+   * drives — against its Issue key in the sidecar (ADR 0018).
+   */
+  readonly recordHandle: (
+    issueKey: string,
+    handle: string,
+    reviewPass?: number,
+  ) => void;
+  /**
+   * The AI-review pass this spawn drives, recorded in the sidecar at spawn time.
+   * Overseer (the caller) computes it as `N+1` from the count it read off the
+   * sidecar before deciding to spawn (ADR 0018) — the single source of truth for
+   * both the loop's cap check and the card's `N/cap` marker. `runReview` only
+   * records it; it never reads or increments the count.
+   */
+  readonly reviewPass: number;
 }
 
 /**
@@ -63,5 +80,50 @@ export function runReview(issue: DispatchIssue, deps: ReviewDeps): void {
     spawn: deps.spawn,
     logFailure: deps.logFailure,
     recordHandle: deps.recordHandle,
+    reviewPass: deps.reviewPass,
   });
+}
+
+/** The seams {@link driveReviewPass} needs beyond a single {@link runReview}. */
+export interface DriveReviewPassDeps extends Omit<ReviewDeps, "reviewPass"> {
+  /**
+   * Read the AI-review pass already recorded for this Issue, or `undefined` when
+   * none is (a fresh `ready-for-review` Issue ⇒ the first pass). Overseer's
+   * sidecar is the single source of truth (ADR 0018).
+   */
+  readonly readReviewPass: (issueKey: string) => number | undefined;
+  /** The resolved review knobs; only the `cap` is read here. */
+  readonly review: ReviewConfig;
+}
+
+/**
+ * Drive **one** AI-review pass for an Issue under the Reactor-owned loop (ADR
+ * 0018), the single decision both the automated reconcile and the manual `r`
+ * keybind share so a hand-driven loop steps through the count identically to the
+ * automated one:
+ *
+ * 1. Read the pass count `N` already recorded for the Issue (absent ⇒ 0, the
+ *    first pass).
+ * 2. **At the cap** (`N ≥ review.cap`): the loop ran `cap` passes without
+ *    converging. Escalate to `human-review` with `non-convergence` and spawn
+ *    nothing — the cap is Overseer-enforced from the count it wrote, not an agent
+ *    counting in its own head.
+ * 3. **Below the cap**: spawn pass `N+1` through {@link runReview} (which flips
+ *    `ready-for-review → in-review` first — the idempotency lock — then records
+ *    `N+1` in the sidecar at spawn time).
+ *
+ * Total: {@link runReview} and {@link escalateNonConvergence} are both
+ * best-effort and never throw, so this is safe inside both the watcher callback
+ * and the Ink input handler.
+ */
+export function driveReviewPass(
+  issue: DispatchIssue,
+  deps: DriveReviewPassDeps,
+): void {
+  const completed = deps.readReviewPass(issue.path) ?? 0;
+  if (completed >= deps.review.cap) {
+    escalateNonConvergence(issue.path, completed, deps.review.cap);
+    return;
+  }
+  runReview(issue, { ...deps, reviewPass: completed + 1 });
 }

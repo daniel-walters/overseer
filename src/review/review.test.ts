@@ -24,12 +24,12 @@ function deps(
   writes: [string, string][];
   spawns: { repo: string; prompt: string }[];
   failures: { issueId: string; repo: string; error: string; edge: string }[];
-  handles: { issueKey: string; handle: string }[];
+  handles: { issueKey: string; handle: string; reviewPass?: number }[];
 } {
   const writes: [string, string][] = [];
   const spawns: { repo: string; prompt: string }[] = [];
   const failures: { issueId: string; repo: string; error: string; edge: string }[] = [];
-  const handles: { issueKey: string; handle: string }[] = [];
+  const handles: { issueKey: string; handle: string; reviewPass?: number }[] = [];
   return {
     writes,
     spawns,
@@ -42,7 +42,9 @@ function deps(
       return `handle-${repo}`;
     },
     logFailure: (r) => failures.push(r),
-    recordHandle: (issueKey, handle) => handles.push({ issueKey, handle }),
+    recordHandle: (issueKey, handle, reviewPass) =>
+      handles.push({ issueKey, handle, reviewPass }),
+    reviewPass: 1,
     ...overrides,
   };
 }
@@ -73,12 +75,14 @@ describe("runReview", () => {
     expect(order).toEqual(["write:in-review", "spawn"]);
   });
 
-  it("records the reviewer's handle against the Issue after spawning", () => {
-    const d = deps();
+  it("records the reviewer's handle and the driven pass against the Issue after spawning", () => {
+    const d = deps({ reviewPass: 2 });
     runReview(issue({ id: "002-b.md", path: "/root/prd/002-b.md", repo: "/repos/api" }), d);
 
+    // The pass Overseer told it to drive is recorded alongside the handle (ADR
+    // 0018) — the sidecar carries both for the liveness join and the `N/cap` marker.
     expect(d.handles).toEqual([
-      { issueKey: "/root/prd/002-b.md", handle: "handle-/repos/api" },
+      { issueKey: "/root/prd/002-b.md", handle: "handle-/repos/api", reviewPass: 2 },
     ]);
   });
 

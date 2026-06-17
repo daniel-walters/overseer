@@ -72,12 +72,13 @@ export function recordSpawnFailure(
  * feature picks it up.
  */
 export function recordSpawnHandle(
-  recordHandle: (issueKey: string, handle: string) => void,
+  recordHandle: (issueKey: string, handle: string, reviewPass?: number) => void,
   issueKey: string,
   handle: string,
+  reviewPass?: number,
 ): void {
   try {
-    recordHandle(issueKey, handle);
+    recordHandle(issueKey, handle, reviewPass);
   } catch {
     // The sidecar is unwritable (e.g. an unusable state dir). Losing one handle
     // leaves a live-but-unrecorded agent (unknown liveness), never a crash.
@@ -109,9 +110,21 @@ export interface SpawnWithFlip {
   readonly logFailure: (record: FailureRecord) => void;
   /**
    * Record the launched agent's handle against `issueKey` (the Issue's path) in
-   * the durable sidecar — the third, post-spawn step (ADR 0008).
+   * the durable sidecar — the third, post-spawn step (ADR 0008). The optional
+   * {@link reviewPass} below rides along to the same sidecar write.
    */
-  readonly recordHandle: (issueKey: string, handle: string) => void;
+  readonly recordHandle: (
+    issueKey: string,
+    handle: string,
+    reviewPass?: number,
+  ) => void;
+  /**
+   * The AI-review pass number Overseer is driving for this spawn, recorded in the
+   * sidecar beside the handle (ADR 0018). Set only on the review edge — a
+   * dispatch spawn omits it, so its entry reads as no count. The agent never
+   * supplies this; Overseer is the sole writer of the pass.
+   */
+  readonly reviewPass?: number;
 }
 
 /**
@@ -152,9 +165,15 @@ export function spawnWithFlip(deps: SpawnWithFlip): void {
     return;
   }
 
-  // Third step: record the captured handle. Only when the spawn returned one —
-  // a missing handle leaves the agent running but unrecorded (unknown liveness).
+  // Third step: record the captured handle (and the review pass, when this is a
+  // review spawn). Only when the spawn returned one — a missing handle leaves the
+  // agent running but unrecorded (unknown liveness).
   if (handle !== undefined) {
-    recordSpawnHandle(deps.recordHandle, deps.issue.path, handle);
+    recordSpawnHandle(
+      deps.recordHandle,
+      deps.issue.path,
+      handle,
+      deps.reviewPass,
+    );
   }
 }

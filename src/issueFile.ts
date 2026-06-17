@@ -128,6 +128,38 @@ export function writeStatus(path: string, status: string): void {
   );
 }
 
+/**
+ * Escalate an Issue to `human-review` in a single write, recording the
+ * escalation reason and a free-text note alongside the status — the same three
+ * frontmatter fields the reviewer agent writes when it takes the human-review
+ * exit, but written by Overseer when the Reactor enforces the pass cap
+ * (`non-convergence`, ADR 0018). Overseer owns this escalation because the count
+ * that triggers it lives in Overseer's sidecar, never in the Issue.
+ *
+ * Unlike {@link writeStatus}'s surgical single-line edit, this rewrites the whole
+ * frontmatter block via gray-matter: it adds two keys that were almost certainly
+ * absent (`human_review_reason`, `human_review_note`), so there is no inline
+ * comment on them to preserve, and the markdown body is round-tripped untouched.
+ * Existing keys (repo, worktree, branch, any implementor deviation) are preserved
+ * — `human-review` keeps the deviation audit trail intact.
+ */
+export function writeHumanReview(
+  path: string,
+  reason: string,
+  note: string,
+): void {
+  const { data, content } = matter(readFileSync(path, "utf8"));
+  writeFileSync(
+    path,
+    matter.stringify(content, {
+      ...data,
+      [FIELD.status]: "human-review",
+      [FIELD.humanReviewReason]: reason,
+      [FIELD.humanReviewNote]: note,
+    }),
+  );
+}
+
 /** Matches a leading frontmatter block delimited by `---` fences. */
 const FRONTMATTER = /^(---\r?\n)([\s\S]*?)(\r?\n---\r?\n)/;
 /** Matches a top-level `status:` line (and its trailing comment) inside it. */

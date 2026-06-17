@@ -9,6 +9,7 @@ import {
   readString,
   safeMatter,
   writeStatus,
+  writeHumanReview,
 } from "./issueFile.js";
 
 describe("safeMatter", () => {
@@ -178,5 +179,72 @@ Body.
     const after = readFileSync(path, "utf8");
     expect(after).toContain("status: ready-for-agent");
     expect(after).not.toContain("in-progress");
+  });
+});
+
+describe("writeHumanReview", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "overseer-human-review-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function file(name: string, contents: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  it("sets human-review with the reason and note in one write, preserving other fields", () => {
+    const path = file(
+      "issue.md",
+      `---
+title: Non-converging
+status: in-review
+repo: /repos/backend
+worktree: /wt/x
+branch: feat-x
+---
+
+The body survives.
+`,
+    );
+
+    writeHumanReview(path, "non-convergence", "ran out of road after 3 passes");
+
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("status: human-review");
+    expect(after).toContain("human_review_reason: non-convergence");
+    expect(after).toContain("ran out of road after 3 passes");
+    // The handoff fields and the body are preserved.
+    expect(after).toContain("repo: /repos/backend");
+    expect(after).toContain("worktree: /wt/x");
+    expect(after).toContain("branch: feat-x");
+    expect(after).toContain("The body survives.");
+  });
+
+  it("keeps an implementor deviation field intact (the audit trail)", () => {
+    const path = file(
+      "issue.md",
+      `---
+title: Strayed
+status: in-review
+repo: /repos/backend
+deviation: "swapped the parser library"
+---
+
+Body.
+`,
+    );
+
+    writeHumanReview(path, "non-convergence", "did not converge");
+
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("status: human-review");
+    expect(after).toContain("swapped the parser library");
   });
 });
