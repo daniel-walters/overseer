@@ -18,6 +18,7 @@ import type { OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
 import type { DeletePreviewData } from "./DeletePreview.js";
 import type { DeleteResult } from "../dispatch/deletePrd.js";
+import { createDelete } from "../dispatch/deletePrd.js";
 import type { CardDetail } from "./detailReader.js";
 
 const ESC = String.fromCharCode(27);
@@ -1414,6 +1415,38 @@ describe("App delete PRD (X on a done PRD)", () => {
     stdin.write(ENTER);
     await tick();
     expect(deleter.delete).toHaveBeenCalledWith(previewFor("auth"));
+  });
+
+  it("surfaces the failure notice rather than throwing when the directory vanished under the modal (real seam, total by construction)", async () => {
+    // The spy tests above hand the App a canned `DeleteResult`; this one drives the
+    // *real* `createDelete` orchestration end-to-end so the total-by-construction
+    // guarantee is exercised through the App, not just unit-tested. The directory
+    // the preview was frozen on has vanished (or its removal is forbidden) by the
+    // time the user confirms, so the injected `removeDir` throws. The orchestration
+    // must catch it and hand the App a failed result — surfacing the loud status-
+    // line notice — never letting the throw escape the Ink input handler and crash
+    // the board (mirroring the Open PR end-to-end failure path).
+    const deleter = createDelete("/root", {
+      seam: {
+        removeDir: () => {
+          throw new Error("ENOENT: no such file or directory");
+        },
+      },
+      countIssues: () => 2,
+    });
+    const { stdin, lastFrame } = render(<App board={doneBoard} deleter={deleter} />);
+
+    stdin.write(ARROW_RIGHT); // select the done AuthPRD
+    await tick();
+    stdin.write("X"); // open the preview (frozen on AuthPRD)
+    await tick();
+    stdin.write(ENTER); // confirm — the removal throws under the modal
+    await tick();
+
+    // The throw was caught and degraded to a loud notice; the board still renders.
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Couldn't delete");
+    expect(frame).toContain("ENOENT");
   });
 });
 
