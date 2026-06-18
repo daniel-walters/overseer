@@ -18,6 +18,7 @@ import type { OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
 import type { DeletePreviewData } from "./DeletePreview.js";
 import type { DeleteResult } from "../dispatch/deletePrd.js";
+import type { MarkDonePreviewData } from "./MarkDonePreview.js";
 import { createDelete } from "../dispatch/deletePrd.js";
 import type { CardDetail } from "./detailReader.js";
 
@@ -535,6 +536,125 @@ describe("App review", () => {
     await tick();
 
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+});
+
+describe("App mark done (m on a ready-for-human Issue)", () => {
+  // A board whose selected (first) Issue is a `ready-for-human` card — the only
+  // state `m` lights up on. `ready-for-human` folds into the `ready` lane carrying
+  // the `human` badge (model.ts), so the card is `lane: "ready", readyFor: "human"`.
+  // A second `ready-for-agent` card pins the human-vs-agent gate.
+  const humanBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          { id: "010-secret", title: "Provision a secret", lane: "ready", readyFor: "human" },
+          { id: "020-build", title: "Build it", lane: "ready", readyFor: "agent" },
+        ],
+      },
+    ],
+  };
+
+  function previewFor(issueId: string): MarkDonePreviewData {
+    return { issueTitle: issueId, issuePath: `/root/auth/${issueId}` };
+  }
+
+  function spyMarkDone(
+    readMarkDone: (prdId: string, issueId: string) => MarkDonePreviewData | undefined = (
+      _p,
+      id,
+    ) => previewFor(id),
+  ) {
+    return {
+      readMarkDone: vi.fn(readMarkDone),
+      markDone: vi.fn<(p: MarkDonePreviewData) => void>(),
+    };
+  }
+
+  it("opens a confirm preview on m at the Issue level for a ready-for-human Issue", async () => {
+    const markDone = spyMarkDone();
+    const { stdin, lastFrame } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects 010-secret)
+    await tick();
+    stdin.write("m");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Mark"); // the preview titles the action
+    expect(frame).toContain("ready-for-human → done"); // and names the transition
+    expect(markDone.readMarkDone).toHaveBeenCalledWith("auth", "010-secret");
+  });
+
+  it("does nothing on m at the board level (mark-done is Issue-level only)", async () => {
+    const markDone = spyMarkDone();
+    const { stdin } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write("m");
+    await tick();
+
+    expect(markDone.readMarkDone).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on m for a ready-for-agent Issue (the action is human-gated)", async () => {
+    const markDone = spyMarkDone();
+    const { stdin } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write(ARROW_DOWN); // move to the ready-for-agent 020-build
+    await tick();
+    stdin.write("m");
+    await tick();
+
+    expect(markDone.readMarkDone).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on m when no markDone seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={humanBoard} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("m");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("ready-for-human → done");
+  });
+
+  it("writes status done to the Issue path on confirm, then closes with a notice", async () => {
+    const markDone = spyMarkDone();
+    const { stdin, lastFrame } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("m"); // open the confirm preview
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(markDone.markDone).toHaveBeenCalledTimes(1);
+    expect(markDone.markDone).toHaveBeenCalledWith(previewFor("010-secret"));
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("ready-for-human → done"); // modal closed
+    expect(frame).toContain("done"); // success notice
+  });
+
+  it("cancels on Esc with nothing written", async () => {
+    const markDone = spyMarkDone();
+    const { stdin, lastFrame } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("m");
+    await tick();
+    stdin.write(ESC); // cancel
+    await tick();
+
+    expect(markDone.markDone).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("ready-for-human → done");
   });
 });
 

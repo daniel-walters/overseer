@@ -30,6 +30,7 @@ import {
 import { realLinkedPrLookup } from "./dispatch/linkedPr.js";
 import { createOpenPr, realOpenPrDeps } from "./dispatch/openPr.js";
 import { createDelete, realDeleteDeps } from "./dispatch/deletePrd.js";
+import { createMarkDone, realMarkDoneDeps } from "./dispatch/markDone.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
@@ -212,6 +213,14 @@ function runBoard(): void {
   // dangling-but-inert. A removal failure surfaces loudly in the status line; the
   // existing `refresh` re-scan rebuilds the board without the deleted folder.
   const deleter = createDelete(root, realDeleteDeps());
+  // Mark done (CONTEXT.md → mark done): `m` on a `ready-for-human` Issue advances
+  // it straight to `done`, behind a confirm preview. The board's first
+  // human-triggered status flip with no spawn behind it — it reuses the same
+  // `writeStatus` primitive the dispatch/review rollback paths call, so the
+  // watcher's re-scan moves the card to the `done` column. A cheap, trivially
+  // reversible write (re-edit the field to undo), so it carries no result and
+  // needs no rollback — the thinnest of the Issue-level seams.
+  const markDone = createMarkDone(root, realMarkDoneDeps());
   // The detail modal (ADR 0014): `v` reads the selected card's frontmatter-stripped
   // body off the watched root on demand — the PRD's `prd.md` at the board level, the
   // selected Issue's file when zoomed — and renders it through marked-terminal. A
@@ -256,6 +265,7 @@ function runBoard(): void {
       killer={killer}
       openPr={openPr}
       deleter={deleter}
+      markDone={markDone}
       detailReader={detailReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
