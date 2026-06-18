@@ -14,6 +14,16 @@ import { scrollDetail } from "./detailScroll.js";
  */
 export const DETAIL_MODAL_CHROME_ROWS = 8;
 
+/**
+ * The columns the modal spends on horizontal chrome rather than body: the round
+ * border (left + right = 2) and the `paddingX={1}` either side (2). The {@link App}
+ * subtracts this from the terminal width to get the body's content width, then
+ * hard-wraps the rendered lines to it (`renderDetailLines`) so each logical line is
+ * one drawn row — the count the scroll window clamps against (issue #71). It lives
+ * here beside the layout it measures, like {@link DETAIL_MODAL_CHROME_ROWS}.
+ */
+export const DETAIL_MODAL_CHROME_COLS = 4;
+
 interface DetailModalProps {
   /** The resolved card body to display: its title and frontmatter-stripped body. */
   readonly detail: CardDetail;

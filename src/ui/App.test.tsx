@@ -2306,6 +2306,16 @@ describe("App detail modal", () => {
   // A terminal short enough that 20+ body lines overflow the modal viewport.
   const SHORT_ROWS = 12;
 
+  // Two *long* paragraphs: only three logical lines (para, blank, para), but each
+  // paragraph is far wider than the modal, so the terminal wraps each to many rows.
+  // The unwrapped line count (3) fits the body region, so without wrapping the
+  // rendered lines to the body width the scroll offset would clamp to 0 and the keys
+  // go inert — issue #71. `ALPHA`/`OMEGA` mark the first/second paragraph so we can
+  // assert the window actually moves from one to the other.
+  const WIDE = [`ALPHA ${"lorem ".repeat(40)}`, `${"ipsum ".repeat(40)} OMEGA`].join(
+    "\n\n",
+  );
+
   it("scrolls the body down with j and up with k", async () => {
     const detailReader = spyDetailReader({ title: "AuthPRD", body: TALL });
     const { stdin, lastFrame } = render(
@@ -2334,6 +2344,32 @@ describe("App detail modal", () => {
       await tick();
     }
     expect(stripAnsi(lastFrame() ?? "")).toContain("LINE0");
+  });
+
+  it("scrolls a body of long wrapped paragraphs (issue #71)", async () => {
+    const detailReader = spyDetailReader({ title: "AuthPRD", body: WIDE });
+    const { stdin, lastFrame } = render(
+      <App board={board} detailReader={detailReader} />,
+      40, // narrow enough that each long paragraph wraps to many rows
+      SHORT_ROWS,
+    );
+
+    stdin.write("v"); // open — windowed at the top
+    await tick();
+    const top = stripAnsi(lastFrame() ?? "");
+    expect(top).toContain("ALPHA");
+    expect(top).not.toContain("OMEGA"); // the second paragraph is below the fold
+    expect(top).toMatch(/more below/); // and the affordance says there is more
+
+    // Scroll well past the first paragraph — the second comes into view, the first
+    // clips above. Before the wrap fix `maxOffset` was 0 here and `j` did nothing.
+    for (let i = 0; i < 30; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    const bottom = stripAnsi(lastFrame() ?? "");
+    expect(bottom).toContain("OMEGA");
+    expect(bottom).not.toContain("ALPHA");
   });
 
   it("scrolls with the down and up arrows too", async () => {

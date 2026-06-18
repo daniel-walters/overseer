@@ -32,6 +32,9 @@ importers:
       smol-toml:
         specifier: ^1.6.1
         version: 1.6.1
+      wrap-ansi:
+        specifier: ^10.0.0
+        version: 10.0.0
     devDependencies:
       '@types/marked-terminal':
         specifier: ^6.1.1

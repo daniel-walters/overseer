@@ -1,5 +1,6 @@
 import { marked, setOptions, type MarkedOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
+import wrapAnsi from "wrap-ansi";
 import type { CardDetail } from "./detailReader.js";
 import { REASON_MARKER } from "../model.js";
 
@@ -92,8 +93,24 @@ export function composeDetailMarkdown(detail: CardDetail): string {
  * to size the scroll window's `maxOffset` and the {@link DetailModal} renders the
  * resulting lines, so the clamp and the rendered window operate on the *same* lines
  * (and the heavier `renderMarkdown` runs once per frame, not once per call site).
+ *
+ * `width`, when given, hard-wraps each rendered line to that many columns so a
+ * *logical* line is also a *visual* row: `marked-terminal` emits each paragraph as
+ * one long line with no embedded newlines, which the terminal then wraps for
+ * display. Without wrapping here, `lines.length` undercounts the rows actually
+ * drawn — a body of a few long paragraphs fills the screen yet computes `maxOffset`
+ * 0, so the keys go inert even though there is clearly more below (issue #71). The
+ * App passes the modal's body width so the count matches what is rendered; omitting
+ * it (standalone tests) leaves the lines unwrapped, the prior behaviour.
  */
-export function renderDetailLines(detail: CardDetail): string[] {
+export function renderDetailLines(detail: CardDetail, width?: number): string[] {
   const markdown = composeDetailMarkdown(detail);
-  return markdown.trim().length > 0 ? renderMarkdown(markdown).split("\n") : [];
+  if (markdown.trim().length === 0) return [];
+  const rendered = renderMarkdown(markdown);
+  if (width === undefined || width <= 0) return rendered.split("\n");
+  // `hard` breaks a word longer than the width (a URL, a code token) rather than
+  // overflowing it; `trim: false` keeps leading indentation (list nesting, code)
+  // and blank lines intact. wrap-ansi counts display width, not bytes, so ANSI
+  // styling and wide glyphs don't throw the wrap off.
+  return wrapAnsi(rendered, width, { hard: true, trim: false }).split("\n");
 }

@@ -5,7 +5,7 @@ import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
-import { DetailModal, DETAIL_MODAL_CHROME_ROWS } from "./DetailModal.js";
+import { DetailModal, DETAIL_MODAL_CHROME_ROWS, DETAIL_MODAL_CHROME_COLS } from "./DetailModal.js";
 import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
@@ -268,7 +268,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // than clipping unreachable cards (ADR 0015). Horizontal overflow still clips —
   // the alt screen has no scrollback (ADR 0001) and horizontal paging is a logged
   // follow-up (docs/ideas.md).
-  const { rows } = useWindowSize();
+  const { rows, columns } = useWindowSize();
   const [nav, dispatch] = useReducer(navReduce, initialNav);
   // The plan captured when a preview opened — the dispatch frontier / review
   // preview a confirm acts on, and what the modal renders. Frozen at open time
@@ -368,8 +368,12 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // modal's window can never disagree. Only meaningful while a detail modal is
   // open; `maxOffset` is what `j`/`k`/arrows clamp the offset against.
   const detailBodyRows = Math.max(1, rows - DETAIL_MODAL_CHROME_ROWS);
+  // Hard-wrap the rendered body to the modal's content width so each line is a row
+  // the terminal actually draws — otherwise a long paragraph counts as one line but
+  // fills many rows, leaving `maxOffset` 0 and the scroll keys inert (issue #71).
+  const detailBodyWidth = Math.max(1, columns - DETAIL_MODAL_CHROME_COLS);
   const detailLines =
-    modal?.kind === "detail" ? renderDetailLines(modal.detail) : [];
+    modal?.kind === "detail" ? renderDetailLines(modal.detail, detailBodyWidth) : [];
   const detailMaxOffset = scrollDetail(detailLines, detailScroll, detailBodyRows).maxOffset;
 
   /**
