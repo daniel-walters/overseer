@@ -28,6 +28,7 @@ function view(issues: readonly Partial<DispatchIssue>[]): DispatchView {
       worktree: i.worktree,
       branch: i.branch,
       deviation: i.deviation,
+      reviewVerdict: i.reviewVerdict,
       body: i.body ?? "",
     })),
   };

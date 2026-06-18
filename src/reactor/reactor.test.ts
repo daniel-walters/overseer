@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createReactor, type ReactorDeps } from "./reactor.js";
 import type { GitSeam } from "../dispatch/gitSetup.js";
+import type { MergeSeam } from "../review/mergeSeam.js";
 
 /** A git seam that treats every repo as valid with the branch already present. */
 function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
@@ -19,6 +20,29 @@ function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
     branchExists: vi.fn(() => true),
     createBranch: vi.fn(),
     checkoutBranch: vi.fn(),
+    ...overrides,
+  };
+}
+
+/**
+ * A merge seam that records its calls and, by default, treats every worktree as
+ * clean and every git step as succeeding — the clean-merge happy path. Override a
+ * method to exercise a failure (e.g. `merge` throwing) or a totality backstop
+ * (e.g. `isWorktreeClean` throwing).
+ */
+function fakeMergeSeam(
+  overrides: Partial<MergeSeam> = {},
+): MergeSeam & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    calls,
+    isWorktreeClean: vi.fn(() => true),
+    checkout: vi.fn(() => void calls.push("checkout")),
+    merge: vi.fn(() => void calls.push("merge")),
+    conflictingPaths: vi.fn(() => []),
+    abortMerge: vi.fn(() => void calls.push("abortMerge")),
+    removeWorktree: vi.fn(() => void calls.push("removeWorktree")),
+    deleteBranch: vi.fn(() => void calls.push("deleteBranch")),
     ...overrides,
   };
 }
@@ -482,7 +506,9 @@ describe("createReactor", () => {
     expect(deps.spawns).toHaveLength(1);
   });
 
-  it("builds a reviewer prompt carrying the worktree and branch to merge", () => {
+  it("builds a reviewer prompt carrying the worktree to review", () => {
+    // Since ADR 0019 the agent no longer merges, so the prompt carries the
+    // worktree to review but not the branch/feature-branch merge target.
     writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
 
     const deps = recordingDeps();
@@ -490,8 +516,7 @@ describe("createReactor", () => {
 
     const prompt = deps.spawns[0]?.prompt ?? "";
     expect(prompt).toContain("/wt/issue"); // recorded worktree
-    expect(prompt).toContain("issue-branch"); // recorded branch
-    expect(prompt).toContain("alpha"); // PRD feature branch
+    expect(prompt).toContain("/repos/alpha"); // repo the review runs in
     expect(prompt).toContain("reviewer"); // reviewer brief, not implementor
   });
 
@@ -879,5 +904,272 @@ describe("createReactor activity", () => {
 
     expect(deps.spawns).toHaveLength(1);
     expect(reactor.activity()).toBe("working");
+  });
+});
+
+/**
+ * The third, non-spawn reconcile edge (ADR 0019): after the two spawn frontiers,
+ * the Reactor sweeps `in-review` Issues carrying `review_verdict: clean` and
+ * resolves each — merging the worktree branch into the feature branch and writing
+ * `done` — synchronously, under the same re-entrancy guard, gated on the verdict
+ * (not on liveness). The merge is Overseer's now, not the agent's.
+ */
+describe("createReactor — resolve edge", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "overseer-reactor-resolve-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // An in-review Issue carrying a clean verdict, as the pass agent leaves it: the
+  // implementor's recorded repo/worktree/branch plus `review_verdict: clean`.
+  const cleanVerdict = (repo = "/repos/alpha"): string =>
+    fm({
+      status: "in-review",
+      repo,
+      worktree: "/wt/issue",
+      branch: "issue-branch",
+      review_verdict: "clean",
+    });
+
+  it("resolves a clean verdict: merges, writes done, and cleans up the worktree", () => {
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam();
+    const deps = recordingDeps({ merge });
+
+    createReactor(root, deps).reconcile();
+
+    // The merge ran (feature-branch checkout + merge), then the worktree was torn
+    // down — and the Issue reached done on disk, with no agent performing the merge.
+    expect(merge.calls).toEqual([
+      "checkout",
+      "merge",
+      "removeWorktree",
+      "deleteBranch",
+    ]);
+    expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
+      "status: done",
+    );
+    // Resolving is not a spawn — "exactly two spawn edges" holds.
+    expect(deps.spawns).toEqual([]);
+  });
+
+  it("merges into the PRD feature branch (derived from the PRD dir)", () => {
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam();
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    // checkout(repo, featureBranch) then merge(repo, branch).
+    expect(merge.checkout).toHaveBeenCalledWith("/repos/alpha", "alpha");
+    expect(merge.merge).toHaveBeenCalledWith("/repos/alpha", "issue-branch");
+  });
+
+  it("does not resolve while auto-run is off", () => {
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam();
+    const reactor = createReactor(root, recordingDeps({ merge }));
+    reactor.setEnabled(false);
+
+    reactor.reconcile();
+
+    expect(merge.calls).toEqual([]);
+    expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("is inert when no merge seam is injected", () => {
+    // The resolve edge is optional: with no merge seam the verdict-bearing Issue
+    // is left in-review (the spawn-edge-wiring tests rely on this).
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const deps = recordingDeps(); // no `merge`
+
+    createReactor(root, deps).reconcile();
+
+    expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("leaves the Issue in-review when the merge does not succeed", () => {
+    // A transient (non-conflict) merge failure leaves the Issue in-review with its
+    // verdict; `done` is never written.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({
+      merge: vi.fn(() => {
+        throw new Error("transient git hiccup");
+      }),
+    });
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: in-review");
+    expect(after).not.toContain("status: done");
+    // No cleanup on a failed merge.
+    expect(merge.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("routes a clean verdict carrying a deviation to human-review (deviation), no merge", () => {
+    // Overseer reads the implementor's deviation field itself and routes to
+    // human-review with reason `deviation`, folding the note in — no merge. The
+    // raw `deviation` field is left intact as the audit trail (ADR 0019).
+    writePrd(root, "alpha", {
+      "001-rev.md": fm({
+        status: "in-review",
+        repo: "/repos/alpha",
+        worktree: "/wt/issue",
+        branch: "issue-branch",
+        review_verdict: "clean",
+        deviation: "swapped the queue for a poll loop",
+      }),
+    });
+    const merge = fakeMergeSeam();
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: human-review");
+    expect(after).toContain("human_review_reason: deviation");
+    expect(after).toContain("swapped the queue for a poll loop");
+    // The raw implementor field survives as the audit trail.
+    expect(after).toContain("deviation: swapped the queue for a poll loop");
+    // No merge ran — the deviation forecloses the clean auto-merge.
+    expect(merge.calls).toEqual([]);
+  });
+
+  it("escalates a clean verdict whose merge conflicts to human-review (conflict)", () => {
+    // End-to-end: a clean-verdict Issue whose merge hits a real conflict (the
+    // merge throws and leaves unmerged paths) lands in human-review with reason
+    // `conflict` — Overseer aborts the merge and escalates, never auto-resolving.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({
+      merge: vi.fn(() => {
+        throw new Error("CONFLICT (content)");
+      }),
+      conflictingPaths: vi.fn(() => ["src/x.ts"]),
+    });
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: human-review");
+    expect(after).toContain("human_review_reason: conflict");
+    expect(after).toContain("src/x.ts"); // the note names what conflicted
+    expect(after).not.toContain("status: done");
+    // The merge was aborted and the worktree left for the human — no cleanup.
+    expect(merge.abortMerge).toHaveBeenCalledWith("/repos/alpha");
+    expect(merge.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("suppresses a transient merge failure: logs a resolve-edge record, never human-review", () => {
+    // The dirty-worktree precheck is the canonical transient failure (ADR 0019): no
+    // checkout, no merge — the held Issue stays in-review, a `resolve`-edge failure
+    // is appended to the durable log, and `human-review` is never written.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({ isWorktreeClean: vi.fn(() => false) });
+    const deps = recordingDeps({ merge });
+
+    createReactor(root, deps).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: in-review");
+    expect(after).not.toContain("status: human-review");
+    expect(after).not.toContain("status: done");
+    // Took the suppression path, not the merge path: nothing was checked out/merged.
+    expect(merge.checkout).not.toHaveBeenCalled();
+    expect(merge.merge).not.toHaveBeenCalled();
+    // A resolve-edge failure was logged to the durable log.
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-rev.md",
+        repo: "/repos/alpha",
+        error: expect.stringContaining("uncommitted changes"),
+        edge: "resolve",
+      },
+    ]);
+  });
+
+  it("does not re-attempt a suppressed merge this session (failed-set subtracts the resolve edge)", () => {
+    // The transient failure records `(path, resolve)` in the session failed-set, so
+    // a second reconcile on the same board skips the candidate — it does not
+    // re-attempt and re-block the UI. A fresh board (reopen) builds a new set and
+    // retries.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({ isWorktreeClean: vi.fn(() => false) });
+    const reactor = createReactor(root, recordingDeps({ merge }));
+
+    reactor.reconcile();
+    expect(merge.isWorktreeClean).toHaveBeenCalledTimes(1);
+
+    reactor.reconcile();
+    // Subtracted ⇒ not retried this session.
+    expect(merge.isWorktreeClean).toHaveBeenCalledTimes(1)
+  });
+
+  it("once done, a second reconcile does not re-resolve (done drops it off the frontier)", () => {
+    // `writeStatus(done)` is the durable idempotency lock: the Issue leaves the
+    // verdict frontier, so an overlapping/later reconcile can't double-act.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam();
+    const reactor = createReactor(root, recordingDeps({ merge }));
+
+    reactor.reconcile();
+    expect(merge.merge).toHaveBeenCalledTimes(1);
+
+    reactor.reconcile();
+    expect(merge.merge).toHaveBeenCalledTimes(1); // not re-merged
+  });
+
+  it("swallows a throw mid-resolve without crashing the board", () => {
+    // Totality backstop: a merge-seam method that throws (e.g. the worktree
+    // vanished, so the clean check raises) must not escape the watcher callback.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({
+      isWorktreeClean: vi.fn(() => {
+        throw new Error("worktree gone");
+      }),
+    });
+
+    expect(() =>
+      createReactor(root, recordingDeps({ merge })).reconcile(),
+    ).not.toThrow();
+    // The Issue is left in-review for the next reconcile to retry.
+    expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("resolves a clean verdict while still driving the spawn edges in one pass", () => {
+    // The three edges run in one reconcile: an implementor spawns, a reviewer
+    // spawns, and a clean verdict resolves to done — independently.
+    writePrd(root, "alpha", {
+      "001-impl.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+      "002-rev.md": fm({
+        status: "ready-for-review",
+        repo: "/repos/alpha",
+        worktree: "/wt/x",
+        branch: "b",
+      }),
+      "003-resolve.md": cleanVerdict(),
+    });
+    const merge = fakeMergeSeam();
+
+    createReactor(root, recordingDeps({ merge })).reconcile();
+
+    expect(readFileSync(join(root, "alpha", "001-impl.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+    expect(readFileSync(join(root, "alpha", "002-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+    expect(readFileSync(join(root, "alpha", "003-resolve.md"), "utf8")).toContain(
+      "status: done",
+    );
   });
 });

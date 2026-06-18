@@ -13,6 +13,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     worktree: "worktree" in overrides ? overrides.worktree : "/wt/blue-cat-fox",
     branch: "branch" in overrides ? overrides.branch : "blue-cat-fox",
     deviation: overrides.deviation,
+    reviewVerdict: overrides.reviewVerdict,
     body: overrides.body ?? "",
   };
 }

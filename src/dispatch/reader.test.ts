@@ -141,6 +141,26 @@ describe("readDispatchView", () => {
     expect(issueById(view.issues, "002-bare.md").deviation).toBeUndefined();
   });
 
+  it("reads review_verdict from frontmatter onto the read model", () => {
+    // The clean-review verdict the pass agent writes (ADR 0019): Overseer reads
+    // it off the in-review Issue to know the merge → done resolve may run.
+    const dir = tmpPrd({
+      "001-clean.md": "---\nstatus: in-review\nreview_verdict: clean\n---\nbody\n",
+    });
+    expect(readDispatchIssue(dir, "001-clean.md").reviewVerdict).toBe("clean");
+  });
+
+  it("treats an absent or blank review_verdict as undefined", () => {
+    // No verdict (a fresh in-review pass still running) and a blank one are both
+    // "no verdict yet" — only a real value moves the Issue onto the resolve frontier.
+    const dir = tmpPrd({
+      "001-none.md": "---\nstatus: in-review\n---\nbody\n",
+      "002-blank.md": '---\nstatus: in-review\nreview_verdict: ""\n---\nbody\n',
+    });
+    expect(readDispatchIssue(dir, "001-none.md").reviewVerdict).toBeUndefined();
+    expect(readDispatchIssue(dir, "002-blank.md").reviewVerdict).toBeUndefined();
+  });
+
   it("does not throw on malformed frontmatter; reads the fields as absent", () => {
     // A `deviation:` value with an unquoted ': ' is invalid YAML. The reader
     // must degrade to absent fields rather than throwing out of the read.

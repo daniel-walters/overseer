@@ -18,6 +18,7 @@ import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
 import { createFailedSet, suppressedSeam } from "./reactor/failedSet.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
+import { realMergeSeam } from "./review/mergeSeam.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
 import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
 import {
@@ -217,6 +218,7 @@ function runBoard(): void {
   // completed Issue unblocks its siblings and they spawn with no second keypress.
   const reactor = createReactor(root, {
     git: realGitSeam,
+    merge: realMergeSeam,
     spawn,
     logFailure,
     recordHandle,

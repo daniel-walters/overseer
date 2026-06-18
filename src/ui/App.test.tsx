@@ -160,7 +160,7 @@ describe("App", () => {
 
 describe("App dispatch", () => {
   function di(id: string): DispatchIssue {
-    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, body: "" };
+    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, reviewVerdict: undefined, body: "" };
   }
 
   /** A frontier with one spawn candidate and one skipped Issue. */
@@ -341,6 +341,7 @@ describe("App review", () => {
       worktree: "/wt/blue-cat-fox",
       branch: "blue-cat-fox",
       deviation: undefined,
+      reviewVerdict: undefined,
       body: "",
       ...overrides,
     };
@@ -509,6 +510,7 @@ describe("App re-dispatch (R on an orphan)", () => {
         worktree: undefined,
         branch: undefined,
         deviation: undefined,
+        reviewVerdict: undefined,
         body: "",
       },
     };
@@ -694,6 +696,7 @@ describe("App kill (K on a live card)", () => {
         worktree: undefined,
         branch: undefined,
         deviation: undefined,
+        reviewVerdict: undefined,
         body: "",
       },
     };

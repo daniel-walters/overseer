@@ -38,6 +38,27 @@ describe("createFailedSet", () => {
     expect(failed.has("002-other.md", "implementor")).toBe(false);
   });
 
+  it("records and reports the resolve edge (a transient merge failure)", () => {
+    // The resolve edge (ADR 0019) joins the two spawn edges in the same set: a
+    // transient merge failure is suppressed this session exactly as a spawn-launch
+    // failure is, keyed by `(issueKey, "resolve")`.
+    const failed = createFailedSet();
+    failed.record("/root/prd/001-rev.md", "resolve");
+    expect(failed.has("/root/prd/001-rev.md", "resolve")).toBe(true);
+  });
+
+  it("keys the resolve edge apart from the spawn edges for the same Issue", () => {
+    // A failed resolve must not suppress the implementor/reviewer edges of the
+    // same Issue, nor vice versa — each edge stands alone.
+    const failed = createFailedSet();
+    failed.record("/root/prd/001-rev.md", "resolve");
+    expect(failed.has("/root/prd/001-rev.md", "implementor")).toBe(false);
+    expect(failed.has("/root/prd/001-rev.md", "reviewer")).toBe(false);
+
+    failed.record("/root/prd/002-go.md", "reviewer");
+    expect(failed.has("/root/prd/002-go.md", "resolve")).toBe(false);
+  });
+
   it("is idempotent: recording the same (issue, edge) twice stays recorded", () => {
     const failed = createFailedSet();
     failed.record("001-go.md", "implementor");

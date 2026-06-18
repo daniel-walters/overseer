@@ -1,6 +1,5 @@
-import { basename, dirname, join } from "node:path";
+import { dirname, join } from "node:path";
 import { writeStatus } from "../issueFile.js";
-import { featureBranchName } from "../dispatch/gitSetup.js";
 import type { FailureRecord } from "../dispatch/dispatch.js";
 import { readReviewTarget, type ReviewPreview } from "./reviewReader.js";
 import { classifyReviewability } from "./eligibility.js";
@@ -91,9 +90,6 @@ export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
         eligibility: classifyReviewability(target.issue),
         prdTitle: target.prdTitle,
         prdBody: target.prdBody,
-        // basename(prdDir) === prdId; derived the same way the dispatcher does
-        // so the review-merge target and the dispatch worktree base agree.
-        featureBranch: featureBranchName(basename(prdDir)),
       };
     },
 
@@ -114,7 +110,6 @@ export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
             issue,
             prdTitle: preview.prdTitle,
             prdBody: preview.prdBody,
-            featureBranch: preview.featureBranch,
             review: deps.review,
           }),
         spawn: deps.spawn,

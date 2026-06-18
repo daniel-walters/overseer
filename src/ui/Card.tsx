@@ -15,10 +15,13 @@ interface CardProps {
    */
   liveness?: Liveness;
   /**
-   * Suppressed marker, present only on an awaiting `ready-for-agent` /
-   * `ready-for-review` card whose last spawn launch failed this session
-   * (CONTEXT.md, ADR 0011). Disjoint from {@link liveness} (opposite lanes), so
-   * the two markers can never co-render on one card.
+   * Suppressed marker, present on an awaiting `ready-for-agent` /
+   * `ready-for-review` card whose last spawn launch failed this session, or an
+   * `in-review` card whose clean merge hit a transient failure (CONTEXT.md, ADR
+   * 0011 / 0019). On the `ready-*` lanes it is disjoint from {@link liveness}; on
+   * `in-review` it can co-occur with both {@link liveness} and {@link reviewPass}
+   * (a held merge on a card whose reviewer has exited), so this marker **outranks**
+   * them — every other Issue-level marker below is gated `&& !suppressed`.
    */
   suppressed?: boolean;
   /**
@@ -198,17 +201,21 @@ export function Card({
       )}
       {liveness && !suppressed && (
         // Mirrors the human-review marker: its own truncating line under the
-        // title, so the overlay never displaces the card's identity. Same
-        // `!suppressed` last-line-of-defence guard — if both fields ever arrive,
-        // the card still reads as one coherent state (suppressed wins).
+        // title, so the overlay never displaces the card's identity. The
+        // `!suppressed` guard is load-bearing on `in-review`: a held clean merge
+        // (ADR 0019) sits on a card whose reviewer has exited (orphaned/unknown
+        // liveness), and the suppressed marker outranks that — the card reads as a
+        // held merge to reopen, not an Orphan to recover with `R`.
         <Text wrap="truncate-end" color={LIVENESS_MARKER[liveness].color}>
           {LIVENESS_MARKER[liveness].text}
         </Text>
       )}
       {suppressed && (
-        // Its own truncating line, red — a launch-failed card parked this
-        // session. Disjoint lanes mean this never renders alongside a liveness
-        // marker (ADR 0011).
+        // Its own truncating line, red — a launch-failed card (`ready-*`) or a
+        // held clean merge (`in-review`, ADR 0019) parked this session. On
+        // `in-review` it deliberately outranks the liveness and `N/cap` markers
+        // (the `&& !suppressed` guards above and below), so a held merge is never
+        // masked (ADR 0011).
         <Text wrap="truncate-end" color="red">
           {SUPPRESSED_MARKER}
         </Text>
@@ -249,9 +256,9 @@ export function Card({
         // in-review Issue, so an Orphan (whose loud liveness marker renders above)
         // and any off-lane card never carry the count; the `reviewPass !== undefined`
         // guard also means a card with no recorded pass shows no false `0/cap`. The
-        // `!suppressed` guard is the same last-line-of-defence the other markers
-        // carry — disjoint lanes mean the scanner never co-sets them, but if both
-        // ever arrive the card still reads as one coherent state (suppressed wins).
+        // `!suppressed` guard is load-bearing now that both ride the `in-review`
+        // lane: a held clean merge (ADR 0019) outranks the neutral count, so the
+        // card reads as a held merge, never masked by the healthy in-progress signal.
         <Text wrap="truncate-end" color={REVIEW_PASS_COLOR}>
           {`${REVIEW_PASS_GLYPH} ${reviewPass}/${reviewCap}`}
         </Text>
