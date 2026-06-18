@@ -44,7 +44,7 @@ export interface KeyPress {
  *
  * - `move` steps the selection one square in a spatial direction (movement keys derive it).
  * - `zoom` / `back` drive the level reducer (Enter zooms in, Esc backs out).
- * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` / `deletePrd` open the matching preview.
+ * - `dispatch` / `review` / `redispatch` / `kill` / `markDone` / `approve` / `openPr` / `deletePrd` open the matching preview.
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
  * - `toggleAutoRun` flips the global auto-run brake.
  * - `viewDetail` opens the selected card's body in the detail modal.
@@ -58,6 +58,8 @@ export interface KeybindHandlers {
   readonly review: () => void;
   readonly redispatch: () => void;
   readonly kill: () => void;
+  readonly markDone: () => void;
+  readonly approve: () => void;
   readonly openPr: () => void;
   readonly deletePrd: () => void;
   readonly goToPr: () => void;
@@ -242,6 +244,39 @@ export const KEYBINDS: readonly Keybind[] = [
     matches: (p) => p.input === "K",
     eligible: (ctx) => ctx.issueLive,
     action: (h) => h.kill(),
+  },
+  {
+    // The board's first human-triggered status flip with no spawn behind it
+    // (CONTEXT.md → mark done): a `ready-for-human` Issue's only board action.
+    // Lowercase + bare-confirmed deliberately — a status flip is cheap and
+    // trivially reversible, so it is *not* in the shift-keyed `K`/`R`/`X` family;
+    // its confirm is an "is the manual work finished?" intent beat, not a safety
+    // net against irreversibility. Mirrors the `r` entry.
+    key: "m",
+    label: "Mark a ready-for-human Issue done",
+    level: "issues",
+    hint: true,
+    matches: (p) => p.input === "m",
+    eligible: (ctx) => ctx.issueReadyForHuman,
+    action: (h) => h.markDone(),
+  },
+  {
+    // The board's first human-triggered *merge* (PRD: Approve from Board, ADR 0021):
+    // `A` finishes a `human-review` Issue from inside the board by running the same
+    // in-process merge the Reactor's clean-AI path does — merge the recorded worktree
+    // branch into the PRD feature branch, set `done`, clean up the worktree. Uppercase
+    // + shift-keyed deliberately: it sits in the heavy `K`/`R`/`X` family of
+    // outward/not-trivially-reversible actions and never fires from a stray lowercase
+    // keypress (unlike the cheap, reversible `m`). Eligible iff the selected card is a
+    // `human-review` Issue with a recorded worktree+branch (the `approvable` overlay) —
+    // reason-agnostic, never reading `human_review_reason`.
+    key: "A",
+    label: "Approve a human-review Issue",
+    level: "issues",
+    hint: true,
+    matches: (p) => p.input === "A",
+    eligible: (ctx) => ctx.issueApprovable,
+    action: (h) => h.approve(),
   },
   {
     key: "g",

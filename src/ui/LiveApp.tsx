@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { App, type Dispatcher, type Reviewer, type Rollback, type Killer, type OpenPr, type Delete, type DetailReader, type UrlOpener } from "./App.js";
+import { App, type Dispatcher, type Reviewer, type Rollback, type Killer, type OpenPr, type Delete, type MarkDone, type Approve, type DetailReader, type UrlOpener } from "./App.js";
 import { useLiveBoard, type UseLiveBoardOptions } from "./useLiveBoard.js";
 
 export interface LiveAppProps extends UseLiveBoardOptions {
@@ -15,6 +15,10 @@ export interface LiveAppProps extends UseLiveBoardOptions {
   readonly openPr?: OpenPr;
   /** The Delete PRD seam, wired in cli.tsx; absent in board-only tests. */
   readonly deleter?: Delete;
+  /** The Mark done seam, wired in cli.tsx; absent in board-only tests. */
+  readonly markDone?: MarkDone;
+  /** The Approve seam, wired in cli.tsx; absent in board-only tests. */
+  readonly approve?: Approve;
   /** The detail-modal read seam, wired in cli.tsx; absent in board-only tests. */
   readonly detailReader?: DetailReader;
   /** The browser seam `go to PR` opens through; wired in cli.tsx, absent in tests. */
@@ -36,7 +40,7 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  * preview) separately from the board, so a refresh under the user's feet never
  * loses their place. The dispatcher and reviewer are threaded straight through.
  */
-export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, urlOpener, reviewCap, ...options }: LiveAppProps) {
+export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, urlOpener, reviewCap, ...options }: LiveAppProps) {
   const reactor = options.reactor;
   // The board-level reactor-activity signal shown beside the auto-run indicator
   // (Issue: surface reactor state). LiveApp owns it as a single source of truth,
@@ -88,6 +92,8 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, delete
       killer={killer}
       openPr={openPr}
       deleter={deleter}
+      markDone={markDone}
+      approve={approve}
       detailReader={detailReader}
       autoRun={autoRun}
       urlOpener={urlOpener}

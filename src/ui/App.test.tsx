@@ -18,6 +18,9 @@ import type { OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
 import type { DeletePreviewData } from "./DeletePreview.js";
 import type { DeleteResult } from "../dispatch/deletePrd.js";
+import type { MarkDonePreviewData } from "./MarkDonePreview.js";
+import type { ApprovePreviewData } from "./ApprovePreview.js";
+import type { ApproveResult } from "../review/approve.js";
 import { createDelete } from "../dispatch/deletePrd.js";
 import type { CardDetail } from "./detailReader.js";
 
@@ -267,6 +270,7 @@ describe("App dispatch", () => {
     // surfaces an immediate "Dispatching N agents…" notice (N = spawn candidates,
     // one in fakeFrontier) and re-scans on demand once the deferred loop returns,
     // so the cards flip to in-progress without waiting on the debounced watcher.
+    // Once the loop returns the in-flight line settles to a past-tense outcome.
     const dispatcher = spyDispatcher();
     const refresh = vi.fn();
     const { stdin, lastFrame } = render(
@@ -281,13 +285,17 @@ describe("App dispatch", () => {
     // The deferred spawn ran, and the board was re-scanned on demand.
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
-    // The honest in-flight signal is on the status line (the modal is gone).
+    // The settled outcome is on the status line (the modal is gone).
     const frame = stripAnsi(lastFrame() ?? "");
-    expect(frame).toContain("Dispatching 1 agent in the background");
+    expect(frame).toContain("Dispatched 1 agent in the background");
     expect(frame).not.toContain("Dispatch AuthPRD");
   });
 
-  it("clears the dispatch notice on the next keypress (a one-shot, like every notice)", async () => {
+  it("settles the in-flight notice to an outcome once the spawn returns, without a keypress", async () => {
+    // The "Dispatching…" line is a progress signal, not an outcome: it used to
+    // stay up until the next keypress, leaving it stuck on screen long after the
+    // agents had spawned (it only vanished when the cursor moved). The deferred
+    // loop now swaps it for a settled past-tense line on return — no keypress.
     const dispatcher = spyDispatcher();
     const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
 
@@ -295,11 +303,24 @@ describe("App dispatch", () => {
     await tick();
     stdin.write(ENTER);
     await tick();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatching");
+    // No movement key — the notice has already settled on its own.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatched");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatching");
+  });
+
+  it("clears the settled dispatch notice on the next keypress (a one-shot, like every notice)", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatched");
 
     stdin.write("l"); // any movement key
     await tick();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatching");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatched");
   });
 
   it("cancels on Esc without dispatching, leaving the board untouched", async () => {
@@ -517,6 +538,311 @@ describe("App review", () => {
     await tick();
 
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+});
+
+describe("App mark done (m on a ready-for-human Issue)", () => {
+  // A board whose selected (first) Issue is a `ready-for-human` card — the only
+  // state `m` lights up on. `ready-for-human` folds into the `ready` lane carrying
+  // the `human` badge (model.ts), so the card is `lane: "ready", readyFor: "human"`.
+  // A second `ready-for-agent` card pins the human-vs-agent gate.
+  const humanBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          { id: "010-secret", title: "Provision a secret", lane: "ready", readyFor: "human" },
+          { id: "020-build", title: "Build it", lane: "ready", readyFor: "agent" },
+        ],
+      },
+    ],
+  };
+
+  function previewFor(issueId: string): MarkDonePreviewData {
+    return { issueTitle: issueId, issuePath: `/root/auth/${issueId}` };
+  }
+
+  function spyMarkDone(
+    readMarkDone: (prdId: string, issueId: string) => MarkDonePreviewData | undefined = (
+      _p,
+      id,
+    ) => previewFor(id),
+  ) {
+    return {
+      readMarkDone: vi.fn(readMarkDone),
+      markDone: vi.fn<(p: MarkDonePreviewData) => void>(),
+    };
+  }
+
+  it("opens a confirm preview on m at the Issue level for a ready-for-human Issue", async () => {
+    const markDone = spyMarkDone();
+    const { stdin, lastFrame } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects 010-secret)
+    await tick();
+    stdin.write("m");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Mark"); // the preview titles the action
+    expect(frame).toContain("ready-for-human → done"); // and names the transition
+    expect(markDone.readMarkDone).toHaveBeenCalledWith("auth", "010-secret");
+  });
+
+  it("does nothing on m at the board level (mark-done is Issue-level only)", async () => {
+    const markDone = spyMarkDone();
+    const { stdin } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write("m");
+    await tick();
+
+    expect(markDone.readMarkDone).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on m for a ready-for-agent Issue (the action is human-gated)", async () => {
+    const markDone = spyMarkDone();
+    const { stdin } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write(ARROW_DOWN); // move to the ready-for-agent 020-build
+    await tick();
+    stdin.write("m");
+    await tick();
+
+    expect(markDone.readMarkDone).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on m when no markDone seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={humanBoard} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("m");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("ready-for-human → done");
+  });
+
+  it("writes status done to the Issue path on confirm, then closes with a notice", async () => {
+    const markDone = spyMarkDone();
+    const { stdin, lastFrame } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("m"); // open the confirm preview
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(markDone.markDone).toHaveBeenCalledTimes(1);
+    expect(markDone.markDone).toHaveBeenCalledWith(previewFor("010-secret"));
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("ready-for-human → done"); // modal closed
+    expect(frame).toContain("done"); // success notice
+  });
+
+  it("cancels on Esc with nothing written", async () => {
+    const markDone = spyMarkDone();
+    const { stdin, lastFrame } = render(<App board={humanBoard} markDone={markDone} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("m");
+    await tick();
+    stdin.write(ESC); // cancel
+    await tick();
+
+    expect(markDone.markDone).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("ready-for-human → done");
+  });
+});
+
+describe("App approve (A on a human-review Issue)", () => {
+  // A board whose selected (first) Issue is an approvable `human-review` card — the
+  // only state `A` lights up on (lane human-review + the `approvable` overlay set by
+  // the scanner on a recorded worktree+branch). A second non-approvable human-review
+  // card pins the eligibility gate.
+  const reviewBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          {
+            id: "010-merge-me",
+            title: "Merge me",
+            lane: "human-review",
+            humanReviewReason: "deviation",
+            approvable: true,
+          },
+          {
+            id: "020-no-handoff",
+            title: "No handoff",
+            lane: "human-review",
+            humanReviewReason: "non-convergence",
+          },
+        ],
+      },
+    ],
+  };
+
+  function previewFor(issueId: string): ApprovePreviewData {
+    return {
+      issueTitle: issueId,
+      issuePath: `/root/auth/${issueId}`,
+      repo: "/repos/backend",
+      worktree: "/wt/blue-cat-fox",
+      branch: "blue-cat-fox",
+      featureBranch: "auth",
+    };
+  }
+
+  function spyApprove(
+    result: ApproveResult = { kind: "merged" },
+    readApprove: (prdId: string, issueId: string) => ApprovePreviewData | undefined = (
+      _p,
+      id,
+    ) => previewFor(id),
+  ) {
+    return {
+      readApprove: vi.fn(readApprove),
+      approve: vi.fn<(p: ApprovePreviewData) => ApproveResult>(() => result),
+    };
+  }
+
+  it("opens a confirm preview on A at the Issue level for an approvable human-review Issue", async () => {
+    const approve = spyApprove();
+    const { stdin, lastFrame } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects 010-merge-me)
+    await tick();
+    stdin.write("A");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Approve"); // the preview titles the action
+    expect(frame).toContain("blue-cat-fox"); // names the branch
+    expect(frame).toContain("auth"); // names the feature branch + plan
+    expect(frame).not.toContain("diff"); // states the plan only — no diff
+    expect(approve.readApprove).toHaveBeenCalledWith("auth", "010-merge-me");
+  });
+
+  it("does nothing on A at the board level (approve is Issue-level only)", async () => {
+    const approve = spyApprove();
+    const { stdin } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write("A");
+    await tick();
+
+    expect(approve.readApprove).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on A for a human-review Issue with no recorded handoff", async () => {
+    const approve = spyApprove();
+    const { stdin } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write(ARROW_DOWN); // move to 020-no-handoff (not approvable)
+    await tick();
+    stdin.write("A");
+    await tick();
+
+    expect(approve.readApprove).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on A when no approve seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={reviewBoard} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+
+    // The modal never opens — its affordance line is the modal-only surface (the
+    // status-line hint and the card title are separate surfaces that legitimately
+    // show regardless of whether a seam is wired).
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("y to approve");
+  });
+
+  it("on confirm of a clean merge, invokes the seam and moves the card via re-scan", async () => {
+    const approve = spyApprove({ kind: "merged" });
+    const refresh = vi.fn();
+    const { stdin, lastFrame } = render(
+      <App board={reviewBoard} approve={approve} refresh={refresh} />,
+    );
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("A"); // open the confirm preview
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(approve.approve).toHaveBeenCalledTimes(1);
+    expect(approve.approve).toHaveBeenCalledWith(previewFor("010-merge-me"));
+    // A merged result re-scans so the card moves to done at once (the live re-scan).
+    expect(refresh).toHaveBeenCalled();
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("y to approve"); // modal closed (its affordance gone)
+    expect(frame.toLowerCase()).toContain("merged"); // success notice
+  });
+
+  it("surfaces a loud message and leaves the card put on a dirty worktree", async () => {
+    const approve = spyApprove({ kind: "dirty" });
+    const refresh = vi.fn();
+    const { stdin, lastFrame } = render(
+      <App board={reviewBoard} approve={approve} refresh={refresh} />,
+    );
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(approve.approve).toHaveBeenCalledTimes(1);
+    const frame = stripAnsi(lastFrame() ?? "").toLowerCase();
+    expect(frame).toContain("commit"); // "commit your fix first"
+    // No move: a dirty result must not re-scan a card into done.
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a loud message and leaves the card put on a conflict", async () => {
+    const approve = spyApprove({ kind: "conflict" });
+    const { stdin, lastFrame } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(approve.approve).toHaveBeenCalledTimes(1);
+    const frame = stripAnsi(lastFrame() ?? "").toLowerCase();
+    expect(frame).toContain("conflict"); // "resolve the conflict in the worktree first"
+    expect(frame).toContain("worktree");
+  });
+
+  it("cancels on Esc with nothing merged", async () => {
+    const approve = spyApprove();
+    const { stdin, lastFrame } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+    stdin.write(ESC); // cancel
+    await tick();
+
+    expect(approve.approve).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("y to approve");
   });
 });
 
