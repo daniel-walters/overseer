@@ -196,11 +196,11 @@ describe("Card suppressed marker", () => {
   });
 
   it("never renders a liveness marker alongside the suppressed marker", () => {
-    // Disjoint lanes mean the scanner never sets both fields (see the scanner's
-    // disjointness test), but the Card is the last line of defence: even handed
-    // both, it must read as one coherent state — suppressed wins, no liveness
-    // marker leaks through.
-    const both = frameOf(<Card title="Parked" suppressed liveness="live" />);
+    // An in-review card carrying a resolve-edge suppression (ADR 0019) can also
+    // carry a liveness verdict — its reviewer is dead — so the scanner DOES set both
+    // here (no longer disjoint lanes). The Card resolves the overlap by precedence:
+    // suppressed wins and the liveness marker never leaks through.
+    const both = frameOf(<Card title="Parked" suppressed liveness="orphaned" />);
 
     expect(both).toContain("⊘ suppressed");
     expect(both).not.toMatch(/● live|○ unknown|⚠ orphaned/);
@@ -216,6 +216,19 @@ describe("Card suppressed marker", () => {
 
     expect(both).toContain("⊘ suppressed");
     expect(both).not.toMatch(/⚠ deviation|↻ non-convergence|✗ conflict/);
+  });
+
+  it("outranks the neutral N/cap review marker — a held merge is never masked by the count", () => {
+    // An in-review card carrying a resolve-edge suppression can also have a recorded
+    // review pass (ADR 0019). The suppressed marker outranks the neutral `N/cap`
+    // count on the card, mirroring how the Orphan marker outranks it: a held merge
+    // stays visible rather than hidden behind the healthy in-progress signal.
+    const both = frameOf(
+      <Card title="Held" suppressed reviewPass={2} reviewCap={3} />,
+    );
+
+    expect(both).toContain("⊘ suppressed");
+    expect(both).not.toMatch(/\d+\/\d+/);
   });
 });
 

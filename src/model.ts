@@ -283,16 +283,21 @@ export interface Issue {
   readonly liveness?: Liveness;
   /**
    * The suppressed overlay: `true` on an awaiting `ready-for-agent` /
-   * `ready-for-review` card whose last spawn launch failed this session (the
-   * failed-set reports `(path, edge)` suppressed). Set only on those two lanes
-   * (the edge derived from the lane: `ready-for-agent → implementor`,
-   * `ready-for-review → reviewer`), the
-   * opposite set from {@link liveness}'s two active lanes — so the two overlays
-   * are disjoint and can never co-render on one card. Absent on every other lane,
-   * when no lookup is wired in, and when the lookup reports not-suppressed: a
-   * read-only overlay, recomputed on each board open, never written to the Issue
-   * file (ADR 0002). Lane-gating makes a lingering failed-set entry inert — an
-   * Issue that leaves its `ready-*` lane simply drops the marker.
+   * `ready-for-review` card whose last spawn launch failed this session, or an
+   * `in-review` card whose clean merge hit a transient failure (the failed-set
+   * reports `(path, edge)` suppressed). The edge is derived from the lane:
+   * `ready-for-agent → implementor`, `ready-for-review → reviewer`,
+   * `in-review → resolve` (the non-spawn merge edge — ADR 0019). On the two
+   * `ready-*` lanes it is the mirror image of {@link liveness} (the active lanes),
+   * but on `in-review` it overlaps liveness — a held merge can sit on a card whose
+   * dead reviewer also reads `orphaned` — so the two are *not* always disjoint;
+   * when both are present the suppressed marker outranks liveness on the card
+   * (Card precedence), mirroring how the Orphan marker outranks the `N/cap` count.
+   * Absent on every other lane, when no lookup is wired in, and when the lookup
+   * reports not-suppressed: a read-only overlay, recomputed on each board open,
+   * never written to the Issue file (ADR 0002). Lane-gating makes a lingering
+   * failed-set entry inert — an Issue that leaves its suppressible lane simply
+   * drops the marker.
    */
   readonly suppressed?: boolean;
   /**

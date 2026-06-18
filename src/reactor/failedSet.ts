@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import type { FailureRecord, SpawnEdgeKind } from "../dispatch/failureLog.js";
+import type { FailedEdgeKind, FailureRecord } from "../dispatch/failureLog.js";
 import type { SuppressedLookup } from "../scanner.js";
 
 /**
@@ -21,16 +21,17 @@ import type { SuppressedLookup } from "../scanner.js";
  * here lets each caller own that decision.
  *
  * The key is also *per edge*: a failed implementor spawn suppresses only the
- * implementor edge for that Issue, never the reviewer edge for the same Issue
- * (and vice versa), so one failing edge can't mask a legitimate later spawn on
- * the other. The Reactor subtracts this set from each swept frontier and records
- * into it on a spawn failure.
+ * implementor edge for that Issue, never the reviewer edge (or the non-spawn
+ * `resolve` edge — ADR 0019) for the same Issue, so one failing edge can't mask a
+ * legitimate later spawn or resolve on another. The Reactor subtracts this set
+ * from each swept frontier (and the verdict frontier) and records into it on a
+ * spawn launch failure or a transient merge failure.
  */
 export interface FailedSet {
-  /** Mark `(issueKey, edge)` as a failed spawn for the rest of this session. */
-  record(issueKey: string, edge: SpawnEdgeKind): void;
-  /** Whether `(issueKey, edge)` has been recorded as a failed spawn. */
-  has(issueKey: string, edge: SpawnEdgeKind): boolean;
+  /** Mark `(issueKey, edge)` as a failed spawn/resolve for the rest of this session. */
+  record(issueKey: string, edge: FailedEdgeKind): void;
+  /** Whether `(issueKey, edge)` has been recorded as a failed spawn/resolve. */
+  has(issueKey: string, edge: FailedEdgeKind): boolean;
 }
 
 /**
@@ -45,7 +46,7 @@ export function createFailedSet(): FailedSet {
   // One flat string set keyed by `issueKey\tedge`; the tab can't appear in a
   // file path, so the two halves of the key never collide.
   const failed = new Set<string>();
-  const key = (issueKey: string, edge: SpawnEdgeKind): string =>
+  const key = (issueKey: string, edge: FailedEdgeKind): string =>
     `${issueKey}\t${edge}`;
 
   return {
@@ -89,10 +90,12 @@ export function suppressedSeam(failed: FailedSet): SuppressedLookup {
  * exactly each Issue's `path` (the reader builds `path` as `prdDir/filename`), so
  * the record side and the subtract/read sides agree on the key.
  *
- * Shared by all three spawn triggers — the Reactor, the `d` dispatcher, and the
- * `r` reviewer — so a launch failure on any edge records into the one set
- * identically (ADR 0011). Records first, then delegates; both are best-effort and
- * the delegate already never throws.
+ * Shared by all the failure-recording edges — the Reactor, the `d` dispatcher,
+ * the `r` reviewer, and the non-spawn `resolve` edge (ADR 0019) — so a launch or
+ * transient-merge failure on any edge records into the one set identically (ADR
+ * 0011). The edge is read off the {@link FailureRecord} (`implementor` /
+ * `reviewer` / `resolve`), so the same wrapper keys every edge correctly. Records
+ * first, then delegates; both are best-effort and the delegate already never throws.
  */
 export function recordingLogFailure(
   failed: FailedSet,

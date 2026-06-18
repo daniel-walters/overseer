@@ -7,16 +7,31 @@ import { errorMessage } from "../errorMessage.js";
  */
 export type SpawnEdgeKind = "implementor" | "reviewer";
 
-/** A spawn-failure record appended to the durable dispatch log. */
+/**
+ * Which edge a *suppressible* failure came from — the two spawn edges plus the
+ * non-spawn **resolve** edge (ADR 0019). A transient merge failure on the resolve
+ * edge is suppressed and logged exactly as a spawn-launch failure is, so it shares
+ * the failure log and the session-scoped failed-set keyed by `(issueKey, edge)`.
+ * The `resolve` edge is kept distinct from {@link SpawnEdgeKind} because resolving
+ * a verdict never spawns — the "exactly two spawn edges" invariant holds — but it
+ * widens the failure-record/failed-set key so the three edges never mask one
+ * another for the same Issue.
+ */
+export type FailedEdgeKind = SpawnEdgeKind | "resolve";
+
+/** A failure record appended to the durable dispatch log. */
 export interface FailureRecord {
-  /** The Issue filename whose agent failed to launch. */
+  /** The Issue filename whose agent failed to launch (or whose merge failed). */
   readonly issueId: string;
-  /** The target repo the agent would have worked in. */
+  /** The target repo the agent would have worked in (or the merge ran in). */
   readonly repo: string;
-  /** The error message from the failed spawn. */
+  /** The error message from the failed spawn (or merge). */
   readonly error: string;
-  /** Which spawn edge failed — implementor (dispatch) vs reviewer (review). */
-  readonly edge: SpawnEdgeKind;
+  /**
+   * Which edge failed — implementor (dispatch) / reviewer (review) spawn, or the
+   * non-spawn `resolve` merge (ADR 0019).
+   */
+  readonly edge: FailedEdgeKind;
 }
 
 /**

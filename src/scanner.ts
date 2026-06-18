@@ -16,7 +16,7 @@ import {
   type LinkedPr,
 } from "./model.js";
 import type { Absence } from "./dispatch/liveness.js";
-import type { SpawnEdgeKind } from "./dispatch/failureLog.js";
+import type { FailedEdgeKind } from "./dispatch/failureLog.js";
 
 /**
  * Look up the probe's trust-qualified absence ({@link Absence}) for one Issue by
@@ -30,18 +30,24 @@ import type { SpawnEdgeKind } from "./dispatch/failureLog.js";
 export type LivenessLookup = (issuePath: string) => Absence | undefined;
 
 /**
- * Ask whether one Issue's spawn launch failed this session, keyed by its absolute
- * path *and* the spawn edge the lane implies (`ready-for-agent → implementor`,
- * `ready-for-review → reviewer`) — the read-only projection over the shared
- * failed-set (`suppressedSeam`). `true` lands the `⊘ suppressed` marker on the
- * card. The board can observe suppression through this seam but can never record
- * into the set (PRD: suppressed-card marker, ADR 0011).
+ * Ask whether one Issue's spawn launch — or its clean merge — failed this session,
+ * keyed by its absolute path *and* the edge the lane implies (`ready-for-agent →
+ * implementor`, `ready-for-review → reviewer`, `in-review → resolve`) — the
+ * read-only projection over the shared failed-set (`suppressedSeam`). `true` lands
+ * the `⊘ suppressed` marker on the card. The board can observe suppression through
+ * this seam but can never record into the set (PRD: suppressed-card marker, ADR
+ * 0011).
  *
- * Mirrors {@link LivenessLookup} as a second optional overlay, gated to the
- * opposite (awaiting) lanes. Total by construction — an absent or empty set
- * answers `false` for every pair and never throws out of the board rebuild.
+ * Mirrors {@link LivenessLookup} as a second optional overlay. It gates the two
+ * awaiting `ready-*` lanes (a failed *spawn*) plus the `in-review` lane (a failed
+ * clean *merge* on the non-spawn resolve edge — ADR 0019), so unlike liveness it is
+ * not disjoint from the active lanes: an `in-review` card can carry both a liveness
+ * verdict and a resolve suppression, with the suppressed marker outranking it on the
+ * card (the {@link import("./model.js").Issue} precedence). Total by construction —
+ * an absent or empty set answers `false` for every pair and never throws out of the
+ * board rebuild.
  */
-export type SuppressedLookup = (path: string, edge: SpawnEdgeKind) => boolean;
+export type SuppressedLookup = (path: string, edge: FailedEdgeKind) => boolean;
 
 /**
  * The review-pass overlay lookup (the Reviewer Iteration Count PRD, ADR 0018):
@@ -241,10 +247,13 @@ function scanIssue(
   // "unknown" when it has none — the honesty boundary below.
   const withLiveness = applyLiveness(withReadyFor, path, lane, lookupLiveness);
 
-  // The suppressed overlay is the mirror image, gated to the two awaiting
-  // `ready-*` lanes (the opposite set from liveness's active lanes), with the
-  // edge derived from the same placement. Disjoint lanes guarantee it never
-  // co-renders with a liveness verdict on one card.
+  // The suppressed overlay rides the two awaiting `ready-*` lanes (a failed spawn)
+  // plus the `in-review` lane (a failed clean merge on the resolve edge — ADR
+  // 0019), with the edge derived from the same placement. On `in-review` it is NOT
+  // disjoint from the liveness verdict computed above — a held merge can sit on a
+  // card whose dead reviewer also reads `orphaned` — so the Card resolves the
+  // overlap by precedence: the suppressed marker outranks liveness (and the N/cap
+  // count below).
   const withSuppressed = applySuppressed(
     withLiveness,
     path,
@@ -348,31 +357,36 @@ function applyReviewPass(
 }
 
 /**
- * Add the suppressed overlay to an Issue, but only on an awaiting `ready-for-agent`
- * / `ready-for-review` card — the mirror image of {@link applyLiveness}, gated to
- * the opposite (awaiting) lanes (PRD: suppressed-card marker, ADR 0011).
+ * Add the suppressed overlay to an Issue on an awaiting `ready-for-agent` /
+ * `ready-for-review` card (a failed *spawn*) or an `in-review` card (a failed clean
+ * *merge* on the non-spawn resolve edge — ADR 0019) (PRD: suppressed-card marker,
+ * ADR 0011).
  *
  * The edge is read straight off the already-derived `{lane, readyFor}` — the same
  * placement {@link applyLiveness} consumes — not re-parsed from the raw status:
  * `ready-for-agent → implementor` is the one card on the `ready` lane carrying the
  * `agent` badge (a `ready-for-human` card shares the lane but carries `human`, so
- * launches nothing), and `ready-for-review → reviewer` is its own dedicated lane.
- * Any other lane has no spawn edge and is returned unchanged. Deriving from the
- * validated placement (rather than indexing a status string) means a frontmatter
- * value that collides with an `Object.prototype` name can never reach the lookup —
+ * launches nothing), `ready-for-review → reviewer` is its own dedicated lane, and
+ * `in-review → resolve` is the verdict frontier Overseer merges. Any other lane has
+ * no suppressible edge and is returned unchanged. Deriving from the validated
+ * placement (rather than indexing a status string) means a frontmatter value that
+ * collides with an `Object.prototype` name can never reach the lookup —
  * `placeStatus` already folded it into `backlog` (flagged `malformedStatus`), a
- * non-spawn lane. The marker stays edge-agnostic on the card — the column already
- * implies the edge.
+ * non-suppressible lane. The marker stays edge-agnostic on the card — the column
+ * already implies the edge.
  *
  * Lane-gating here is what makes a lingering failed-set entry inert: an Issue that
- * has left its `ready-*` lane (re-triaged, hand-edited, completed) simply isn't on
- * a suppressed lane, so it drops the marker even though its `(path, edge)` entry
- * persists in the append-only set. Only `true` stamps the field; a not-suppressed
- * card stays unmarked (no `suppressed: false` noise).
+ * has left its suppressible lane (re-triaged, hand-edited, completed) simply isn't
+ * on one, so it drops the marker even though its `(path, edge)` entry persists in
+ * the append-only set. Only `true` stamps the field; a not-suppressed card stays
+ * unmarked (no `suppressed: false` noise).
  *
- * A card on any non-suppressed lane — or any card when no lookup is wired in — is
- * returned unchanged. Because the suppressed lanes are disjoint from the liveness
- * lanes, this can never overwrite or co-exist with a `liveness` verdict.
+ * A card on any non-suppressible lane — or any card when no lookup is wired in — is
+ * returned unchanged. Unlike liveness, this is *not* gated to a disjoint lane set:
+ * an `in-review` card can carry both a liveness verdict (from {@link applyLiveness})
+ * and a resolve suppression, and the Card resolves the overlap by precedence
+ * (suppressed wins). A failed *resolve* never lands on a `ready-*` card and a failed
+ * *spawn* never on an `in-review` card, so the right edge is always asked.
  */
 function applySuppressed(
   issue: Issue,
@@ -388,17 +402,19 @@ function applySuppressed(
 }
 
 /**
- * The spawn edge an awaiting lane implies, or `undefined` if the lane is not a
- * spawn target. Reads the derived placement, so the two suppressed lanes map to
- * their edge and every other lane (including a `ready-for-human` card, which
- * shares the `ready` lane but launches no agent) yields no edge.
+ * The failed-set edge a lane implies, or `undefined` if the lane carries no
+ * suppressible edge. Reads the derived placement, so the three suppressible lanes
+ * map to their edge — the two spawn edges plus the non-spawn `resolve` edge (ADR
+ * 0019) — and every other lane (including a `ready-for-human` card, which shares
+ * the `ready` lane but launches no agent) yields no edge.
  */
 function suppressedEdgeForLane(
   lane: Lane,
   readyFor: ReadyFor | undefined,
-): SpawnEdgeKind | undefined {
+): FailedEdgeKind | undefined {
   if (lane === "ready" && readyFor === "agent") return "implementor";
   if (lane === "ready-for-review") return "reviewer";
+  if (lane === "in-review") return "resolve";
   return undefined;
 }
 
