@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { resolveVerdict, type ResolveVerdictDeps } from "./resolveVerdict.js";
 import type { MergeInput, MergeResult } from "./mergeSeam.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
+import type { FailureRecord } from "../dispatch/failureLog.js";
 
 function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
   return {
@@ -26,20 +27,24 @@ function deps(
   merges: MergeInput[];
   cleanups: MergeInput[];
   writes: [string, string][];
+  logged: FailureRecord[];
 } {
   const merges: MergeInput[] = [];
   const cleanups: MergeInput[] = [];
   const writes: [string, string][] = [];
+  const logged: FailureRecord[] = [];
   return {
     merges,
     cleanups,
     writes,
+    logged,
     merge: (input): MergeResult => {
       merges.push(input);
       return { outcome: "merged" };
     },
     cleanUp: (input) => cleanups.push(input),
     writeStatus: (path, status) => writes.push([path, status]),
+    logFailure: (record) => logged.push(record),
     ...overrides,
   };
 }
@@ -78,9 +83,10 @@ describe("resolveVerdict", () => {
     expect(order).toEqual(["merge", "write:done", "cleanup"]);
   });
 
-  it("does not write done or clean up when the merge does not succeed", () => {
-    // A non-merged outcome (conflict/transient handling deferred to 002/004) leaves
-    // the Issue in-review with its verdict, to be retried on the next reconcile.
+  it("suppresses a transient merge failure: leaves in-review, no done, no cleanup", () => {
+    // A transient (non-conflict) merge failure (ADR 0019) leaves the Issue at
+    // in-review with its still-valid verdict — there is nothing to roll back, only
+    // the merge to retry — so neither `done` nor `human-review` is ever written.
     const d = deps({
       merge: () => ({ outcome: "failure", error: "boom" }),
     });
@@ -90,11 +96,55 @@ describe("resolveVerdict", () => {
     expect(d.cleanups).toEqual([]);
   });
 
+  it("logs a resolve-edge failure record on a transient merge failure", () => {
+    // The failure is appended to the durable log keyed by the `resolve` edge, so
+    // the wrapping recorder also records it into the session failed-set: the
+    // verdict frontier subtracts it and it does not re-attempt this session.
+    const d = deps({
+      merge: () => ({ outcome: "failure", error: "worktree dirty" }),
+    });
+    resolveVerdict(
+      issue({ id: "003-rev.md", repo: "/repos/backend" }),
+      FEATURE,
+      d,
+    );
+
+    expect(d.logged).toEqual([
+      {
+        issueId: "003-rev.md",
+        repo: "/repos/backend",
+        error: "worktree dirty",
+        edge: "resolve",
+      },
+    ]);
+  });
+
+  it("does not log when the merge succeeds (only a transient failure is recorded)", () => {
+    const d = deps(); // merge returns merged
+    resolveVerdict(issue(), FEATURE, d);
+
+    expect(d.logged).toEqual([]);
+  });
+
+  it("does not throw when the failure log itself throws", () => {
+    // The durable log is unwritable; losing one record must not escape the watcher
+    // callback. The Issue is still left in-review for the next reconcile to retry.
+    const d = deps({
+      merge: () => ({ outcome: "failure", error: "boom" }),
+      logFailure: () => {
+        throw new Error("log unwritable");
+      },
+    });
+
+    expect(() => resolveVerdict(issue(), FEATURE, d)).not.toThrow();
+    expect(d.writes).toEqual([]);
+  });
+
   it("does not merge an Issue carrying a deviation (deferred to a later slice)", () => {
     // A recorded deviation must route to human-review without merging; that fork
     // is deferred, so for now the decision simply leaves it untouched rather than
     // wrongly auto-merging it.
-    const d = deps({ deviation: undefined });
+    const d = deps();
     resolveVerdict(issue({ deviation: "took a shortcut" }), FEATURE, d);
 
     expect(d.merges).toEqual([]);

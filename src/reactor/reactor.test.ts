@@ -995,12 +995,12 @@ describe("createReactor — resolve edge", () => {
   });
 
   it("leaves the Issue in-review when the merge does not succeed", () => {
-    // A non-clean merge (conflict/transient — handled in later slices) leaves the
-    // Issue in-review with its verdict; `done` is never written.
+    // A transient (non-conflict) merge failure leaves the Issue in-review with its
+    // verdict; `done` is never written.
     writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
     const merge = fakeMergeSeam({
       merge: vi.fn(() => {
-        throw new Error("merge conflict");
+        throw new Error("transient git hiccup");
       }),
     });
 
@@ -1011,6 +1011,51 @@ describe("createReactor — resolve edge", () => {
     expect(after).not.toContain("status: done");
     // No cleanup on a failed merge.
     expect(merge.removeWorktree).not.toHaveBeenCalled();
+  });
+
+  it("suppresses a transient merge failure: logs a resolve-edge record, never human-review", () => {
+    // The dirty-worktree precheck is the canonical transient failure (ADR 0019): no
+    // checkout, no merge — the held Issue stays in-review, a `resolve`-edge failure
+    // is appended to the durable log, and `human-review` is never written.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({ isWorktreeClean: vi.fn(() => false) });
+    const deps = recordingDeps({ merge });
+
+    createReactor(root, deps).reconcile();
+
+    const after = readFileSync(join(root, "alpha", "001-rev.md"), "utf8");
+    expect(after).toContain("status: in-review");
+    expect(after).not.toContain("status: human-review");
+    expect(after).not.toContain("status: done");
+    // Took the suppression path, not the merge path: nothing was checked out/merged.
+    expect(merge.checkout).not.toHaveBeenCalled();
+    expect(merge.merge).not.toHaveBeenCalled();
+    // A resolve-edge failure was logged to the durable log.
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-rev.md",
+        repo: "/repos/alpha",
+        error: expect.stringContaining("uncommitted changes"),
+        edge: "resolve",
+      },
+    ]);
+  });
+
+  it("does not re-attempt a suppressed merge this session (failed-set subtracts the resolve edge)", () => {
+    // The transient failure records `(path, resolve)` in the session failed-set, so
+    // a second reconcile on the same board skips the candidate — it does not
+    // re-attempt and re-block the UI. A fresh board (reopen) builds a new set and
+    // retries.
+    writePrd(root, "alpha", { "001-rev.md": cleanVerdict() });
+    const merge = fakeMergeSeam({ isWorktreeClean: vi.fn(() => false) });
+    const reactor = createReactor(root, recordingDeps({ merge }));
+
+    reactor.reconcile();
+    expect(merge.isWorktreeClean).toHaveBeenCalledTimes(1);
+
+    reactor.reconcile();
+    // Subtracted ⇒ not retried this session.
+    expect(merge.isWorktreeClean).toHaveBeenCalledTimes(1);
   });
 
   it("once done, a second reconcile does not re-resolve (done drops it off the frontier)", () => {
