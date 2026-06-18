@@ -17,7 +17,8 @@ export interface ResolveVerdictDeps {
   readonly writeStatus: (path: string, status: string) => void;
   /**
    * Escalate the Issue to `human-review`, recording the reason and a free-text
-   * note alongside the status — the deviation fork's terminal write. Mirrors
+   * note alongside the status — the terminal write for both the deviation fork
+   * (reason `deviation`) and the conflict fork (reason `conflict`). Mirrors
    * {@link import("../issueFile.js").writeHumanReview}: the Reactor injects that
    * real fs writer, the decision's own tests a recorder.
    */
@@ -51,11 +52,17 @@ export interface ResolveVerdictDeps {
  * 2. Guard that the merge handoff is present — a verdict-bearing Issue should
  *    carry the implementor's `repo`, `worktree`, and `branch`, but a hand-edited
  *    one may not. Without them there is nothing to merge, so leave it untouched.
- * 3. Run the merge. On `merged`, write `status: done` — the durable idempotency
- *    lock that removes the Issue from the verdict frontier (as flip-before-spawn
- *    does for spawns) — then clean up the worktree. A non-`merged` outcome
- *    (conflict / transient failure, handled in later slices) leaves the Issue
- *    `in-review` with its verdict, to be retried on the next reconcile.
+ * 3. Run the merge and fork on its outcome:
+ *    - `merged` → write `status: done` — the durable idempotency lock that removes
+ *      the Issue from the verdict frontier (as flip-before-spawn does for spawns) —
+ *      then clean up the worktree.
+ *    - `conflict` → `writeHumanReview(conflict)`. Overseer never auto-resolves a
+ *      conflict (the merge seam already aborted it); it escalates to the human
+ *      queue with a note naming what conflicted. No `done`, no retry, no cleanup —
+ *      the worktree survives for the human to resolve.
+ *    - transient `failure` → leave the Issue `in-review` with its verdict, to be
+ *      retried on the next reconcile (suppression is a later slice). Never
+ *      `human-review`.
  *
  * Total: it runs synchronously inside the Reactor's reconcile (the watcher
  * callback), which has no try/catch around it, so a vanished Issue file (ENOENT
@@ -87,7 +94,17 @@ export function resolveVerdict(
 
   const input: MergeInput = { repo, worktree, branch, featureBranch };
   const result = deps.merge(input);
-  if (result.outcome !== "merged") return; // conflict/transient deferred to later slices
+
+  if (result.outcome === "conflict") {
+    try {
+      deps.writeHumanReview(path, "conflict", conflictNote(input, result.files));
+    } catch {
+      // The Issue file vanished before the escalation write. Nothing to do; the
+      // next reconcile re-evaluates it. Never throw out of the watcher callback.
+    }
+    return; // a conflict is a real outcome: no done, no retry, no cleanup
+  }
+  if (result.outcome !== "merged") return; // transient failure deferred to a later slice
 
   try {
     deps.writeStatus(path, Status.DONE);
@@ -112,5 +129,21 @@ function deviationNote(deviation: string): string {
     `"${deviation}". The AI review passed clean, but a deviation needs a human ` +
     `to confirm before the merge. Review the change against the Issue, then run ` +
     `the merge skill.`
+  );
+}
+
+/**
+ * The `human_review_note` for a conflict escalation: which branches couldn't
+ * merge, the unmerged files (the "what conflicted"), and the next human step —
+ * the same self-explanatory prose `escalateNonConvergence` writes for its reason,
+ * so a human reading the card knows why it escalated without opening anything.
+ */
+function conflictNote(input: MergeInput, files: readonly string[]): string {
+  const where =
+    files.length > 0 ? ` Conflicting files: ${files.join(", ")}.` : "";
+  return (
+    `Merging ${input.branch} into ${input.featureBranch} hit a conflict, ` +
+    `so Overseer aborted the merge (it never auto-resolves).${where} ` +
+    `Resolve the conflict by hand, then run the merge skill.`
   );
 }

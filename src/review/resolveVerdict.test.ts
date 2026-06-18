@@ -83,14 +83,51 @@ describe("resolveVerdict", () => {
     expect(order).toEqual(["merge", "write:done", "cleanup"]);
   });
 
-  it("does not write done or clean up when the merge does not succeed", () => {
-    // A non-merged outcome (conflict/transient handling deferred to 002/004) leaves
-    // the Issue in-review with its verdict, to be retried on the next reconcile.
+  it("does not write done or clean up when the merge fails transiently", () => {
+    // A transient failure (handling deferred to 004) leaves the Issue in-review
+    // with its verdict, to be retried on the next reconcile — never human-review.
     const d = deps({
       merge: () => ({ outcome: "failure", error: "boom" }),
     });
     resolveVerdict(issue(), FEATURE, d);
 
+    expect(d.writes).toEqual([]);
+    expect(d.cleanups).toEqual([]);
+    expect(d.humanReviews).toEqual([]);
+  });
+
+  it("routes a merge conflict to human-review with reason conflict, no merge done", () => {
+    // Overseer never auto-resolves a conflict: it escalates to human-review with
+    // reason `conflict`, exactly as the agent's old human-review exit did.
+    const d = deps({
+      merge: () => ({ outcome: "conflict", files: ["src/a.ts", "src/b.ts"] }),
+    });
+    resolveVerdict(issue({ path: "/root/prd/001-a.md" }), FEATURE, d);
+
+    expect(d.humanReviews).toHaveLength(1);
+    const hr = d.humanReviews[0]!;
+    expect(hr.path).toBe("/root/prd/001-a.md");
+    expect(hr.reason).toBe("conflict");
+    // The note explains what conflicted: the branches and the unmerged files.
+    expect(hr.note).toContain("blue-cat-fox");
+    expect(hr.note).toContain(FEATURE);
+    expect(hr.note).toContain("src/a.ts");
+    expect(hr.note).toContain("src/b.ts");
+    // A conflict is a real outcome, not done and not retried: no `done`, no cleanup.
+    expect(d.writes).toEqual([]);
+    expect(d.cleanups).toEqual([]);
+  });
+
+  it("does not throw when the human-review write fails on a conflict", () => {
+    // The Issue file vanished from the watched root before the escalation write.
+    // Nothing to escalate; the next reconcile re-evaluates it — never throws out.
+    const d = deps({
+      merge: () => ({ outcome: "conflict", files: ["src/a.ts"] }),
+      writeHumanReview: () => {
+        throw new Error("ENOENT");
+      },
+    });
+    expect(() => resolveVerdict(issue(), FEATURE, d)).not.toThrow();
     expect(d.writes).toEqual([]);
     expect(d.cleanups).toEqual([]);
   });

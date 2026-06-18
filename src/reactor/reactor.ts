@@ -398,13 +398,14 @@ function reviewEligible(
  * `review_verdict: clean` (the sweep gated that, on the verdict, not on liveness).
  * {@link resolveVerdict} forks on the implementor's `deviation`: a recorded
  * deviation routes to `human-review` (reason `deviation`) via `writeHumanReview`,
- * no merge; otherwise it runs the clean merge into `featureBranch` and, on
- * success, writes `status: done` — the durable idempotency lock that drops the
+ * no merge; otherwise it runs the merge into `featureBranch` and forks on the
+ * outcome: `merged` → `status: done` — the durable idempotency lock that drops the
  * Issue off the verdict frontier, so an overlapping reconcile can't double-act —
- * then cleans up the worktree. A non-merged outcome leaves the Issue `in-review`
- * with its verdict, retried next reconcile (conflict/transient handling is a later
- * slice). Both terminal writes use the same fs writers the rest of the Reactor
- * does (`writeStatus`, `writeHumanReview`).
+ * then cleans up the worktree; a real `conflict` → `writeHumanReview(conflict)`
+ * (the merge already aborted, the worktree left for the human); a transient
+ * failure → leave the Issue `in-review` with its verdict, retried next reconcile
+ * (suppression is a later slice). Both terminal writes use the same fs writers the
+ * rest of the Reactor does (`writeStatus`, `writeHumanReview`).
  *
  * This edge does **not** spawn, so it runs off the raw `mergeSeam` rather than the
  * spawn-counting wrapper, and never contributes to the board's activity signal —
