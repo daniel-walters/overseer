@@ -26,6 +26,7 @@ import type { ApproveResult } from "../review/approve.js";
 import { BOARD_LANES, ISSUE_LANES } from "../model.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
+import type { DispatchResult } from "../dispatch/dispatch.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
 import type {
   RedispatchPreview as RedispatchPreviewData,
@@ -49,12 +50,42 @@ import type { ReactorActivity } from "../reactor/reactorActivity.js";
  *   candidate? Unlike `readFrontier` it caches nothing, so calling it on every
  *   render never clobbers the frozen capture a pending `d` confirm relies on.
  * - `dispatch` runs the dispatch over that frontier (flip each spawn candidate
- *   to in-progress, then spawn it).
+ *   to in-progress, then spawn it) and returns a {@link DispatchResult} counting
+ *   what actually launched vs. skipped, so the confirm notice reports the truth
+ *   rather than the frontier's intended spawn count.
  */
 export interface Dispatcher {
   readonly readFrontier: (prdId: string) => readonly FrontierEntry[];
   readonly hasDispatchable: (prdId: string) => boolean;
-  readonly dispatch: (frontier: readonly FrontierEntry[]) => void;
+  readonly dispatch: (frontier: readonly FrontierEntry[]) => DispatchResult;
+}
+
+/**
+ * The settled status-line notice for a finished dispatch, derived from the
+ * {@link DispatchResult} so it states what *actually* happened:
+ *
+ * - all launched → "Dispatched N agent(s) in the background."
+ * - some launched, some skipped → both counts, so a partial wave is honest.
+ * - none launched (every candidate skipped) → a *failure* line pointing at the
+ *   log, because this is the symptom of the silent-dispatch bug: confirm fired,
+ *   nothing started. The cards also carry the `⊘ suppressed` marker (the edge
+ *   logged each skip into the shared failed-set), so the board agrees.
+ *
+ * Pure over its input so it is unit-testable without rendering.
+ */
+export function dispatchOutcomeNotice(result: DispatchResult): string {
+  const { launched, skipped } = result;
+  const s = (n: number) => (n === 1 ? "" : "s");
+  if (launched === 0 && skipped === 0) {
+    return "Nothing to dispatch.";
+  }
+  if (launched === 0) {
+    return `Dispatched no agents — ${skipped} candidate${s(skipped)} failed to start (see the dispatch log).`;
+  }
+  if (skipped === 0) {
+    return `Dispatched ${launched} agent${s(launched)} in the background.`;
+  }
+  return `Dispatched ${launched} agent${s(launched)}; ${skipped} failed to start (see the dispatch log).`;
 }
 
 /**
@@ -749,12 +780,17 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       // action shows — lingering until the next keypress like all the rest.
       const { frontier } = modal;
       const spawning = frontier.filter((e) => e.classification === "spawn").length;
-      const plural = spawning === 1 ? "" : "s";
-      setNotice(`Dispatching ${spawning} agent${plural} in the background…`);
+      const plural = (n: number) => (n === 1 ? "" : "s");
+      setNotice(`Dispatching ${spawning} agent${plural(spawning)} in the background…`);
       setTimeout(() => {
-        dispatcher?.dispatch(frontier);
+        // Report what *actually* launched, not the intended count: a dispatch
+        // where every repo's setup failed (e.g. a dirty tree blocking the
+        // feature-branch checkout) used to claim "Dispatched N" while starting
+        // nothing. The settled notice now reflects the real outcome, and any
+        // skip was logged + suppressed by the edge so the cause is recoverable.
+        const result = dispatcher?.dispatch(frontier) ?? { launched: 0, skipped: 0 };
         refresh?.();
-        setNotice(`Dispatched ${spawning} agent${plural} in the background.`);
+        setNotice(dispatchOutcomeNotice(result));
       }, 0);
     } else if (modal?.kind === "review" && modal.preview.eligibility.reviewable) {
       // An ineligible Issue's preview is a read-only skip notice: confirm spawns

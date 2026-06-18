@@ -1,9 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderForTest as render } from "./renderForTest.js";
-import { App } from "./App.js";
+import { App, dispatchOutcomeNotice } from "./App.js";
 import { KEYBINDS } from "./keybinds.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
+import type { DispatchResult } from "../dispatch/dispatch.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
 import type {
@@ -36,6 +37,30 @@ const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
 /** Let Ink flush input and re-render. */
 const tick = () => new Promise((r) => setTimeout(r, 20));
+
+/**
+ * Poll the rendered frame until `predicate` holds, for assertions that depend on
+ * the dispatch confirm's deferred `setTimeout(0)` settle. A single fixed `tick`
+ * is racy under full-suite CPU load (the deferred spawn → refresh → re-render can
+ * outlast 20ms), so wait on the *condition* rather than a fixed delay. Throws the
+ * last frame on timeout so a real failure still reports usefully.
+ */
+async function waitForFrame(
+  lastFrame: () => string | undefined,
+  predicate: (frame: string) => boolean,
+  { timeoutMs = 1000, stepMs = 10 }: { timeoutMs?: number; stepMs?: number } = {},
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let frame = stripAnsi(lastFrame() ?? "");
+  while (!predicate(frame)) {
+    if (Date.now() > deadline) {
+      throw new Error(`waitForFrame timed out; last frame:\n${frame}`);
+    }
+    await new Promise((r) => setTimeout(r, stepMs));
+    frame = stripAnsi(lastFrame() ?? "");
+  }
+  return frame;
+}
 
 const board: Board = {
   prds: [
@@ -176,9 +201,21 @@ describe("App dispatch", () => {
 
   /** A dispatcher whose seams are spies, with a sensible default frontier. */
   function spyDispatcher(
-    overrides: Partial<{ readFrontier: (id: string) => readonly FrontierEntry[] }> = {},
+    overrides: Partial<{
+      readFrontier: (id: string) => readonly FrontierEntry[];
+      dispatch: (f: readonly FrontierEntry[]) => DispatchResult;
+    }> = {},
   ) {
     const frontierFor = overrides.readFrontier ?? fakeFrontier;
+    // By default the dispatch reports every spawn candidate as launched — a fully
+    // successful wave — so the confirm notice reads "Dispatched N". Tests that
+    // model a failed/partial dispatch pass their own `dispatch` returning skips.
+    const dispatchFor =
+      overrides.dispatch ??
+      ((f: readonly FrontierEntry[]): DispatchResult => ({
+        launched: f.filter((e) => e.classification === "spawn").length,
+        skipped: 0,
+      }));
     return {
       readFrontier: vi.fn(frontierFor),
       // The hints' side-effect-free peek mirrors the frontier the matcher reads, so
@@ -188,7 +225,7 @@ describe("App dispatch", () => {
       hasDispatchable: vi.fn((id: string) =>
         frontierFor(id).some((e) => e.classification === "spawn"),
       ),
-      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => DispatchResult>(dispatchFor),
     };
   }
 
@@ -282,12 +319,14 @@ describe("App dispatch", () => {
     stdin.write(ENTER);
     await tick();
 
+    // The settled outcome is on the status line (the modal is gone). Wait on the
+    // deferred settle rather than a single fixed tick (flaky under load).
+    const frame = await waitForFrame(lastFrame, (f) =>
+      f.includes("Dispatched 1 agent in the background"),
+    );
     // The deferred spawn ran, and the board was re-scanned on demand.
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
-    // The settled outcome is on the status line (the modal is gone).
-    const frame = stripAnsi(lastFrame() ?? "");
-    expect(frame).toContain("Dispatched 1 agent in the background");
     expect(frame).not.toContain("Dispatch AuthPRD");
   });
 
@@ -302,10 +341,31 @@ describe("App dispatch", () => {
     stdin.write("d");
     await tick();
     stdin.write(ENTER);
+    // No movement key — the notice settles on its own once the deferred loop returns.
+    const frame = await waitForFrame(lastFrame, (f) => f.includes("Dispatched"));
+    expect(frame).not.toContain("Dispatching");
+  });
+
+  it("reports a failure outcome when the dispatch launched nothing (the silent-dispatch bug)", async () => {
+    // The regression guard for the dirty-tree bug: confirm fired, the modal
+    // counted N spawn candidates, but every repo's setup failed so nothing
+    // launched. The settled notice must say so — and point at the log — rather
+    // than the old unconditional "Dispatched N". (The skip was logged +
+    // suppressed by the edge; here we only assert the user-facing notice.)
+    const dispatcher = spyDispatcher({
+      dispatch: () => ({ launched: 0, skipped: 1 }),
+    });
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
     await tick();
-    // No movement key — the notice has already settled on its own.
-    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatched");
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatching");
+    stdin.write(ENTER);
+
+    const frame = await waitForFrame(lastFrame, (f) =>
+      f.includes("Dispatched no agents"),
+    );
+    expect(frame).toContain("failed to start");
+    expect(frame).not.toContain("Dispatched 1 agent in the background");
   });
 
   it("clears the settled dispatch notice on the next keypress (a one-shot, like every notice)", async () => {
@@ -315,11 +375,10 @@ describe("App dispatch", () => {
     stdin.write("d");
     await tick();
     stdin.write(ENTER);
-    await tick();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatched");
+    await waitForFrame(lastFrame, (f) => f.includes("Dispatched"));
 
     stdin.write("l"); // any movement key
-    await tick();
+    await waitForFrame(lastFrame, (f) => !f.includes("Dispatched"));
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatched");
   });
 
@@ -1950,7 +2009,10 @@ describe("App help", () => {
           [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
       ),
       hasDispatchable: vi.fn(() => true),
-      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => DispatchResult>(() => ({
+        launched: 1,
+        skipped: 0,
+      })),
     };
     const { stdin, lastFrame } = render(
       <App board={board} dispatcher={dispatcher} />,
@@ -2330,7 +2392,10 @@ describe("App auto-run", () => {
           [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
       ),
       hasDispatchable: vi.fn(() => true),
-      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => DispatchResult>(() => ({
+        launched: 1,
+        skipped: 0,
+      })),
     };
     const autoRun = spyAutoRun();
     const { stdin } = render(
@@ -2635,7 +2700,10 @@ describe("App detail modal", () => {
           [{ issue: { id: "001.md" } as DispatchIssue, classification: "spawn" }] as readonly FrontierEntry[],
       ),
       hasDispatchable: vi.fn(() => true),
-      dispatch: vi.fn<(f: readonly FrontierEntry[]) => void>(),
+      dispatch: vi.fn<(f: readonly FrontierEntry[]) => DispatchResult>(() => ({
+        launched: 1,
+        skipped: 0,
+      })),
     };
     const detailReader = spyDetailReader({ title: "AuthPRD", body: "x" });
     const { stdin, lastFrame } = render(
@@ -2907,5 +2975,36 @@ describe("App review-pass marker", () => {
 
     expect(frame).toContain("Shipped");
     expect(frame.match(/\d+\/3/g)).toEqual(["2/3"]);
+  });
+});
+
+describe("dispatchOutcomeNotice", () => {
+  it("reports a fully successful wave with the launched count", () => {
+    expect(dispatchOutcomeNotice({ launched: 3, skipped: 0 })).toBe(
+      "Dispatched 3 agents in the background.",
+    );
+    // Singular when exactly one launched.
+    expect(dispatchOutcomeNotice({ launched: 1, skipped: 0 })).toBe(
+      "Dispatched 1 agent in the background.",
+    );
+  });
+
+  it("reports a failure (no agents) pointing at the log when every candidate skipped", () => {
+    const notice = dispatchOutcomeNotice({ launched: 0, skipped: 2 });
+    expect(notice).toContain("Dispatched no agents");
+    expect(notice).toContain("2 candidates failed to start");
+    expect(notice).toContain("dispatch log");
+  });
+
+  it("reports both counts for a partial wave", () => {
+    const notice = dispatchOutcomeNotice({ launched: 2, skipped: 1 });
+    expect(notice).toContain("Dispatched 2 agents");
+    expect(notice).toContain("1 failed to start");
+  });
+
+  it("reports nothing-to-dispatch when neither launched nor skipped", () => {
+    expect(dispatchOutcomeNotice({ launched: 0, skipped: 0 })).toBe(
+      "Nothing to dispatch.",
+    );
   });
 });

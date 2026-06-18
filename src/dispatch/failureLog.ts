@@ -175,12 +175,18 @@ export interface SpawnWithFlip {
  * to a later orphan-reconciliation feature. A spawn that returned no handle
  * (malformed launch line) records nothing — the agent ran, but its liveness will
  * read as unknown.
+ *
+ * Returns whether the agent actually launched: `false` if the pre-spawn flip
+ * failed or the spawn threw (a failure already rolled back and logged), `true`
+ * once the spawn returns. Callers that report a count to the user (the `d`
+ * confirm notice) read this so they announce agents *launched*, never agents
+ * *intended* — a launch that silently fails must not be reported as a success.
  */
-export function spawnWithFlip(deps: SpawnWithFlip): void {
+export function spawnWithFlip(deps: SpawnWithFlip): boolean {
   try {
     deps.writeStatus(deps.issue.path, deps.active);
   } catch {
-    return; // flip failed: nothing was started, so nothing to roll back or log
+    return false; // flip failed: nothing was started, nothing to roll back or log
   }
 
   let handle: string | undefined;
@@ -189,7 +195,7 @@ export function spawnWithFlip(deps: SpawnWithFlip): void {
   } catch (err) {
     rollBackStatus(deps.writeStatus, deps.issue.path, deps.awaiting);
     recordSpawnFailure(deps.logFailure, deps.edge, deps.issue.id, deps.repo, err);
-    return;
+    return false;
   }
 
   // Third step: record the captured handle (and the review pass, when this is a
@@ -203,4 +209,5 @@ export function spawnWithFlip(deps: SpawnWithFlip): void {
       deps.reviewPass,
     );
   }
+  return true;
 }

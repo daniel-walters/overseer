@@ -265,12 +265,12 @@ describe("runDispatch", () => {
   });
 
   describe("repo validation gating", () => {
-    it("skips an Issue whose repo is invalid: not flipped, not spawned, not logged as a failure", () => {
+    it("skips an Issue whose repo is invalid: not flipped, not spawned, but logged so the skip is never silent", () => {
       const git = fakeGit({
         isGitRepo: vi.fn((repo: string) => repo !== "/repos/bad"),
       });
       const d = deps({ git });
-      runDispatch(
+      const result = runDispatch(
         "prd",
         [
           entry("spawn", { id: "001-bad.md", path: "/root/prd/001-bad.md", repo: "/repos/bad" }),
@@ -282,8 +282,14 @@ describe("runDispatch", () => {
       // The bad Issue is never moved (acceptance: missing/invalid repo never flipped).
       expect(d.writes).toEqual([["/root/prd/002-ok.md", "in-progress"]]);
       expect(d.spawns).toEqual([{ repo: "/repos/ok", prompt: "prompt-for-002-ok.md" }]);
-      // A pre-spawn skip is reported via the modal, not the failure log.
-      expect(d.failures).toEqual([]);
+      // The skip is logged (and thereby suppressed), so a wave that spawns
+      // nothing is never silent — the diagnosis hole that made the dirty-tree
+      // dispatch bug invisible.
+      expect(d.failures).toEqual([
+        { issueId: "001-bad.md", repo: "/repos/bad", error: "/repos/bad is not a valid git repo", edge: "implementor" },
+      ]);
+      // And the result counts the truth: one launched, one skipped.
+      expect(result).toEqual({ launched: 1, skipped: 1 });
     });
 
     it("skips a spawn candidate with no repo at all without flipping it", () => {
@@ -298,7 +304,7 @@ describe("runDispatch", () => {
       expect(d.spawns).toEqual([]);
     });
 
-    it("skips an Issue whose feature-branch setup fails, without flipping it", () => {
+    it("skips an Issue whose feature-branch setup fails, without flipping it, but logs the setup error", () => {
       const git = fakeGit({
         branchExists: vi.fn(() => false),
         createBranch: vi.fn((repo: string) => {
@@ -306,7 +312,7 @@ describe("runDispatch", () => {
         }),
       });
       const d = deps({ git });
-      runDispatch(
+      const result = runDispatch(
         "prd",
         [entry("spawn", { id: "001-a.md", path: "/root/prd/001-a.md", repo: "/repos/api" })],
         d,
@@ -314,6 +320,12 @@ describe("runDispatch", () => {
 
       expect(d.writes).toEqual([]);
       expect(d.spawns).toEqual([]);
+      // The setup error (e.g. a dirty tree blocking the checkout) is logged, not
+      // swallowed, so the operator can see why nothing dispatched.
+      expect(d.failures).toEqual([
+        { issueId: "001-a.md", repo: "/repos/api", error: "git branch failed", edge: "implementor" },
+      ]);
+      expect(result).toEqual({ launched: 0, skipped: 1 });
     });
   });
 

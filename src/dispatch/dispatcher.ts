@@ -2,7 +2,7 @@ import { basename, join } from "node:path";
 import { computeFrontier, type FrontierEntry } from "./frontier.js";
 import { readDispatchView, type DispatchView } from "./reader.js";
 import { writeStatus } from "../issueFile.js";
-import { runDispatch, type FailureRecord } from "./dispatch.js";
+import { runDispatch, type DispatchResult, type FailureRecord } from "./dispatch.js";
 import { featureBranchName, type GitSeam } from "./gitSetup.js";
 import { buildImplementorPrompt } from "./implementorPrompt.js";
 import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
@@ -106,14 +106,16 @@ export function createDispatcher(
       }
     },
 
-    dispatch(frontier: readonly FrontierEntry[]): void {
-      if (lastRead === undefined) return; // nothing was read ⇒ nothing to dispatch
+    dispatch(frontier: readonly FrontierEntry[]): DispatchResult {
+      // Nothing was read ⇒ nothing to dispatch: report a zero result so the
+      // confirm notice says "no agents" rather than the intended count.
+      if (lastRead === undefined) return { launched: 0, skipped: 0 };
       const { prdDir, view } = lastRead;
       // Derive the feature branch once and thread it through both the branch
       // setup (in runDispatch) and the prompt, so they can never disagree.
       const featureBranch = featureBranchName(basename(prdDir));
 
-      runDispatch(featureBranch, frontier, {
+      return runDispatch(featureBranch, frontier, {
         git: deps.git,
         writeStatus,
         buildPrompt: (issue, repo) =>
