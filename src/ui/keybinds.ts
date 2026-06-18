@@ -159,6 +159,19 @@ export const KEYBINDS: readonly Keybind[] = [
     action: (h) => h.zoom(),
   },
   {
+    // Once zoomed there is no deeper level to zoom into, so `Enter` aliases `v`
+    // at the Issue level: it opens the selected Issue's detail. A second binding
+    // gated to `issues` rather than a level-aware action keeps each entry's label
+    // and level honest in the `?` help map (board Enter zooms, issue Enter views).
+    // Eligibility mirrors `v` — inert when no card is selected.
+    key: "Enter",
+    label: "View the selected Issue's body",
+    level: "issues",
+    matches: (p) => p.key.return,
+    eligible: (ctx) => ctx.cardSelected,
+    action: (h) => h.viewDetail(),
+  },
+  {
     key: "Esc",
     label: "Back out to the board",
     level: "issues",

@@ -178,6 +178,20 @@ describe("keybind registry", () => {
     expect(matchKeybind(press("", { escape: true }), "issues", ctx())?.label).toContain("Back");
   });
 
+  it("aliases Enter to the detail view at the issue level (no deeper zoom to take)", () => {
+    // Zoomed in, `Enter` opens the selected Issue's body just like `v` — it routes
+    // to viewDetail, not zoom, and is gated on a selected card the same way `v` is.
+    const enter = press("", { return: true });
+    const at = matchKeybind(enter, "issues", ctx());
+    expect(at?.label).toContain("body");
+    const handlers = spyHandlers();
+    at?.action(handlers, enter);
+    expect(handlers.viewDetail).toHaveBeenCalledTimes(1);
+    expect(handlers.zoom).not.toHaveBeenCalled();
+    // Inert when nothing is selected, mirroring `v`.
+    expect(matchKeybind(enter, "issues", ctx({ cardSelected: false }))).toBeUndefined();
+  });
+
   it("returns the matched binding's action, which dispatches via the handlers bag", () => {
     const handlers = spyHandlers();
     const p = press("d");
