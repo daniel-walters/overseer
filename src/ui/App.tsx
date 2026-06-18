@@ -291,10 +291,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // guard below suppresses `?` while a preview is up, so help and a preview are
   // never both open: at most one modal on screen, ever.
   const [showHelp, setShowHelp] = useState(false);
-  // A one-line transient notice shown on the status line — currently only the
-  // outcome of a re-dispatch confirm (ADR 0009), so the human can tell a real
-  // recovery from the silent "nothing to recover" no-op (the agent wasn't
-  // actually dead, or the Issue vanished). Cleared on the next keypress.
+  // A one-line transient notice shown on the status line: an action outcome (a
+  // re-dispatch/kill/open-PR/delete result, ADR 0009) or the in-flight "Dispatching
+  // N agents…" signal a confirm fires the instant the spawn loop is deferred (issue
+  // #74), so the human always has feedback that work is underway and can tell a real
+  // recovery from a silent no-op. Cleared on the next keypress.
   const [notice, setNotice] = useState<string | undefined>(undefined);
   // The selected PRD's dispatch frontier for the *current* keypress, read once in
   // the input handler to gate `d`'s eligibility (ADR 0017) and then reused by the
@@ -627,7 +628,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   /** Act on the frozen modal capture: dispatch a frontier, or review an Issue. */
   function confirmModal(): void {
     if (modal?.kind === "dispatch") {
-      dispatcher?.dispatch(modal.frontier);
+      // The spawn edge runs synchronously and each `claude --bg` cold-start takes
+      // a few seconds, so a confirm used to freeze the UI mid-spawn with no signal
+      // that work was underway — it looked like the dispatch had failed (issue #74).
+      // Show an immediate honest notice, then defer the blocking loop past this
+      // paint (setTimeout 0) so the board and the notice render the instant confirm
+      // fires, rather than after the whole loop returns. Once it returns, re-scan on
+      // demand so the cards flip to in-progress at once instead of waiting on the
+      // debounced watcher (reusing the `refresh` seam Open PR/delete added, issue
+      // #66); the notice then lingers until the next keypress like every other one.
+      const { frontier } = modal;
+      const spawning = frontier.filter((e) => e.classification === "spawn").length;
+      setNotice(`Dispatching ${spawning} agent${spawning === 1 ? "" : "s"} in the background…`);
+      setTimeout(() => {
+        dispatcher?.dispatch(frontier);
+        refresh?.();
+      }, 0);
     } else if (modal?.kind === "review" && modal.preview.eligibility.reviewable) {
       // An ineligible Issue's preview is a read-only skip notice: confirm spawns
       // nothing, it just dismisses (the reviewer would no-op anyway).

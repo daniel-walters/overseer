@@ -262,6 +262,46 @@ describe("App dispatch", () => {
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
   });
 
+  it("shows an in-flight notice on confirm and re-scans once the spawn returns (issue #74)", async () => {
+    // The spawn edge blocks for seconds on `claude --bg` cold-start, so confirm
+    // surfaces an immediate "Dispatching N agents…" notice (N = spawn candidates,
+    // one in fakeFrontier) and re-scans on demand once the deferred loop returns,
+    // so the cards flip to in-progress without waiting on the debounced watcher.
+    const dispatcher = spyDispatcher();
+    const refresh = vi.fn();
+    const { stdin, lastFrame } = render(
+      <App board={board} dispatcher={dispatcher} refresh={refresh} />,
+    );
+
+    stdin.write("d");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+
+    // The deferred spawn ran, and the board was re-scanned on demand.
+    expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    // The honest in-flight signal is on the status line (the modal is gone).
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Dispatching 1 agent in the background");
+    expect(frame).not.toContain("Dispatch AuthPRD");
+  });
+
+  it("clears the dispatch notice on the next keypress (a one-shot, like every notice)", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatching");
+
+    stdin.write("l"); // any movement key
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatching");
+  });
+
   it("cancels on Esc without dispatching, leaving the board untouched", async () => {
     const dispatcher = spyDispatcher();
     const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
