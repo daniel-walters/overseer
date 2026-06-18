@@ -267,6 +267,7 @@ describe("App dispatch", () => {
     // surfaces an immediate "Dispatching N agents…" notice (N = spawn candidates,
     // one in fakeFrontier) and re-scans on demand once the deferred loop returns,
     // so the cards flip to in-progress without waiting on the debounced watcher.
+    // Once the loop returns the in-flight line settles to a past-tense outcome.
     const dispatcher = spyDispatcher();
     const refresh = vi.fn();
     const { stdin, lastFrame } = render(
@@ -281,13 +282,17 @@ describe("App dispatch", () => {
     // The deferred spawn ran, and the board was re-scanned on demand.
     expect(dispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(refresh).toHaveBeenCalledTimes(1);
-    // The honest in-flight signal is on the status line (the modal is gone).
+    // The settled outcome is on the status line (the modal is gone).
     const frame = stripAnsi(lastFrame() ?? "");
-    expect(frame).toContain("Dispatching 1 agent in the background");
+    expect(frame).toContain("Dispatched 1 agent in the background");
     expect(frame).not.toContain("Dispatch AuthPRD");
   });
 
-  it("clears the dispatch notice on the next keypress (a one-shot, like every notice)", async () => {
+  it("settles the in-flight notice to an outcome once the spawn returns, without a keypress", async () => {
+    // The "Dispatching…" line is a progress signal, not an outcome: it used to
+    // stay up until the next keypress, leaving it stuck on screen long after the
+    // agents had spawned (it only vanished when the cursor moved). The deferred
+    // loop now swaps it for a settled past-tense line on return — no keypress.
     const dispatcher = spyDispatcher();
     const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
 
@@ -295,11 +300,24 @@ describe("App dispatch", () => {
     await tick();
     stdin.write(ENTER);
     await tick();
-    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatching");
+    // No movement key — the notice has already settled on its own.
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatched");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatching");
+  });
+
+  it("clears the settled dispatch notice on the next keypress (a one-shot, like every notice)", async () => {
+    const dispatcher = spyDispatcher();
+    const { stdin, lastFrame } = render(<App board={board} dispatcher={dispatcher} />);
+
+    stdin.write("d");
+    await tick();
+    stdin.write(ENTER);
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("Dispatched");
 
     stdin.write("l"); // any movement key
     await tick();
-    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatching");
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("Dispatched");
   });
 
   it("cancels on Esc without dispatching, leaving the board untouched", async () => {

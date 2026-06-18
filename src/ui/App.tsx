@@ -636,13 +636,20 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       // fires, rather than after the whole loop returns. Once it returns, re-scan on
       // demand so the cards flip to in-progress at once instead of waiting on the
       // debounced watcher (reusing the `refresh` seam Open PR/delete added, issue
-      // #66); the notice then lingers until the next keypress like every other one.
+      // #66), and swap the in-flight "Dispatching…" line for a settled outcome.
+      // The in-flight notice is a *progress* signal, not an outcome: leaving it up
+      // until the next keypress left it stuck on screen long after the agents had
+      // spawned (it only vanished when the cursor moved). Replacing it on return
+      // makes it self-clearing and lands the same settled-outcome line every other
+      // action shows — lingering until the next keypress like all the rest.
       const { frontier } = modal;
       const spawning = frontier.filter((e) => e.classification === "spawn").length;
-      setNotice(`Dispatching ${spawning} agent${spawning === 1 ? "" : "s"} in the background…`);
+      const plural = spawning === 1 ? "" : "s";
+      setNotice(`Dispatching ${spawning} agent${plural} in the background…`);
       setTimeout(() => {
         dispatcher?.dispatch(frontier);
         refresh?.();
+        setNotice(`Dispatched ${spawning} agent${plural} in the background.`);
       }, 0);
     } else if (modal?.kind === "review" && modal.preview.eligibility.reviewable) {
       // An ineligible Issue's preview is a read-only skip notice: confirm spawns
