@@ -16,6 +16,7 @@ import {
   DEFAULT_REVIEW_CONFIG,
   type ReviewConfig,
 } from "../review/reviewConfig.js";
+import { DEFAULT_AGENT_CONFIG, type AgentConfig } from "../agentConfig.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import { enumeratePrdDirs } from "./prds.js";
 import { sweepFrontier, type PrdInput, type SweptPrd } from "./sweep.js";
@@ -47,7 +48,11 @@ export interface ReactorDeps {
    * Launch an agent (implementor or reviewer) in `repo` with `prompt`, returning
    * the handle parsed from the launch stdout (or `undefined`); throws on failure.
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
   /**
@@ -102,6 +107,22 @@ export interface ReactorDeps {
    * (focused on spawn-edge wiring, not prompt contents) rely on.
    */
   readonly review?: ReviewConfig;
+  /**
+   * The implementor agent runtime (model + effort) the dispatch edge launches at,
+   * threaded onto every implementor spawn. The CLI injects the `[implementor]`
+   * config — the *same* value it gives the manual `d` dispatcher, so auto and
+   * hand-driven dispatches launch the implementor identically. Optional: omitted ⇒
+   * {@link DEFAULT_AGENT_CONFIG} (inherit the launcher's model/effort), the
+   * pre-knob behaviour the Reactor's own spawn-edge-wiring tests rely on.
+   */
+  readonly implementor?: AgentConfig;
+  /**
+   * The reviewer agent runtime (model + effort) the review edge launches at — the
+   * counterpart to {@link implementor}, sourced from the CLI's `[reviewer]` config
+   * and shared with the manual `r` reviewer. Optional: omitted ⇒
+   * {@link DEFAULT_AGENT_CONFIG} (inherit), as the wiring tests rely on.
+   */
+  readonly reviewer?: AgentConfig;
 }
 
 /** The in-process automation the live loop drives after every board rebuild. */
@@ -216,6 +237,12 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // behaviour (cap 3, medium) when the CLI does not inject config — the path the
   // Reactor's own unit tests take.
   const review = deps.review ?? DEFAULT_REVIEW_CONFIG;
+  // The per-edge agent runtimes (model + effort). Defaults inherit the launcher's
+  // model/effort, so a board with no `[implementor]`/`[reviewer]` config spawns
+  // exactly as before. Resolved once here and threaded onto every spawn of the
+  // matching edge, just as `review` is resolved once and shared.
+  const implementor = deps.implementor ?? DEFAULT_AGENT_CONFIG;
+  const reviewer = deps.reviewer ?? DEFAULT_AGENT_CONFIG;
   // Whether the most recent reconcile attempted any spawn — the second input
   // (beside `enabled`) to the board-level activity signal. Starts false so a
   // freshly-opened board with nothing eligible reads `idle` (on, but quiet)
@@ -249,9 +276,9 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
       let spawnedThisReconcile = false;
       const countingDeps: ReactorDeps = {
         ...deps,
-        spawn: (repo, prompt) => {
+        spawn: (repo, prompt, agent) => {
           spawnedThisReconcile = true;
-          return deps.spawn(repo, prompt);
+          return deps.spawn(repo, prompt, agent);
         },
       };
       try {
@@ -260,8 +287,8 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
           // resolve edge's merge target — is derived once here and shared, so the
           // edges can't drift on how it's computed.
           const featureBranch = featureBranchName(basename(swept.prdDir));
-          dispatchEligible(swept, featureBranch, countingDeps, failed);
-          reviewEligible(swept, countingDeps, failed, review);
+          dispatchEligible(swept, featureBranch, countingDeps, failed, implementor);
+          reviewEligible(swept, countingDeps, failed, review, reviewer);
           // The third, non-spawn edge (ADR 0019): resolve a clean verdict by
           // merging → `done`. Runs after the two spawn frontiers, synchronously
           // under the same re-entrancy guard, gated on the verdict the sweep
@@ -327,6 +354,7 @@ function dispatchEligible(
   featureBranch: string,
   deps: ReactorDeps,
   failed: FailedSet,
+  implementor: AgentConfig,
 ): void {
   runDispatch(featureBranch, subtractFailedImplementors(frontier, failed), {
     git: deps.git,
@@ -340,6 +368,7 @@ function dispatchEligible(
         featureBranch,
       }),
     spawn: deps.spawn,
+    agent: implementor,
     logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),
     recordHandle: deps.recordHandle,
   });
@@ -371,6 +400,7 @@ function reviewEligible(
   deps: ReactorDeps,
   failed: FailedSet,
   review: ReviewConfig,
+  reviewer: AgentConfig,
 ): void {
   for (const issue of reviewers) {
     if (failed.has(issue.path, "reviewer")) continue; // suppressed this session
@@ -394,6 +424,7 @@ function reviewEligible(
           review,
         }),
       spawn: deps.spawn,
+      agent: reviewer,
       logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),
       recordHandle: deps.recordHandle,
     });

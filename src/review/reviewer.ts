@@ -7,6 +7,7 @@ import { buildReviewerPrompt } from "./reviewerPrompt.js";
 import { driveReviewPass } from "./review.js";
 import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
 import type { ReviewConfig } from "./reviewConfig.js";
+import type { AgentConfig } from "../agentConfig.js";
 import type { Reviewer } from "../ui/App.js";
 
 /**
@@ -22,7 +23,18 @@ export interface ReviewerDeps {
    * Launch a reviewer in `repo` with `prompt`, returning the handle parsed from
    * the launch stdout (or `undefined`); throws if the launch fails.
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
+  /**
+   * The reviewer agent runtime (model + effort) a manual `r` launches at — the
+   * `[reviewer]` config the CLI threads here, the *same* value the Reactor's
+   * auto-reviewer uses, so a hand-driven review and an automated one launch the
+   * reviewer identically. Optional: omitted ⇒ inherit the launcher's defaults.
+   */
+  readonly agent?: AgentConfig;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
   /**
@@ -113,6 +125,7 @@ export function createReviewer(root: string, deps: ReviewerDeps): Reviewer {
             review: deps.review,
           }),
         spawn: deps.spawn,
+        agent: deps.agent,
         // Route this manual `r` launch's failures through the shared failed-set
         // before the durable log. The Issue's `path` is `prdDir/filename`, so its
         // directory is the `prdDir` the helper re-joins the bare filename with —

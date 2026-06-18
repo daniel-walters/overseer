@@ -3,6 +3,7 @@ import type { DispatchIssue } from "./reader.js";
 import { setUpRepos, type GitSeam } from "./gitSetup.js";
 import { Status } from "./status.js";
 import { spawnWithFlip, type FailureRecord } from "./failureLog.js";
+import type { AgentConfig } from "../agentConfig.js";
 
 // Re-exported so existing importers (spawn.ts, dispatcher.ts, the review edge)
 // keep their `from "./dispatch.js"` import; the type now lives with the shared
@@ -28,11 +29,21 @@ export interface DispatchDeps {
    * Launch an implementor in `repo` with the built `prompt`, returning the
    * handle parsed from the launch stdout (or `undefined`). Throws on failure.
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
   /** Record a launched agent's handle against its Issue key in the sidecar. */
   readonly recordHandle: (issueKey: string, handle: string) => void;
+  /**
+   * The implementor agent runtime (model + effort) every spawn in this dispatch
+   * launches at. Optional: omitted ⇒ inherit the launcher's model/effort, the
+   * pre-knob behaviour the Reactor's own wiring tests rely on.
+   */
+  readonly agent?: AgentConfig;
 }
 
 /** A spawn candidate the frontier has guaranteed carries a usable repo. */
@@ -110,6 +121,7 @@ function spawnOne(
     writeStatus: deps.writeStatus,
     buildPrompt: () => deps.buildPrompt(issue, repo),
     spawn: deps.spawn,
+    agent: deps.agent,
     logFailure: deps.logFailure,
     recordHandle: deps.recordHandle,
   });

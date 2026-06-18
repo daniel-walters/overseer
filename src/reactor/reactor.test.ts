@@ -468,6 +468,35 @@ describe("createReactor", () => {
     );
   });
 
+  it("launches each edge at its own configured runtime (not swapped)", () => {
+    // Same PRD, same repo — so the only thing distinguishing the two launches is
+    // the agent runtime threaded onto each. Asserting the implementor spawn got
+    // the implementor config and the reviewer spawn got the reviewer config locks
+    // the wiring so the two can never be swapped.
+    writePrd(root, "alpha", {
+      "001-impl.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+      "002-rev.md": reviewable("/repos/alpha"),
+    });
+
+    const launches: { prompt: string; agent: unknown }[] = [];
+    const deps = recordingDeps({
+      spawn: (_repo, prompt, agent) => {
+        launches.push({ prompt, agent });
+        return "h";
+      },
+      implementor: { model: "opus", effort: "high" },
+      reviewer: { model: "sonnet", effort: "medium" },
+    });
+    createReactor(root, deps).reconcile();
+
+    const implementor = launches.find((l) =>
+      l.prompt.includes("implementor agent"),
+    );
+    const reviewer = launches.find((l) => l.prompt.includes("reviewer agent"));
+    expect(implementor?.agent).toEqual({ model: "opus", effort: "high" });
+    expect(reviewer?.agent).toEqual({ model: "sonnet", effort: "medium" });
+  });
+
   it("rolls a failed reviewer spawn back to ready-for-review and logs it", () => {
     writePrd(root, "alpha", { "001-rev.md": reviewable("/repos/alpha") });
 

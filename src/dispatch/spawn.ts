@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import type { FailureRecord } from "./dispatch.js";
 import { parseHandle } from "./handle.js";
+import { agentFlags, type AgentConfig } from "../agentConfig.js";
 
 /**
  * The real spawn tip of the dispatch edge: launch one implementor agent and
@@ -37,11 +38,19 @@ export interface SpawnEdgeDeps {
 /** The spawn-edge functions {@link runDispatch} consumes. */
 export interface SpawnEdge {
   /**
-   * Launch an implementor in `repo` with `prompt`, returning the agent handle
-   * parsed from `claude --bg`'s launch stdout (or `undefined` if the launch line
-   * carried none). Throws if the launch itself fails.
+   * Launch an agent in `repo` with `prompt`, returning the agent handle parsed
+   * from `claude --bg`'s launch stdout (or `undefined` if the launch line carried
+   * none). Throws if the launch itself fails. The optional {@link AgentConfig}
+   * adds `--model` / `--effort` to the launch — both edges call this one seam,
+   * each supplying its own runtime (implementor vs reviewer), so model/effort can
+   * differ per edge from a single shared spawn. Omitted ⇒ inherit the launcher's
+   * model and effort (the pre-knob behaviour).
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
   /** Append a timestamped failure record to the durable log. */
   readonly logFailure: (record: FailureRecord) => void;
 }
@@ -56,18 +65,28 @@ export function defaultLogPath(): string {
 
 /**
  * Build the spawn edge from its seams. `spawn` runs
- * `claude --bg --permission-mode auto -p <prompt>` with `cwd = repo`, so the
- * agent works autonomously in the background in its target repo, and returns the
- * handle parsed from the launch stdout so the caller can record it against the
- * Issue (ADR 0008). A launch failure propagates to the caller (which rolls the
- * Issue back and logs).
+ * `claude --bg --permission-mode auto [--model M] [--effort E] -p <prompt>` with
+ * `cwd = repo`, so the agent works autonomously in the background in its target
+ * repo, and returns the handle parsed from the launch stdout so the caller can
+ * record it against the Issue (ADR 0008). The `--model`/`--effort` flags are
+ * present only when the caller passes an {@link AgentConfig} with those knobs set
+ * (see {@link agentFlags}); the implementor and reviewer edges pass their own, so
+ * one shared spawn launches each edge's agent at its configured model and effort.
+ * A launch failure propagates to the caller (which rolls the Issue back and logs).
  */
 export function createSpawnEdge(deps: SpawnEdgeDeps): SpawnEdge {
   return {
-    spawn(repo: string, prompt: string): string | undefined {
+    spawn(repo: string, prompt: string, agent?: AgentConfig): string | undefined {
       const stdout = deps.exec(
         "claude",
-        ["--bg", "--permission-mode", "auto", "-p", prompt],
+        [
+          "--bg",
+          "--permission-mode",
+          "auto",
+          ...agentFlags(agent),
+          "-p",
+          prompt,
+        ],
         { cwd: repo },
       );
       return parseHandle(stdout);

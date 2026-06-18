@@ -155,4 +155,76 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ configPath, home })).toThrow(/medium/i);
     });
   });
+
+  describe("agent runtime knobs", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults both agents to inherit (null model + effort) when absent", () => {
+      writeFileSync(configPath, 'root = "~"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.implementor).toEqual({ model: null, effort: null });
+      expect(config.reviewer).toEqual({ model: null, effort: null });
+    });
+
+    it("reads model and effort from the [implementor] table", () => {
+      writeWithRoot('[implementor]\nmodel = "opus"\neffort = "high"\n');
+
+      expect(loadConfig({ configPath, home }).implementor).toEqual({
+        model: "opus",
+        effort: "high",
+      });
+    });
+
+    it("reads model and effort from the [reviewer] table", () => {
+      writeWithRoot('[reviewer]\nmodel = "sonnet"\neffort = "medium"\n');
+
+      expect(loadConfig({ configPath, home }).reviewer).toEqual({
+        model: "sonnet",
+        effort: "medium",
+      });
+    });
+
+    it("leaves the unset knob null when only one is given", () => {
+      writeWithRoot('[reviewer]\nmodel = "sonnet"\n');
+
+      expect(loadConfig({ configPath, home }).reviewer).toEqual({
+        model: "sonnet",
+        effort: null,
+      });
+    });
+
+    it("accepts the extended effort vocabulary (xhigh, max)", () => {
+      writeWithRoot('[implementor]\neffort = "xhigh"\n');
+
+      expect(loadConfig({ configPath, home }).implementor.effort).toBe("xhigh");
+    });
+
+    it("throws a ConfigError naming the table for a non-table value", () => {
+      writeWithRoot('implementor = "opus"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/implementor/i);
+    });
+
+    it("throws a ConfigError for an empty model string", () => {
+      writeWithRoot('[implementor]\nmodel = ""\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/model/i);
+    });
+
+    it("throws a ConfigError naming the allowed values for an unknown effort", () => {
+      writeWithRoot('[reviewer]\neffort = "extreme"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
+      // The message lists the session-effort vocabulary, including xhigh/max.
+      expect(() => loadConfig({ configPath, home })).toThrow(/xhigh/i);
+    });
+  });
 });

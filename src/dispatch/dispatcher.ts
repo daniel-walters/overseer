@@ -6,6 +6,7 @@ import { runDispatch, type FailureRecord } from "./dispatch.js";
 import { featureBranchName, type GitSeam } from "./gitSetup.js";
 import { buildImplementorPrompt } from "./implementorPrompt.js";
 import { recordingLogFailure, type FailedSet } from "../reactor/failedSet.js";
+import type { AgentConfig } from "../agentConfig.js";
 import type { Dispatcher } from "../ui/App.js";
 
 /**
@@ -22,7 +23,18 @@ export interface DispatcherDeps {
    * Launch an implementor in `repo` with `prompt`, returning the handle parsed
    * from the launch stdout (or `undefined`); throws if the launch fails.
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
+  /**
+   * The implementor agent runtime (model + effort) a manual `d` launches at — the
+   * `[implementor]` config the CLI threads here, the *same* value the Reactor's
+   * auto-dispatch uses, so a hand-driven dispatch and an automated one launch the
+   * implementor identically. Optional: omitted ⇒ inherit the launcher's defaults.
+   */
+  readonly agent?: AgentConfig;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
   /** Record a launched agent's handle against its Issue key in the sidecar. */
@@ -113,6 +125,7 @@ export function createDispatcher(
             featureBranch,
           }),
         spawn: deps.spawn,
+        agent: deps.agent,
         // Route this manual `d` launch's failures through the shared failed-set
         // (keyed by the Issue's full path, prdDir/filename) before the durable
         // log, so a failed manual dispatch is suppressed from the next Reactor

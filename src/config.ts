@@ -9,17 +9,38 @@ import {
   type ReviewConfig,
   type ReviewEffort,
 } from "./review/reviewConfig.js";
+import {
+  AGENT_EFFORTS,
+  DEFAULT_AGENT_CONFIG,
+  type AgentConfig,
+  type AgentEffort,
+} from "./agentConfig.js";
 
-/** The resolved configuration: one board, one root, the review-loop knobs. */
+/** The resolved configuration: one board, one root, the review-loop + agent knobs. */
 export interface Config {
   /** Absolute path to the directory Overseer scans. */
   readonly root: string;
   /**
-   * The AI-review loop's tunable knobs (pass cap + effort). Always present:
-   * absent `[review]` config resolves to {@link DEFAULT_REVIEW_CONFIG} (cap 3,
-   * medium), so existing boards behave exactly as before.
+   * The AI-review loop's tunable knobs (pass cap + `/code-review` effort). Always
+   * present: absent `[review]` config resolves to {@link DEFAULT_REVIEW_CONFIG}
+   * (cap 3, medium), so existing boards behave exactly as before. Note `review.effort`
+   * is the review *skill's* thoroughness, distinct from `reviewer.effort` below
+   * (the reviewer agent's session reasoning effort).
    */
   readonly review: ReviewConfig;
+  /**
+   * The implementor agent's runtime (model + effort), from `[implementor]`. Always
+   * present: absent config resolves to {@link DEFAULT_AGENT_CONFIG} (inherit the
+   * launcher's model/effort), so an unconfigured board spawns implementors as before.
+   */
+  readonly implementor: AgentConfig;
+  /**
+   * The reviewer agent's runtime (model + effort), from `[reviewer]`. Always
+   * present: absent config resolves to {@link DEFAULT_AGENT_CONFIG} (inherit), so an
+   * unconfigured board spawns reviewers as before. The session-level `effort` here is
+   * distinct from `review.effort`, which tunes the `/code-review` skill itself.
+   */
+  readonly reviewer: AgentConfig;
 }
 
 /** Options for {@link loadConfig}; the defaults point at the real environment. */
@@ -87,7 +108,12 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     throw new ConfigError(`Root path is not a directory: ${root}`);
   }
 
-  return { root, review: parseReview(parsed.review, configPath) };
+  return {
+    root,
+    review: parseReview(parsed.review, configPath),
+    implementor: parseAgent(parsed.implementor, "implementor", configPath),
+    reviewer: parseAgent(parsed.reviewer, "reviewer", configPath),
+  };
 }
 
 /**
@@ -134,6 +160,65 @@ function parseEffort(raw: unknown, configPath: string): ReviewEffort {
     );
   }
   return raw as ReviewEffort;
+}
+
+/**
+ * Parse an optional agent-runtime table (`[implementor]` or `[reviewer]`) into a
+ * complete {@link AgentConfig}, filling each absent knob from
+ * {@link DEFAULT_AGENT_CONFIG} (`null` ⇒ inherit, pass no flag). An absent table
+ * (or absent field) is the pre-knob behaviour; a present-but-malformed value is a
+ * user-fixable {@link ConfigError}, matching the rest of the module's style.
+ * `table` names which table for error messages (`implementor` / `reviewer`).
+ */
+function parseAgent(
+  raw: unknown,
+  table: string,
+  configPath: string,
+): AgentConfig {
+  if (raw === undefined) return DEFAULT_AGENT_CONFIG;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(
+      `Config at ${configPath} has a "[${table}]" that is not a table.`,
+    );
+  }
+  const fields = raw as Record<string, unknown>;
+  return {
+    model: parseModel(fields.model, table, configPath),
+    effort: parseAgentEffort(fields.effort, table, configPath),
+  };
+}
+
+/** A model must be a non-empty string if present; absent ⇒ `null` (inherit). */
+function parseModel(
+  raw: unknown,
+  table: string,
+  configPath: string,
+): string | null {
+  if (raw === undefined) return DEFAULT_AGENT_CONFIG.model;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new ConfigError(
+      `Config at ${configPath} has an invalid "${table}.model": expected a non-empty string (e.g. "opus", "sonnet"), got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw.trim();
+}
+
+/** An agent effort must be one of {@link AGENT_EFFORTS}; absent ⇒ `null` (inherit). */
+function parseAgentEffort(
+  raw: unknown,
+  table: string,
+  configPath: string,
+): AgentEffort | null {
+  if (raw === undefined) return DEFAULT_AGENT_CONFIG.effort;
+  if (
+    typeof raw !== "string" ||
+    !(AGENT_EFFORTS as readonly string[]).includes(raw)
+  ) {
+    throw new ConfigError(
+      `Config at ${configPath} has an invalid "${table}.effort": expected one of ${AGENT_EFFORTS.join(", ")}, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw as AgentEffort;
 }
 
 /** Expand a leading `~` (or `~/`) to the home directory. */

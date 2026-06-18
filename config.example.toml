@@ -1,3 +1,34 @@
 # Copy to ~/.config/overseer/config.toml and edit `root`.
 # `root` is the directory that holds your PRD folders. A leading ~ is expanded.
 root = "~/work/prds"
+
+# --- Agent runtime (optional) -------------------------------------------------
+# Which model each spawned `claude --bg` agent runs, and at what session effort.
+# Both `model` and `effort` are optional per table; omit either to inherit the
+# launcher's default (the pre-config behaviour). `model` takes an alias
+# (opus, sonnet, haiku, fable) or a full model id; `effort` is one of
+# low, medium, high, xhigh, max.
+#
+# Recommended split: the implementor does long-horizon, test-first coding — a
+# correct first implementation collapses the review loop — so give it the most
+# capable model at high effort. The reviewer runs once per pass (and may run up
+# to `review.cap` times), so a faster model at medium effort keeps each pass
+# quick; bump it toward opus/high if you find reviews missing real bugs.
+
+[implementor]
+model = "opus"
+effort = "high"
+
+[reviewer]
+model = "sonnet"
+effort = "medium"
+
+# --- Review loop (optional) ---------------------------------------------------
+# `cap` is the number of `/code-review` passes before an Issue escalates to
+# human-review (default 3). `effort` is the `/code-review` skill's THOROUGHNESS
+# (low | medium | high, default medium) — distinct from `reviewer.effort` above,
+# which is how hard the reviewer *agent* reasons across its whole session.
+
+[review]
+cap = 3
+effort = "medium"

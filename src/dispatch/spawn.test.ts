@@ -63,6 +63,68 @@ describe("createSpawnEdge", () => {
         "claude: command not found",
       );
     });
+
+    it("adds --model and --effort before -p when an agent runtime is given", () => {
+      const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
+      const { spawn } = createSpawnEdge({ exec, logPath });
+
+      spawn("/repos/api", "do the thing", { model: "opus", effort: "high" });
+
+      expect(exec).toHaveBeenCalledWith(
+        "claude",
+        [
+          "--bg",
+          "--permission-mode",
+          "auto",
+          "--model",
+          "opus",
+          "--effort",
+          "high",
+          "-p",
+          "do the thing",
+        ],
+        { cwd: "/repos/api" },
+      );
+    });
+
+    it("emits only the flags whose knob is set (model without effort)", () => {
+      const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
+      const { spawn } = createSpawnEdge({ exec, logPath });
+
+      spawn("/repos/api", "prompt", { model: "sonnet", effort: null });
+
+      expect(exec).toHaveBeenCalledWith(
+        "claude",
+        ["--bg", "--permission-mode", "auto", "--model", "sonnet", "-p", "prompt"],
+        { cwd: "/repos/api" },
+      );
+    });
+
+    it("emits --effort alone when only effort is set", () => {
+      const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
+      const { spawn } = createSpawnEdge({ exec, logPath });
+
+      spawn("/repos/api", "prompt", { model: null, effort: "medium" });
+
+      expect(exec).toHaveBeenCalledWith(
+        "claude",
+        ["--bg", "--permission-mode", "auto", "--effort", "medium", "-p", "prompt"],
+        { cwd: "/repos/api" },
+      );
+    });
+
+    it("adds no flags for an all-null runtime — identical to omitting it (inherit)", () => {
+      const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
+      const { spawn } = createSpawnEdge({ exec, logPath });
+
+      spawn("/repos/api", "prompt", { model: null, effort: null });
+
+      expect(exec).toHaveBeenCalledWith(
+        "claude",
+        ["--bg", "--permission-mode", "auto", "-p", "prompt"],
+        { cwd: "/repos/api" },
+      );
+    });
   });
 
   describe("logFailure", () => {

@@ -6,6 +6,7 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig, ConfigError } from "./config.js";
 import type { ReviewConfig } from "./review/reviewConfig.js";
+import type { AgentConfig } from "./agentConfig.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
@@ -56,10 +57,14 @@ function fail(message: string): never {
 function runBoard(): void {
   let root: string;
   let review: ReviewConfig;
+  let implementorAgent: AgentConfig;
+  let reviewerAgent: AgentConfig;
   try {
     const config = loadConfig();
     root = config.root;
     review = config.review;
+    implementorAgent = config.implementor;
+    reviewerAgent = config.reviewer;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -162,6 +167,7 @@ function runBoard(): void {
   const dispatcher = createDispatcher(root, {
     git: realGitSeam,
     spawn,
+    agent: implementorAgent,
     logFailure,
     recordHandle,
     failedSet,
@@ -171,6 +177,7 @@ function runBoard(): void {
   // launching the reviewer in the Issue's repo.
   const reviewer = createReviewer(root, {
     spawn,
+    agent: reviewerAgent,
     logFailure,
     recordHandle,
     readReviewPass,
@@ -225,6 +232,8 @@ function runBoard(): void {
     readReviewPass,
     failedSet,
     review,
+    implementor: implementorAgent,
+    reviewer: reviewerAgent,
   });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell

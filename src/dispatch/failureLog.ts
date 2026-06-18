@@ -1,4 +1,5 @@
 import { errorMessage } from "../errorMessage.js";
+import type { AgentConfig } from "../agentConfig.js";
 
 /**
  * Which spawn edge a failure came from. The dispatch and review edges share one
@@ -117,10 +118,21 @@ export interface SpawnWithFlip {
   /** Build the agent prompt, called only after the flip lands. */
   readonly buildPrompt: () => string;
   /**
-   * Launch the agent in `repo`, returning the handle parsed from the launch
-   * stdout (or `undefined` if none was printed); throws on launch failure.
+   * Launch the agent in `repo` at the configured {@link agent} runtime, returning
+   * the handle parsed from the launch stdout (or `undefined` if none was printed);
+   * throws on launch failure.
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
+  /**
+   * The agent runtime (model + effort) this edge launches at, forwarded verbatim
+   * to {@link spawn}. Optional: omitted ⇒ inherit the launcher's model/effort, so
+   * an edge that does not configure a runtime spawns exactly as before.
+   */
+  readonly agent?: AgentConfig;
   /** Append a spawn-failure record to the durable log. */
   readonly logFailure: (record: FailureRecord) => void;
   /**
@@ -173,7 +185,7 @@ export function spawnWithFlip(deps: SpawnWithFlip): void {
 
   let handle: string | undefined;
   try {
-    handle = deps.spawn(deps.repo, deps.buildPrompt());
+    handle = deps.spawn(deps.repo, deps.buildPrompt(), deps.agent);
   } catch (err) {
     rollBackStatus(deps.writeStatus, deps.issue.path, deps.awaiting);
     recordSpawnFailure(deps.logFailure, deps.edge, deps.issue.id, deps.repo, err);

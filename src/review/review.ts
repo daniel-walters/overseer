@@ -3,6 +3,7 @@ import { spawnWithFlip, type FailureRecord } from "../dispatch/failureLog.js";
 import { Status } from "../dispatch/status.js";
 import { escalateNonConvergence } from "./escalate.js";
 import type { ReviewConfig } from "./reviewConfig.js";
+import type { AgentConfig } from "../agentConfig.js";
 
 /**
  * The I/O seams a single review depends on, injected so the flip-then-spawn edge
@@ -20,7 +21,17 @@ export interface ReviewDeps {
    * Launch a reviewer in `repo` with the built `prompt`, returning the handle
    * parsed from the launch stdout (or `undefined`). Throws on failure.
    */
-  readonly spawn: (repo: string, prompt: string) => string | undefined;
+  readonly spawn: (
+    repo: string,
+    prompt: string,
+    agent?: AgentConfig,
+  ) => string | undefined;
+  /**
+   * The reviewer agent runtime (model + effort) this pass launches at. Optional:
+   * omitted ⇒ inherit the launcher's model/effort, the pre-knob behaviour the
+   * Reactor's own wiring tests rely on.
+   */
+  readonly agent?: AgentConfig;
   /** Append a spawn-failure record to the durable dispatch log. */
   readonly logFailure: (record: FailureRecord) => void;
   /**
@@ -78,6 +89,7 @@ export function runReview(issue: DispatchIssue, deps: ReviewDeps): void {
     writeStatus: deps.writeStatus,
     buildPrompt: () => deps.buildPrompt(issue),
     spawn: deps.spawn,
+    agent: deps.agent,
     logFailure: deps.logFailure,
     recordHandle: deps.recordHandle,
     reviewPass: deps.reviewPass,
