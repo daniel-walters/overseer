@@ -37,6 +37,7 @@ const NOTHING_ELIGIBLE: BindContext = {
   prdDone: false,
   prdHasPr: false,
   issueReadyForReview: false,
+  issueReadyForHuman: false,
   issueOrphan: false,
   issueLive: false,
   cardSelected: false,

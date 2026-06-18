@@ -44,7 +44,7 @@ export interface KeyPress {
  *
  * - `move` steps the selection one square in a spatial direction (movement keys derive it).
  * - `zoom` / `back` drive the level reducer (Enter zooms in, Esc backs out).
- * - `dispatch` / `review` / `redispatch` / `kill` / `openPr` / `deletePrd` open the matching preview.
+ * - `dispatch` / `review` / `redispatch` / `kill` / `markDone` / `openPr` / `deletePrd` open the matching preview.
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
  * - `toggleAutoRun` flips the global auto-run brake.
  * - `viewDetail` opens the selected card's body in the detail modal.
@@ -58,6 +58,7 @@ export interface KeybindHandlers {
   readonly review: () => void;
   readonly redispatch: () => void;
   readonly kill: () => void;
+  readonly markDone: () => void;
   readonly openPr: () => void;
   readonly deletePrd: () => void;
   readonly goToPr: () => void;
@@ -242,6 +243,21 @@ export const KEYBINDS: readonly Keybind[] = [
     matches: (p) => p.input === "K",
     eligible: (ctx) => ctx.issueLive,
     action: (h) => h.kill(),
+  },
+  {
+    // The board's first human-triggered status flip with no spawn behind it
+    // (CONTEXT.md → mark done): a `ready-for-human` Issue's only board action.
+    // Lowercase + bare-confirmed deliberately — a status flip is cheap and
+    // trivially reversible, so it is *not* in the shift-keyed `K`/`R`/`X` family;
+    // its confirm is an "is the manual work finished?" intent beat, not a safety
+    // net against irreversibility. Mirrors the `r` entry.
+    key: "m",
+    label: "Mark a ready-for-human Issue done",
+    level: "issues",
+    hint: true,
+    matches: (p) => p.input === "m",
+    eligible: (ctx) => ctx.issueReadyForHuman,
+    action: (h) => h.markDone(),
   },
   {
     key: "g",

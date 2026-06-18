@@ -167,6 +167,44 @@ describe("eligibility — computeBindContext", () => {
       ).toBe(false);
     });
 
+    it("issueReadyForHuman iff the selected Issue is a ready-for-human card", () => {
+      // The `ready-for-human` and `ready-for-agent` statuses both fold into the
+      // single `ready` lane (model.ts), distinguished only by the `readyFor`
+      // badge — so the flag keys off lane + badge, not a (non-existent)
+      // `ready-for-human` lane.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "ready", readyFor: "human" }),
+          frontier: [],
+        }).issueReadyForHuman,
+      ).toBe(true);
+      // A ready-for-agent card sits in the same lane but carries the agent badge.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "ready", readyFor: "agent" }),
+          frontier: [],
+        }).issueReadyForHuman,
+      ).toBe(false);
+      // Every other lane is false.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "ready-for-review" }),
+          frontier: [],
+        }).issueReadyForHuman,
+      ).toBe(false);
+      // Nothing selected ⇒ false.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: undefined,
+          frontier: [],
+        }).issueReadyForHuman,
+      ).toBe(false);
+    });
+
     it("issueOrphan iff the selected Issue's liveness is orphaned", () => {
       expect(
         computeBindContext({

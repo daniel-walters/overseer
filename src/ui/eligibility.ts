@@ -71,6 +71,14 @@ export interface BindContext {
   readonly prdHasPr: boolean;
   /** `r` — the selected Issue is in the `ready-for-review` lane. */
   readonly issueReadyForReview: boolean;
+  /**
+   * `m` — the selected Issue is a `ready-for-human` card. The `ready-for-human`
+   * and `ready-for-agent` statuses both fold into the single `ready` lane
+   * (model.ts), distinguished only by the `readyFor` badge, so this keys off lane
+   * + badge rather than a (non-existent) `ready-for-human` lane. The board's first
+   * human-triggered status flip with no spawn behind it (CONTEXT.md → mark done).
+   */
+  readonly issueReadyForHuman: boolean;
   /** `R` — the selected Issue's liveness verdict is `orphaned`. */
   readonly issueOrphan: boolean;
   /** `K` — the selected Issue's liveness verdict is `live`. */
@@ -100,6 +108,8 @@ export function computeBindContext(inputs: BindInputs): BindContext {
     prdDone: selectedPrd?.lane === "done",
     prdHasPr: selectedPrd?.linkedPr !== undefined,
     issueReadyForReview: selectedIssue?.lane === "ready-for-review",
+    issueReadyForHuman:
+      selectedIssue?.lane === "ready" && selectedIssue.readyFor === "human",
     issueOrphan: selectedIssue?.liveness === "orphaned",
     issueLive: selectedIssue?.liveness === "live",
     cardSelected: selectedPrd !== undefined || selectedIssue !== undefined,
