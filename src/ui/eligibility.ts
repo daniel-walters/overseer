@@ -83,6 +83,16 @@ export interface BindContext {
   readonly issueOrphan: boolean;
   /** `K` — the selected Issue's liveness verdict is `live`. */
   readonly issueLive: boolean;
+  /**
+   * `A` — the selected Issue is a `human-review` card with a recorded merge handoff
+   * (the model's derived `approvable` overlay: worktree **and** branch present). The
+   * board's first human-triggered *merge* — `A` runs the same in-process merge the
+   * Reactor's clean-AI path does, finishing the Issue from inside the board (PRD:
+   * Approve from Board, ADR 0021). **Reason-agnostic**: it keys off the `approvable`
+   * overlay, never {@link import("../model.js").Issue.humanReviewReason}, so a
+   * hand-fixed conflict/non-convergence Issue is still approvable.
+   */
+  readonly issueApprovable: boolean;
   /** `v` — any card is selected (a PRD at the board level, an Issue when zoomed). */
   readonly cardSelected: boolean;
   /**
@@ -112,6 +122,12 @@ export function computeBindContext(inputs: BindInputs): BindContext {
       selectedIssue?.lane === "ready" && selectedIssue.readyFor === "human",
     issueOrphan: selectedIssue?.liveness === "orphaned",
     issueLive: selectedIssue?.liveness === "live",
+    // Reason-agnostic: the scanner sets `approvable` only on a human-review card
+    // with a recorded worktree+branch, so the lane check is already folded into the
+    // overlay — but we keep it explicit so `A` can never light on an off-lane card
+    // carrying a stale flag.
+    issueApprovable:
+      selectedIssue?.lane === "human-review" && selectedIssue.approvable === true,
     cardSelected: selectedPrd !== undefined || selectedIssue !== undefined,
     prdLane: selectedPrd?.lane,
   };

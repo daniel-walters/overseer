@@ -19,6 +19,8 @@ import type { OpenPrResult } from "../dispatch/openPr.js";
 import type { DeletePreviewData } from "./DeletePreview.js";
 import type { DeleteResult } from "../dispatch/deletePrd.js";
 import type { MarkDonePreviewData } from "./MarkDonePreview.js";
+import type { ApprovePreviewData } from "./ApprovePreview.js";
+import type { ApproveResult } from "../review/approve.js";
 import { createDelete } from "../dispatch/deletePrd.js";
 import type { CardDetail } from "./detailReader.js";
 
@@ -655,6 +657,192 @@ describe("App mark done (m on a ready-for-human Issue)", () => {
 
     expect(markDone.markDone).not.toHaveBeenCalled();
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("ready-for-human → done");
+  });
+});
+
+describe("App approve (A on a human-review Issue)", () => {
+  // A board whose selected (first) Issue is an approvable `human-review` card — the
+  // only state `A` lights up on (lane human-review + the `approvable` overlay set by
+  // the scanner on a recorded worktree+branch). A second non-approvable human-review
+  // card pins the eligibility gate.
+  const reviewBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          {
+            id: "010-merge-me",
+            title: "Merge me",
+            lane: "human-review",
+            humanReviewReason: "deviation",
+            approvable: true,
+          },
+          {
+            id: "020-no-handoff",
+            title: "No handoff",
+            lane: "human-review",
+            humanReviewReason: "non-convergence",
+          },
+        ],
+      },
+    ],
+  };
+
+  function previewFor(issueId: string): ApprovePreviewData {
+    return {
+      issueTitle: issueId,
+      issuePath: `/root/auth/${issueId}`,
+      repo: "/repos/backend",
+      worktree: "/wt/blue-cat-fox",
+      branch: "blue-cat-fox",
+      featureBranch: "auth",
+    };
+  }
+
+  function spyApprove(
+    result: ApproveResult = { kind: "merged" },
+    readApprove: (prdId: string, issueId: string) => ApprovePreviewData | undefined = (
+      _p,
+      id,
+    ) => previewFor(id),
+  ) {
+    return {
+      readApprove: vi.fn(readApprove),
+      approve: vi.fn<(p: ApprovePreviewData) => ApproveResult>(() => result),
+    };
+  }
+
+  it("opens a confirm preview on A at the Issue level for an approvable human-review Issue", async () => {
+    const approve = spyApprove();
+    const { stdin, lastFrame } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues (selects 010-merge-me)
+    await tick();
+    stdin.write("A");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Approve"); // the preview titles the action
+    expect(frame).toContain("blue-cat-fox"); // names the branch
+    expect(frame).toContain("auth"); // names the feature branch + plan
+    expect(frame).not.toContain("diff"); // states the plan only — no diff
+    expect(approve.readApprove).toHaveBeenCalledWith("auth", "010-merge-me");
+  });
+
+  it("does nothing on A at the board level (approve is Issue-level only)", async () => {
+    const approve = spyApprove();
+    const { stdin } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write("A");
+    await tick();
+
+    expect(approve.readApprove).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on A for a human-review Issue with no recorded handoff", async () => {
+    const approve = spyApprove();
+    const { stdin } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write(ARROW_DOWN); // move to 020-no-handoff (not approvable)
+    await tick();
+    stdin.write("A");
+    await tick();
+
+    expect(approve.readApprove).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on A when no approve seam is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={reviewBoard} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+
+    // The modal never opens — its affordance line is the modal-only surface (the
+    // status-line hint and the card title are separate surfaces that legitimately
+    // show regardless of whether a seam is wired).
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("y to approve");
+  });
+
+  it("on confirm of a clean merge, invokes the seam and moves the card via re-scan", async () => {
+    const approve = spyApprove({ kind: "merged" });
+    const refresh = vi.fn();
+    const { stdin, lastFrame } = render(
+      <App board={reviewBoard} approve={approve} refresh={refresh} />,
+    );
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("A"); // open the confirm preview
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(approve.approve).toHaveBeenCalledTimes(1);
+    expect(approve.approve).toHaveBeenCalledWith(previewFor("010-merge-me"));
+    // A merged result re-scans so the card moves to done at once (the live re-scan).
+    expect(refresh).toHaveBeenCalled();
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("y to approve"); // modal closed (its affordance gone)
+    expect(frame.toLowerCase()).toContain("merged"); // success notice
+  });
+
+  it("surfaces a loud message and leaves the card put on a dirty worktree", async () => {
+    const approve = spyApprove({ kind: "dirty" });
+    const refresh = vi.fn();
+    const { stdin, lastFrame } = render(
+      <App board={reviewBoard} approve={approve} refresh={refresh} />,
+    );
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(approve.approve).toHaveBeenCalledTimes(1);
+    const frame = stripAnsi(lastFrame() ?? "").toLowerCase();
+    expect(frame).toContain("commit"); // "commit your fix first"
+    // No move: a dirty result must not re-scan a card into done.
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a loud message and leaves the card put on a conflict", async () => {
+    const approve = spyApprove({ kind: "conflict" });
+    const { stdin, lastFrame } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(approve.approve).toHaveBeenCalledTimes(1);
+    const frame = stripAnsi(lastFrame() ?? "").toLowerCase();
+    expect(frame).toContain("conflict"); // "resolve the conflict in the worktree first"
+    expect(frame).toContain("worktree");
+  });
+
+  it("cancels on Esc with nothing merged", async () => {
+    const approve = spyApprove();
+    const { stdin, lastFrame } = render(<App board={reviewBoard} approve={approve} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("A");
+    await tick();
+    stdin.write(ESC); // cancel
+    await tick();
+
+    expect(approve.approve).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("y to approve");
   });
 });
 

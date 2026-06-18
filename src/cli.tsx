@@ -31,6 +31,7 @@ import { realLinkedPrLookup } from "./dispatch/linkedPr.js";
 import { createOpenPr, realOpenPrDeps } from "./dispatch/openPr.js";
 import { createDelete, realDeleteDeps } from "./dispatch/deletePrd.js";
 import { createMarkDone, realMarkDoneDeps } from "./dispatch/markDone.js";
+import { createApprove, realApproveDeps } from "./review/approve.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
 
@@ -221,6 +222,16 @@ function runBoard(): void {
   // reversible write (re-edit the field to undo), so it carries no result and
   // needs no rollback — the thinnest of the Issue-level seams.
   const markDone = createMarkDone(root, realMarkDoneDeps());
+  // Approve (PRD: Approve from Board, ADR 0021): `A` on an approvable `human-review`
+  // Issue runs the **same in-process merge the Reactor's clean-AI path does** —
+  // merge the recorded worktree branch into the `featureBranchName`-derived PRD
+  // feature branch, set `done`, clean up the worktree — behind a confirm preview. The
+  // board's first human-triggered merge. It is the in-board twin of the
+  // `/overseer-merge` skill, sharing the very `mergeWorktree`/`cleanUpWorktree` seam
+  // the Reactor wraps (realApproveDeps binds the real merge seam), so the two
+  // human/AI merge paths can never drift. It writes a terminal status but never
+  // spawns — the two-spawn-edges invariant holds.
+  const approve = createApprove(root, realApproveDeps());
   // The detail modal (ADR 0014): `v` reads the selected card's frontmatter-stripped
   // body off the watched root on demand — the PRD's `prd.md` at the board level, the
   // selected Issue's file when zoomed — and renders it through marked-terminal. A
@@ -266,6 +277,7 @@ function runBoard(): void {
       openPr={openPr}
       deleter={deleter}
       markDone={markDone}
+      approve={approve}
       detailReader={detailReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
