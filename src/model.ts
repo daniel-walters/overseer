@@ -274,6 +274,21 @@ export interface Issue {
    */
   readonly humanReviewNote?: string;
   /**
+   * The Approve eligibility overlay (PRD: Approve from Board, ADR 0021): `true` on
+   * a `human-review` card that carries a recorded `worktree` **and** `branch` in its
+   * frontmatter — the merge handoff the `A` keybind needs. **Reason-agnostic**: it
+   * never reads {@link humanReviewReason}, so a hand-fixed `conflict`/`non-convergence`
+   * Issue (whose reason is an audit trail Overseer never rewrites) is still approvable
+   * — the merge preflight, not the reason, is the real gate.
+   *
+   * Set only on `lane === "human-review"`; absent on every other lane and on a
+   * human-review card missing the handoff, so a card that can't be merged from the
+   * board carries no Approve affordance. A derived overlay recomputed on each board
+   * open, never written to the Issue file (ADR 0002) — like {@link humanReviewReason},
+   * it rides its own lane so a stale handoff can't light `A` on a moved card.
+   */
+  readonly approvable?: boolean;
+  /**
    * The derived liveness overlay, set only on an `in-progress` / `in-review`
    * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
    * query shows the handle is gone, `unknown` otherwise. Absent on every other

@@ -21,6 +21,8 @@ import type { OpenPrResult } from "../dispatch/openPr.js";
 import { DeletePreview, type DeletePreviewData } from "./DeletePreview.js";
 import type { DeleteResult } from "../dispatch/deletePrd.js";
 import { MarkDonePreview, type MarkDonePreviewData } from "./MarkDonePreview.js";
+import { ApprovePreview, type ApprovePreviewData } from "./ApprovePreview.js";
+import type { ApproveResult } from "../review/approve.js";
 import { BOARD_LANES, ISSUE_LANES } from "../model.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
@@ -172,6 +174,33 @@ export interface MarkDone {
 }
 
 /**
+ * The Approve seam the App drives at the Issue level — the board's first
+ * human-triggered *merge* (PRD: Approve from Board, ADR 0021), the
+ * `human-review`-gated, merge-bearing sibling of {@link MarkDone}. Where Mark done
+ * is a cheap status flip, Approve runs the **same in-process merge the Reactor's
+ * clean-AI path does** (`mergeWorktree` + `cleanUpWorktree`), just human-triggered.
+ *
+ * - `readApprove` resolves the selected Issue into an {@link ApprovePreviewData}: the
+ *   plan strings the confirm states (branch, the `featureBranchName`-derived feature
+ *   branch, worktree path) plus the frozen merge handoff. `undefined` if the Issue
+ *   vanished or lacks the recorded handoff (a re-scan raced the keypress) — `A`
+ *   opens nothing.
+ * - `approve` runs the merge over the previewed handoff and returns an
+ *   {@link ApproveResult}: `merged` (the App re-scans so the card moves to `done`,
+ *   unblocking `blocked_by` siblings), or `dirty` / `conflict` (the App surfaces a
+ *   loud status-line message and the Issue stays exactly where it was — no
+ *   `suppressed` marker, ADR 0011). It writes a terminal status but **never spawns**
+ *   (the two-spawn-edges invariant holds).
+ */
+export interface Approve {
+  readonly readApprove: (
+    prdId: string,
+    issueId: string,
+  ) => ApprovePreviewData | undefined;
+  readonly approve: (preview: ApprovePreviewData) => ApproveResult;
+}
+
+/**
  * The detail seam the `v` keybind drives — the read-only body view (the first
  * presentation-only feature, ADR 0014), the passive sibling of the action seams
  * above. `readDetail` resolves the selected card's frontmatter-stripped body off
@@ -200,6 +229,7 @@ type ActiveModal =
   | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData }
   | { readonly kind: "delete"; readonly preview: DeletePreviewData }
   | { readonly kind: "mark-done"; readonly preview: MarkDonePreviewData }
+  | { readonly kind: "approve"; readonly preview: ApprovePreviewData }
   | { readonly kind: "detail"; readonly detail: CardDetail };
 
 /**
@@ -242,6 +272,8 @@ interface AppProps {
   deleter?: Delete;
   /** Wired in production; absent in tests that don't exercise Mark done. */
   markDone?: MarkDone;
+  /** Wired in production; absent in tests that don't exercise Approve. */
+  approve?: Approve;
   /** Wired in production; absent in tests that don't exercise the detail modal. */
   detailReader?: DetailReader;
   /** Wired in production; absent in tests that don't exercise auto-run. */
@@ -284,7 +316,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, detailReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -491,6 +523,30 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         const preview = markDone.readMarkDone(selectedPrd.id, selectedIssue.id);
         if (preview) {
           setModal({ kind: "mark-done", preview });
+          dispatch({ type: "open-review" });
+        }
+      }
+    },
+    approve: () => {
+      // Approve, Issue-level only (the registry gates the level). Gated further on
+      // the selected Issue being an approvable `human-review` card — the `approvable`
+      // overlay the scanner sets on a human-review card with a recorded worktree +
+      // branch — so `A` is a no-op on every other card, mirroring how the
+      // review/kill/mark-done handlers gate on the card's own state. Reason-agnostic:
+      // it never reads `humanReviewReason`. `readApprove` resolves the plan + the
+      // frozen merge handoff once and freezes it on the modal; a vanished Issue, or
+      // one missing the handoff (a re-scan raced the keypress), yields no preview, so
+      // nothing opens. The board's first human-triggered *merge* (PRD: Approve from
+      // Board, ADR 0021).
+      if (
+        approve &&
+        selectedPrd &&
+        selectedIssue?.lane === "human-review" &&
+        selectedIssue.approvable === true
+      ) {
+        const preview = approve.readApprove(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "approve", preview });
           dispatch({ type: "open-review" });
         }
       }
@@ -782,6 +838,32 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       // debounced scan lands.
       markDone?.markDone(modal.preview);
       setNotice(`Marked ${modal.preview.issueTitle} done.`);
+    } else if (modal?.kind === "approve") {
+      // Run the same in-process merge the Reactor's clean-AI path does, over the
+      // frozen handoff (PRD: Approve from Board, ADR 0021). It writes a terminal
+      // status but never spawns. Fork on the typed outcome:
+      // - `merged` → the Issue is now `done` and its worktree torn down. Writing to
+      //   the watched root fires an FS event, but re-scan on demand too so the card
+      //   moves to `done` at once (and unblocks any `blocked_by` siblings) rather
+      //   than waiting on the debounced watcher — reusing the same `refresh` seam.
+      // - `dirty` / `conflict` → nothing changed; the Issue stays exactly where it
+      //   was in `human-review`. Surface a loud status-line message telling the human
+      //   what to do, and do NOT re-scan (there is no move to reflect, and no
+      //   suppressed marker — work happened, they're not finished, ADR 0011).
+      const result = approve?.approve(modal.preview);
+      const { issueTitle } = modal.preview;
+      if (result?.kind === "merged") {
+        setNotice(`Merged & marked ${issueTitle} done — its worktree is cleaned up.`);
+        refresh?.();
+      } else if (result?.kind === "dirty") {
+        setNotice(
+          `${issueTitle} has uncommitted changes — commit your fix in the worktree first, then approve again.`,
+        );
+      } else if (result?.kind === "conflict") {
+        setNotice(
+          `Merging ${issueTitle} hit a conflict — resolve it in the worktree first, then approve again.`,
+        );
+      }
     }
   }
 
@@ -809,6 +891,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   }
   if (modal?.kind === "mark-done") {
     return <MarkDonePreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "approve") {
+    return <ApprovePreview preview={modal.preview} />;
   }
   if (modal?.kind === "detail") {
     // The read-only body view — a full-screen takeover like the action previews

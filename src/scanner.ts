@@ -1,6 +1,6 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIELD, readString, readPresentString, safeMatter } from "./issueFile.js";
+import { FIELD, readString, readPresentString, hasValue, safeMatter } from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
   placeStatus,
@@ -283,9 +283,20 @@ function scanIssue(
     humanReviewReason === undefined
       ? withSuppressed
       : { ...withSuppressed, humanReviewReason };
-  return humanReviewNote === undefined
-    ? withReason
-    : { ...withReason, humanReviewNote };
+  const withNote =
+    humanReviewNote === undefined
+      ? withReason
+      : { ...withReason, humanReviewNote };
+  // The Approve eligibility overlay (PRD: Approve from Board, ADR 0021): a
+  // human-review card is approvable iff it carries the merge handoff `A` needs — a
+  // recorded worktree AND branch (a blank value is no handoff, per `hasValue`).
+  // Reason-agnostic: parsed independently of humanReviewReason, so a hand-fixed
+  // conflict/non-convergence Issue stays approvable. Set only on this branch, so it
+  // can only ride a human-review card.
+  const approvable =
+    hasValue(readPresentString(data, FIELD.worktree)) &&
+    hasValue(readPresentString(data, FIELD.branch));
+  return approvable ? { ...withNote, approvable: true } : withNote;
 }
 
 /**

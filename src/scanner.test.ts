@@ -254,6 +254,69 @@ describe("scanBoard Issues", () => {
   });
 });
 
+describe("scanBoard approvable overlay (A on a human-review Issue)", () => {
+  // The Approve eligibility overlay (PRD: Approve from Board, ADR 0021): `true` on a
+  // `human-review` card carrying a recorded worktree + branch — the merge handoff
+  // `A` needs. Reason-agnostic (never reads human_review_reason), lane-gated to
+  // human-review. A self-contained temp root, like the liveness/suppressed sections.
+  function scanIssue(frontmatter: string): Issue {
+    const root = mkdtempSync(join(tmpdir(), "overseer-approvable-"));
+    const prdDir = join(root, "feature");
+    mkdirSync(prdDir);
+    writeFileSync(join(prdDir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    writeFileSync(join(prdDir, "001-x.md"), `---\n${frontmatter}\n---\nbody\n`);
+    const issues = prdById(scanBoard(root).prds, "feature").issues;
+    return issueById(issues, "001-x.md");
+  }
+
+  it("marks a human-review Issue with a recorded worktree + branch approvable", () => {
+    const issue = scanIssue(
+      "status: human-review\nworktree: /wt/blue-cat\nbranch: blue-cat",
+    );
+    expect(issue.lane).toBe("human-review");
+    expect(issue.approvable).toBe(true);
+  });
+
+  it("is reason-agnostic: approvable regardless of human_review_reason", () => {
+    // A hand-fixed conflict Issue keeps its original reason (an audit trail), so
+    // gating on the reason would strand it — Approve keys only off the handoff.
+    const issue = scanIssue(
+      "status: human-review\nhuman_review_reason: conflict\nworktree: /wt/blue-cat\nbranch: blue-cat",
+    );
+    expect(issue.humanReviewReason).toBe("conflict");
+    expect(issue.approvable).toBe(true);
+  });
+
+  it("does not mark a human-review Issue approvable when the worktree is missing", () => {
+    const issue = scanIssue("status: human-review\nbranch: blue-cat");
+    expect(issue.lane).toBe("human-review");
+    expect(issue.approvable).toBeUndefined();
+  });
+
+  it("does not mark a human-review Issue approvable when the branch is missing", () => {
+    const issue = scanIssue("status: human-review\nworktree: /wt/blue-cat");
+    expect(issue.lane).toBe("human-review");
+    expect(issue.approvable).toBeUndefined();
+  });
+
+  it("treats a blank worktree/branch as no handoff (not approvable)", () => {
+    const issue = scanIssue(
+      'status: human-review\nworktree: ""\nbranch: ""',
+    );
+    expect(issue.lane).toBe("human-review");
+    expect(issue.approvable).toBeUndefined();
+  });
+
+  it("never marks an Issue outside human-review approvable, even with a recorded handoff", () => {
+    // An in-review Issue carries worktree+branch too, but `A` is human-review-only.
+    const issue = scanIssue(
+      "status: in-review\nworktree: /wt/blue-cat\nbranch: blue-cat",
+    );
+    expect(issue.lane).toBe("in-review");
+    expect(issue.approvable).toBeUndefined();
+  });
+});
+
 describe("scanBoard liveness overlay", () => {
   /**
    * A throwaway root with one Issue in each of the four interesting lanes: the

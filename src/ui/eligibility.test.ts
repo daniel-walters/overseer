@@ -238,6 +238,56 @@ describe("eligibility — computeBindContext", () => {
         }).issueLive,
       ).toBe(false);
     });
+
+    it("issueApprovable iff the selected Issue is a human-review card with a recorded merge handoff", () => {
+      // `A` is eligible only on a `human-review` Issue carrying a recorded worktree
+      // + branch (the model's derived `approvable` overlay), regardless of the
+      // escalation reason — reason-agnostic, so a hand-fixed conflict/non-convergence
+      // Issue is still approvable (PRD user story 3).
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "human-review", approvable: true }),
+          frontier: [],
+        }).issueApprovable,
+      ).toBe(true);
+      // A human-review card missing the handoff is inert (no worktree/branch to merge).
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "human-review", approvable: false }),
+          frontier: [],
+        }).issueApprovable,
+      ).toBe(false);
+      // Reason-agnostic: it never reads humanReviewReason, only the approvable overlay.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({
+            lane: "human-review",
+            humanReviewReason: "conflict",
+            approvable: true,
+          }),
+          frontier: [],
+        }).issueApprovable,
+      ).toBe(true);
+      // Every other lane is false, even with an (impossible) stray approvable flag.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "in-progress" }),
+          frontier: [],
+        }).issueApprovable,
+      ).toBe(false);
+      // Nothing selected ⇒ false.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: undefined,
+          frontier: [],
+        }).issueApprovable,
+      ).toBe(false);
+    });
   });
 
   describe("v — any card selected", () => {
