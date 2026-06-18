@@ -14,12 +14,12 @@ const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
-// The SGR code Ink emits for a cyan foreground — the selected card's border,
-// which is the sole selection cue (no ▶ pointer; see Card.test.tsx). Counting
-// its runs counts selected cards (Ink emits it once per bordered line).
-const CYAN = ESC + "[36m";
-const cyanRuns = (raw: string): number =>
-  (raw.match(new RegExp(ESC + "\\[36m", "g")) ?? []).length;
+// The SGR code Ink emits for a magenta foreground — the selected card's border
+// (issue #75; a bold inverse title bar is the second cue, see Card.test.tsx).
+// Counting its runs counts selected cards (Ink emits it once per bordered line).
+const MAGENTA = ESC + "[35m";
+const magentaRuns = (raw: string): number =>
+  (raw.match(new RegExp(ESC + "\\[35m", "g")) ?? []).length;
 
 const HEADINGS = ["Backlog", "In Progress", "Done"];
 
@@ -95,8 +95,8 @@ describe("BoardView", () => {
       render(<BoardView board={board} selected={{ laneIndex: 1, rowIndex: 1 }} />)
         .lastFrame() ?? "";
 
-    // The cyan-border selection cue marks the second in-progress card and no
-    // other: the rendered cyan runs equal exactly one selected card's worth (a
+    // The magenta-border selection cue marks the second in-progress card and no
+    // other: the rendered magenta runs equal exactly one selected card's worth (a
     // board with a single card selected).
     const oneSelected =
       render(
@@ -106,7 +106,7 @@ describe("BoardView", () => {
         />,
       ).lastFrame() ?? "";
     expect(stripAnsi(frame)).toContain("SecondInProgress");
-    expect(cyanRuns(frame)).toBe(cyanRuns(oneSelected));
+    expect(magentaRuns(frame)).toBe(magentaRuns(oneSelected));
   });
 
   it("renders a done PRD's Linked PR marker on its board card", () => {
@@ -165,9 +165,9 @@ describe("BoardView", () => {
         />,
       ).lastFrame() ?? "";
     // The selected card (Backlog-18) scrolled into the window carrying the
-    // cyan-border cue, and the top of the lane scrolled away.
+    // magenta-border cue, and the top of the lane scrolled away.
     expect(stripAnsi(frame)).toContain("Backlog-18");
-    expect(frame).toContain(CYAN);
+    expect(frame).toContain(MAGENTA);
     expect(stripAnsi(frame)).not.toContain("Backlog-0");
   });
 

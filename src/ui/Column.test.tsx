@@ -11,13 +11,13 @@ const frameOf = (el: React.ReactElement): string =>
   stripAnsi(render(el).lastFrame() ?? "");
 
 // The raw (ANSI-bearing) frame, for asserting the selection cue — a card's
-// border flipping to cyan is the sole selection treatment (no ▶ pointer; see
-// Card.test.tsx), and that lives in an SGR code `frameOf` strips away.
+// border flipping to magenta plus a bold inverse title bar (issue #75; no ▶
+// pointer, see Card.test.tsx), which live in SGR codes `frameOf` strips away.
 const rawFrameOf = (el: React.ReactElement): string =>
   render(el).lastFrame() ?? "";
 
-// The SGR code Ink emits for a cyan foreground (the selected card's border).
-const CYAN = ESC + "[36m";
+// The SGR code Ink emits for a magenta foreground (the selected card's border).
+const MAGENTA = ESC + "[35m";
 
 /** A run of distinctly-titled cards (`Card-0`, `Card-1`, …) to window over. */
 function cards(n: number): CardItem[] {
@@ -30,7 +30,7 @@ function cards(n: number): CardItem[] {
 describe("Column visible window (vertical scroll)", () => {
   it("renders every card when the lane fits the available height", () => {
     const frame = frameOf(
-      <Column heading="Backlog" cards={cards(4)} availableHeight={10} />,
+      <Column heading="Backlog" width={20} cards={cards(4)} availableHeight={10} />,
     );
 
     for (let i = 0; i < 4; i++) {
@@ -41,7 +41,7 @@ describe("Column visible window (vertical scroll)", () => {
   it("renders all cards when no available height is given (unbounded)", () => {
     // Absent height means no windowing — the prior behaviour, used by tests and
     // any caller that hasn't wired the environmental read.
-    const frame = frameOf(<Column heading="Backlog" cards={cards(30)} />);
+    const frame = frameOf(<Column heading="Backlog" width={20} cards={cards(30)} />);
 
     expect(frame).toContain("Card-0");
     expect(frame).toContain("Card-29");
@@ -52,6 +52,7 @@ describe("Column visible window (vertical scroll)", () => {
     const frame = frameOf(
       <Column
         heading="Backlog"
+        width={20}
         cards={cards(20)}
         availableHeight={5}
         selectedRow={0}
@@ -70,6 +71,7 @@ describe("Column visible window (vertical scroll)", () => {
     const raw = rawFrameOf(
       <Column
         heading="Backlog"
+        width={20}
         cards={cards(20)}
         availableHeight={5}
         selectedRow={17}
@@ -79,8 +81,8 @@ describe("Column visible window (vertical scroll)", () => {
 
     // The selected card and its neighbours are visible…
     expect(stripAnsi(raw)).toContain("Card-17");
-    // …the selection highlight (the cyan border, the sole cue) is present…
-    expect(raw).toContain(CYAN);
+    // …the selection highlight (the magenta border cue) is present…
+    expect(raw).toContain(MAGENTA);
     // …and the top of the lane has scrolled away.
     expect(stripAnsi(raw)).not.toContain("Card-0");
   });
@@ -89,6 +91,7 @@ describe("Column visible window (vertical scroll)", () => {
     const raw = rawFrameOf(
       <Column
         heading="Backlog"
+        width={20}
         cards={cards(20)}
         availableHeight={5}
         selectedRow={10}
@@ -96,24 +99,25 @@ describe("Column visible window (vertical scroll)", () => {
       />,
     );
 
-    // The selected card (Card-10) is inside the window, and the cyan border —
-    // the sole selection cue — marks exactly one card. Ink emits the cyan SGR
+    // The selected card (Card-10) is inside the window, and the magenta border —
+    // the selection cue — marks exactly one card. Ink emits the magenta SGR
     // once per bordered line of a selected card's box, so a single selected
-    // card's worth of cyan runs is the "and no other" invariant.
+    // card's worth of magenta runs is the "and no other" invariant.
     expect(stripAnsi(raw)).toContain("Card-10");
-    const cyanRuns = (raw.match(new RegExp(ESC + "\\[36m", "g")) ?? []).length;
-    const oneCardCyanRuns = (
+    const magentaRuns = (raw.match(new RegExp(ESC + "\\[35m", "g")) ?? []).length;
+    const oneCardMagentaRuns = (
       rawFrameOf(
-        <Column heading="Backlog" cards={cards(1)} selectedRow={0} selectedId="c0" />,
-      ).match(new RegExp(ESC + "\\[36m", "g")) ?? []
+        <Column heading="Backlog" width={20} cards={cards(1)} selectedRow={0} selectedId="c0" />,
+      ).match(new RegExp(ESC + "\\[35m", "g")) ?? []
     ).length;
-    expect(cyanRuns).toBe(oneCardCyanRuns);
+    expect(magentaRuns).toBe(oneCardMagentaRuns);
   });
 
   it("shows the bottom of the lane when the last row is selected", () => {
     const raw = rawFrameOf(
       <Column
         heading="Backlog"
+        width={20}
         cards={cards(20)}
         availableHeight={5}
         selectedRow={19}
@@ -121,10 +125,10 @@ describe("Column visible window (vertical scroll)", () => {
       />,
     );
 
-    // The last card is in view, carries the cyan-border selection cue, and the
+    // The last card is in view, carries the magenta-border selection cue, and the
     // top of the lane has scrolled away.
     expect(stripAnsi(raw)).toContain("Card-19");
-    expect(raw).toContain(CYAN);
+    expect(raw).toContain(MAGENTA);
     expect(stripAnsi(raw)).not.toContain("Card-0");
   });
 
@@ -132,7 +136,7 @@ describe("Column visible window (vertical scroll)", () => {
     // A lane the selection isn't in (no selectedRow) still windows — it just
     // shows its top, so the board never renders every card of every tall column.
     const frame = frameOf(
-      <Column heading="Backlog" cards={cards(20)} availableHeight={5} />,
+      <Column heading="Backlog" width={20} cards={cards(20)} availableHeight={5} />,
     );
 
     expect(frame).toContain("Card-0");

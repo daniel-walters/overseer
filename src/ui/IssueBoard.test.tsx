@@ -7,15 +7,15 @@ const ESC = String.fromCharCode(27);
 const ANSI = new RegExp(ESC + "\\[[0-9;]*m", "g");
 const stripAnsi = (s: string): string => s.replace(ANSI, "");
 
-// The cyan border (the sole selection cue, no ▶ pointer; see Card.test.tsx) wraps
+// The magenta border (the selection cue, no ▶ pointer; see Card.test.tsx) wraps
 // the selected card's box across three consecutive lines — top edge, title, and
-// bottom edge — each carrying the cyan SGR. Joining those lines (ANSI stripped)
+// bottom edge — each carrying the magenta SGR. Joining those lines (ANSI stripped)
 // yields the selected card's title, so a test can assert *which* card is selected.
-const CYAN = ESC + "[36m";
-const cyanSelectedTitle = (frame: string): string =>
+const MAGENTA = ESC + "[35m";
+const magentaSelectedTitle = (frame: string): string =>
   frame
     .split("\n")
-    .filter((line) => line.includes(CYAN))
+    .filter((line) => line.includes(MAGENTA))
     .map(stripAnsi)
     .join("\n");
 
@@ -134,10 +134,10 @@ describe("IssueBoard", () => {
     expect(columnOf(frame, "suppressed")).toBe("Ready");
   });
 
-  it("marks the Issue at the selected (lane, row) coordinate by cyan border alone, with no pointer arrow", () => {
+  it("marks the Issue at the selected (lane, row) coordinate by magenta border, with no pointer arrow", () => {
     // OAuth is the first card in the Ready lane (laneIndex 1 of ISSUE_LANES).
-    // Selection is the cyan border alone — no prepended ▶ pointer eating the
-    // title line (the cyan-border-only treatment; see Card.test.tsx). The badge
+    // Selection is the magenta border (plus a bold inverse title bar) — no
+    // prepended ▶ pointer eating the title line (see Card.test.tsx). The badge
     // and title still read, just without the arrow tax in front of them.
     const frame =
       render(<IssueBoard prd={prd} selected={{ laneIndex: 1, rowIndex: 0 }} />)
@@ -148,21 +148,21 @@ describe("IssueBoard", () => {
     expect(flat).toMatch(/🤖 OAuth/);
     // …and the ▶ pointer appears nowhere in the frame.
     expect(flat).not.toContain("▶");
-    // The cyan border is the sole selection cue — present in the rendered frame.
-    expect(frame).toContain(ESC + "[36m");
+    // The magenta border is the selection cue — present in the rendered frame.
+    expect(frame).toContain(ESC + "[35m");
   });
 
   it("selects the second card down within a lane (row index, not flat order)", () => {
     // Review is the second card in the Ready lane (row 1), after OAuth (row 0).
-    // Selecting row 1 must mark Review's card, not OAuth's — proven by the cyan
-    // border (the sole selection cue) landing on Review's box and not OAuth's.
+    // Selecting row 1 must mark Review's card, not OAuth's — proven by the magenta
+    // border (the selection cue) landing on Review's box and not OAuth's.
     const frame =
       render(<IssueBoard prd={prd} selected={{ laneIndex: 1, rowIndex: 1 }} />)
         .lastFrame() ?? "";
 
-    // The cyan-bordered (selected) card's title is Review's, not OAuth's.
-    expect(cyanSelectedTitle(frame)).toMatch(/🧑 Review/);
-    expect(cyanSelectedTitle(frame)).not.toMatch(/OAuth/);
+    // The magenta-bordered (selected) card's title is Review's, not OAuth's.
+    expect(magentaSelectedTitle(frame)).toMatch(/🧑 Review/);
+    expect(magentaSelectedTitle(frame)).not.toMatch(/OAuth/);
   });
 
   it("scrolls a tall lane to keep the selected Issue in view", () => {
@@ -188,9 +188,9 @@ describe("IssueBoard", () => {
           laneHeight={5}
         />,
       ).lastFrame() ?? "";
-    // The deep selected Issue (Task-18) scrolled into view carrying the cyan
+    // The deep selected Issue (Task-18) scrolled into view carrying the magenta
     // border, and the top of the lane (Task-0) windowed out.
-    expect(cyanSelectedTitle(frame)).toMatch(/Task-18/);
+    expect(magentaSelectedTitle(frame)).toMatch(/Task-18/);
     expect(stripAnsi(frame)).not.toContain("Task-0");
   });
 });

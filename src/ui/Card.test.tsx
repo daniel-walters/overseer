@@ -13,18 +13,23 @@ const frameOf = (el: React.ReactElement): string =>
 const rawFrameOf = (el: React.ReactElement): string =>
   render(el).lastFrame() ?? "";
 
-// The SGR code Ink emits for a cyan foreground (the selected card's border).
-const CYAN = ESC + "[36m";
+// The SGR codes Ink emits for the selection cues: a magenta foreground (the
+// selected card's border) and the inverse attribute (its title bar).
+const MAGENTA = ESC + "[35m";
+const INVERSE = ESC + "[7m";
 
 describe("Card selection treatment", () => {
-  it("indicates a selected card with its cyan border alone", () => {
-    // The border flips to cyan on select; that is the sole selection cue. An
-    // unselected card carries no cyan.
+  it("indicates a selected card with a magenta border and an inverse title bar", () => {
+    // Two cues on select (issue #75): the border flips to magenta — not cyan,
+    // which marks an open Linked PR — and the title renders as an inverse bar so
+    // it pops on a busy board. An unselected card carries neither.
     const selected = rawFrameOf(<Card title="Focused" selected />);
     const unselected = rawFrameOf(<Card title="Focused" />);
 
-    expect(selected).toContain(CYAN);
-    expect(unselected).not.toContain(CYAN);
+    expect(selected).toContain(MAGENTA);
+    expect(selected).toContain(INVERSE);
+    expect(unselected).not.toContain(MAGENTA);
+    expect(unselected).not.toContain(INVERSE);
   });
 
   it("does not prepend the ▶ arrow to a selected card's title", () => {
@@ -47,8 +52,9 @@ describe("Card selection treatment", () => {
   });
 
   it("leaves a coloured marker line legible on a selected card", () => {
-    // No `inverse` muddying: the live marker renders the same on a selected card
-    // as on an unselected one, so selection and status never fight visually.
+    // The inverse bar is scoped to the title alone: the live marker renders the
+    // same on a selected card as on an unselected one, so selection and status
+    // never fight visually.
     const selected = frameOf(<Card title="Working" selected liveness="live" />);
 
     expect(selected).toContain("● live");

@@ -155,8 +155,8 @@ const REVIEW_PASS_GLYPH = "◷";
 /**
  * The neutral colour of the review-pass marker — outside the yellow warning family
  * and the red suppressed family. `cyan` is the board's other neutral "there's
- * something here, not an alarm" colour (a `done` PRD's open-PR marker, the
- * selection border), so it reads as the healthy in-progress signal the PRD asks
+ * something here, not an alarm" colour (a `done` PRD's open-PR marker), so it
+ * reads as the healthy in-progress signal the PRD asks
  * for, never an escalation cue. (Tests assert the family by glyph, since the test
  * renderer strips ANSI; the colour is the on-screen reinforcement.)
  */
@@ -180,11 +180,22 @@ export function Card({
     <Box
       flexDirection="column"
       borderStyle="round"
-      borderColor={selected ? "cyan" : undefined}
+      // Selection is magenta, not cyan: cyan already marks an open Linked PR
+      // (LINKED_PR_MARKER.open) and the neutral review-pass count, so on a done
+      // PRD with an open PR the old cyan border and the marker shared a colour and
+      // muddied the cue. Magenta is otherwise unused on the board, so the selected
+      // card's outline never collides with a status colour (issue #75).
+      borderColor={selected ? "magenta" : undefined}
       paddingX={1}
       width="100%"
     >
-      <Text wrap="truncate-end">
+      <Text wrap="truncate-end" bold={selected} inverse={selected}>
+        {/* A bold inverse bar is the second selection cue (issue #75): the border
+            colour alone was easy to miss on a busy board. It rides the existing
+            title line — inverse and bold are pure styling, so they add no
+            character and never re-eat the title width the `▶ ` arrow once cost
+            (commit 8cea476). Scoped to the title only, so the coloured marker
+            lines below stay legible and selection never fights status. */}
         {readyFor ? `${BADGE[readyFor]} ` : ""}
         {title}
       </Text>
