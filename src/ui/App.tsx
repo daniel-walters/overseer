@@ -20,6 +20,7 @@ import { OpenPrPreview, type OpenPrPreviewData } from "./OpenPrPreview.js";
 import type { OpenPrResult } from "../dispatch/openPr.js";
 import { DeletePreview, type DeletePreviewData } from "./DeletePreview.js";
 import type { DeleteResult } from "../dispatch/deletePrd.js";
+import { MarkDonePreview, type MarkDonePreviewData } from "./MarkDonePreview.js";
 import { BOARD_LANES, ISSUE_LANES } from "../model.js";
 import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
@@ -148,6 +149,29 @@ export interface Delete {
 }
 
 /**
+ * The Mark done seam the App drives at the Issue level — the board's first
+ * human-triggered status flip with no spawn behind it (CONTEXT.md → mark done),
+ * the `ready-for-human`-gated sibling of {@link Reviewer}. The thinnest of the
+ * Issue-level seams: there is no external state (git/gh) to resolve, so the
+ * preview is purely the confirm copy.
+ *
+ * - `readMarkDone` resolves the selected Issue into a {@link MarkDonePreviewData}:
+ *   its title and file path. `undefined` if the Issue vanished from the watched
+ *   root (a re-scan raced the keypress).
+ * - `markDone` writes `status: done` to the previewed Issue's path (reusing the
+ *   existing `writeStatus` primitive). The watcher's re-scan then moves the card
+ *   to the `done` column. No spawn, no rollback, no result to surface — a status
+ *   flip a human can trivially undo by re-editing the field.
+ */
+export interface MarkDone {
+  readonly readMarkDone: (
+    prdId: string,
+    issueId: string,
+  ) => MarkDonePreviewData | undefined;
+  readonly markDone: (preview: MarkDonePreviewData) => void;
+}
+
+/**
  * The detail seam the `v` keybind drives — the read-only body view (the first
  * presentation-only feature, ADR 0014), the passive sibling of the action seams
  * above. `readDetail` resolves the selected card's frontmatter-stripped body off
@@ -175,6 +199,7 @@ type ActiveModal =
   | { readonly kind: "kill"; readonly preview: KillPreviewData }
   | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData }
   | { readonly kind: "delete"; readonly preview: DeletePreviewData }
+  | { readonly kind: "mark-done"; readonly preview: MarkDonePreviewData }
   | { readonly kind: "detail"; readonly detail: CardDetail };
 
 /**
@@ -215,6 +240,8 @@ interface AppProps {
   openPr?: OpenPr;
   /** Wired in production; absent in tests that don't exercise Delete PRD. */
   deleter?: Delete;
+  /** Wired in production; absent in tests that don't exercise Mark done. */
+  markDone?: MarkDone;
   /** Wired in production; absent in tests that don't exercise the detail modal. */
   detailReader?: DetailReader;
   /** Wired in production; absent in tests that don't exercise auto-run. */
@@ -257,7 +284,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, detailReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, detailReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -443,6 +470,28 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
           // keypress would do nothing at all — indistinguishable from K being
           // broken — so say plainly there's nothing to stop.
           setNotice(`${selectedIssue.id} has no recorded agent to stop — re-check the board.`);
+        }
+      }
+    },
+    markDone: () => {
+      // Mark done, Issue-level only (the registry gates the level). Gated further
+      // on the selected Issue being a `ready-for-human` card — the sole state a
+      // human's own non-reviewable work is advanced from — so `m` is a no-op on
+      // every other lane, mirroring how the review/kill handlers gate on the card's
+      // own state. `readMarkDone` resolves the title + path once and freezes it on
+      // the modal; a vanished Issue (raced a deletion) yields no preview, so nothing
+      // opens. The board's first human-triggered status flip with no spawn behind it
+      // (CONTEXT.md → mark done).
+      if (
+        markDone &&
+        selectedPrd &&
+        selectedIssue?.lane === "ready" &&
+        selectedIssue.readyFor === "human"
+      ) {
+        const preview = markDone.readMarkDone(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "mark-done", preview });
+          dispatch({ type: "open-review" });
         }
       }
     },
@@ -715,6 +764,17 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       } else if (result) {
         setNotice(`Couldn't delete ${modal.preview.prdTitle}: ${result.error}`);
       }
+    } else if (modal?.kind === "mark-done") {
+      // Write `status: done` to the selected `ready-for-human` Issue (reusing the
+      // existing `writeStatus` primitive via the seam). The board's first
+      // human-triggered status flip with no spawn behind it (CONTEXT.md → mark
+      // done) — a cheap, trivially-reversible write, so unlike delete there is no
+      // result to surface and nothing to recover. Writing to the watched root *does*
+      // fire an FS event, so the watcher's re-scan moves the card to `done`; a
+      // confirmation notice tells the human the write happened even before the
+      // debounced scan lands.
+      markDone?.markDone(modal.preview);
+      setNotice(`Marked ${modal.preview.issueTitle} done.`);
     }
   }
 
@@ -739,6 +799,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   }
   if (modal?.kind === "delete") {
     return <DeletePreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "mark-done") {
+    return <MarkDonePreview preview={modal.preview} />;
   }
   if (modal?.kind === "detail") {
     // The read-only body view — a full-screen takeover like the action previews
