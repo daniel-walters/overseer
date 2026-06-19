@@ -36,4 +36,22 @@ describe("bundled skills", () => {
       rmSync(target, { recursive: true, force: true });
     }
   });
+
+  it("ships the overseer-to-prd commit-docs.sh script under scripts/", () => {
+    const target = mkdtempSync(join(tmpdir(), "overseer-bundled-"));
+    try {
+      installSkills({ source: shippedSkills, target });
+
+      // `installSkills` copies each skill directory recursively, so the bundled
+      // `scripts/` subdir rides along — this proves `overseer init` delivers the
+      // commit-docs script to every user with no extra install step.
+      expect(
+        existsSync(
+          join(target, "overseer-to-prd", "scripts", "commit-docs.sh"),
+        ),
+      ).toBe(true);
+    } finally {
+      rmSync(target, { recursive: true, force: true });
+    }
+  });
 });
