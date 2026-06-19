@@ -181,34 +181,6 @@ outward writes `d`/Open PR make, so probably a bare keypress is fine); (4) gatin
 Issue-level and only lights up on a `ready-for-human` (and possibly `human-review`) card. Pairs
 with the central keybind registry (now `done`) — register the new binds there.
 
-### Jump straight to an Issue needing human review
-
-`human-review` is the *one* column in the whole pipeline that requires a human
-(CONTEXT.md → Issue status) — yet the board gives it no special way to *find* it. Today
-navigation is entirely manual and local: move within a column (`hjkl`), zoom into one
-PRD, back out. To reach a `human-review` Issue you must already know which PRD holds it,
-navigate to that PRD's card, zoom in, and move to the Issue. Across many PRDs an
-escalated Issue is a needle you hunt for — and it's the highest-priority thing on the
-board, because the whole automated pipeline is *blocked on you* for it.
-
-The idea: a **one-keypress jump** to the next Issue awaiting human review — select it
-(zooming into its PRD as needed) wherever it lives, so the human attention the board
-exists to direct lands instantly. Pressing it again cycles to the next one (round-robin
-through all `human-review` Issues across all PRDs).
-
-Design questions: ordering when several await (oldest first? by `human_review_reason`
-severity — conflict before deviation? board order?); what it does when there are none
-(no-op, or a "nothing needs you" status-line flash); whether it's purely a *jump* or
-also previews *why* (the `human_review_reason` is already on the card as a marker, so
-the jump may be enough). It pairs with the per-PRD-pause idea's "where's the work"
-question and is a natural member of whatever the "central keybind registry" becomes.
-
-A small generalisation worth noting: this is the first **cross-PRD jump** keybind —
-every nav action today is within the current level/column. The same machinery (find the
-next card matching a predicate, select it, zoom if needed) would also serve "jump to the
-next orphan" or "next suppressed" later, so it may be worth designing as a general
-"jump to next card matching X" rather than a one-off human-review jump.
-
 ### Delete a done PRD and its Issues with a keybind
 
 Once a PRD is `done` (and presumably its work merged / PR'd), its folder is clutter on
@@ -325,9 +297,9 @@ the rendering surface the remaining pane-shaped ideas can reuse:
 
 1. **"Per-agent logs from a card"** (above) — the selected agent's `claude logs` output
    (live stream rather than static text).
-2. **"A detail pane / expand-on-select"** (under "more real estate for Issue titles") —
-   full title overflow + body + deviation reason for the selected card, *in context*
-   beside the board rather than as a full-screen takeover.
+2. **A detail pane / expand-on-select** — full title overflow + body + deviation reason
+   for the selected card, *in context* beside the board rather than as a full-screen
+   takeover.
 
 Both are the same surface viewed differently (live log stream / in-context overflow
 detail) and can build on the modal's body-rendering + scrolling rather than reinventing
@@ -642,84 +614,8 @@ no way to page across to them. The follow-up is **horizontal paging / virtualiza
 across columns** so a wide board (the 7-column Issue level on a narrow terminal) stays
 fully reachable left-to-right. Until then, a narrow terminal can hide whole columns.
 
-### Brainstorm: more real estate for Issue titles
-
-Titles can still be cramped. Two of the original width pressures have since been
-relieved — column width is now **adaptive** (divided across the visible columns
-rather than a hardcoded 24, shipped), and selection no longer prepends a `▶ ` arrow
-that ate two title columns (selection is now the cyan border alone, shipped). What
-remains is the per-card chrome tax and single-line truncation. Candidate directions
-still on the table:
-
-- **Drop per-card chrome.** The rounded border + padding on *every* card is a heavy
-  per-card tax on width and vertical space. A lighter separator (a rule, or just
-  spacing) between cards could reclaim the 2 border + 2 padding columns for the
-  title. Selection could then be the *only* thing that draws a box (the cyan border
-  is already the sole selection cue, so this fits cleanly).
-- **Wrap instead of truncate.** Let a long title wrap to two lines (`wrap="wrap"` /
-  truncate at line 2) rather than hard-truncating at one. Costs vertical space —
-  trades against the overflow/clipping limit — but a title you can fully read may be
-  worth a taller card. Possibly only for the *selected* card (expand-on-select).
-- **A detail pane / expand-on-select.** Keep cards terse, but show the full title
-  (and body, deviation reason, etc.) for the selected Issue in a side or bottom
-  pane. The card list stays scannable; the focused Issue gets unlimited room. This
-  is the biggest change and is one of the **pane-shaped ideas** that share one
-  detail surface — see "The shared detail surface" note for the design-the-pane-once
-  framing. (The static body view itself has shipped as the detail modal; this is the
-  *per-card-in-context* variant.)
-
 ### Surface "stalled — auto-run off, work waiting" on the board-level PRD card
 
 Surfaced while designing **dynamic keybinds** ([ADR 0017](./adr/0017-keybind-eligibility-gates-matcher-and-hints-but-not-the-help-map.md)). Scenario: [auto-run](../CONTEXT.md#auto-run) is **off**, a PRD is **in-progress**, nothing is in flight, yet it has an unblocked `ready-for-agent` Issue waiting (a blocker just hit `done`). The pipeline is **stalled on you** — nothing will pick that work up until you press `d` (the manual re-dispatch crank). But the board cannot show this: a stalled-with-pending-work PRD looks **identical** to an in-progress-and-humming one. The activity signal says `⏸ auto-run off` / `□ at-rest` (the brake is on) but nothing says *there is dispatchable work nobody is coming for*, and the `ready-for-agent` card is only visible once you zoom in.
 
-Dynamic keybinds (ADR 0017) *partly* address discoverability — `d` lights up in the hints exactly when its frontier has a spawn candidate, and reads **"resume"** rather than "dispatch" on an in-progress PRD — so once you have the PRD selected, the affordance is legible. What remains is the **board-level, at-a-glance** signal: a PRD-card marker (the same Issue→PRD roll-up shape as the human-intervention idea below) that flags *"this PRD has unblocked agent work but nothing is running"* — so you can see *which* PRDs are stalled without selecting each one. Pairs tightly with "Surface needs human intervention on the board-level PRD card" (next) — both roll an Issue-level fact up to the PRD card to answer "where is the work blocked on me?" at the board level; this one's trigger is *unblocked-but-undispatched agent work under a released-or-braked Reactor*, that one's is *human-review*.
-
-### Surface "needs human intervention" on the board-level PRD card
-
-At the **board level** the cards are PRDs across three derived columns (backlog /
-in-progress / done) and they carry **no markers at all** — every marker family
-(liveness, suppressed, human-review reason, malformed-status) is an *Issue-level*
-overlay, visible only once you zoom into a PRD. So a PRD with an Issue parked in
-`human-review` — the one column in the whole pipeline that is *blocked on a human*
-(CONTEXT.md → Review outcome) — looks, from the board, exactly like a PRD that is
-humming along under the reactor. The single most important thing a PRD could tell
-you ("the automated pipeline has stalled here and is waiting on *you*") is the one
-thing the board-level card cannot currently show. You only discover it by zooming
-into each in-progress PRD and hunting.
-
-The idea: a **board-level PRD card marker** that lights up when *anything inside that
-PRD needs human intervention* — most concretely, ≥1 Issue in `human-review`, but
-worth deciding whether it also covers the other "stuck, needs a human" states
-(`ready-for-human` waiting to be picked up; an [Orphan](#); a `⚠ bad status` Issue).
-It rolls an Issue-level fact *up* to the PRD card so the board answers "which PRDs
-need me?" at a glance, without zooming.
-
-Open questions:
-
-- **What counts as "needs intervention"?** The tightest definition is *any Issue in
-  `human-review`* (the genuine human-attention queue). A looser one also rolls up
-  `ready-for-human` (HITL work not yet done), orphans (`R`-recoverable), and
-  malformed-status Issues (frontmatter to fix). Each is a real "a human must act"
-  state, but they want *different* actions — so a single undifferentiated marker may
-  under-inform. Does the PRD marker collapse them into one "⚠ needs you" glyph, or
-  carry a count / the dominant reason?
-- **It's a derived roll-up, not stored state.** Like every other marker it must be
-  computed from the Issues at scan time (ADR 0002 / ADR 0003) — the PRD has no field
-  of its own. The board already derives a PRD's *column* from its Issues; this is the
-  same shape (derive a PRD-level *marker* from its Issues), so it fits the existing
-  derivation pass and writes nothing.
-- **Where it sits.** The board-level PRD card is currently marker-free except the
-  `done`-only [Linked PR](#) overlay. This would be the **first Issue→PRD roll-up
-  marker** and the first marker an *in-progress* PRD card carries — worth confirming
-  it reads as its own line (the established marker idiom) and how it coexists with the
-  Linked PR marker (disjoint columns — Linked PR is `done`-only, human-review implies
-  not-done — so they likely never co-render, same as the Issue-level families).
-- **Counting.** If several Issues in one PRD need a human, does the marker show a
-  count ("⚠ 2 need you") or just presence? A count makes the board a triage surface;
-  presence is simpler.
-
-Pairs tightly with the "Jump straight to an Issue needing human review" idea above —
-that one *navigates* to the escalated Issue; this one *reveals at the board level
-which PRD holds it*. Together they answer "where is the work blocked on me?" both at a
-glance (this marker) and with a keypress (that jump). Designed together, the marker is
-the signal and the jump is the action it invites.
+Dynamic keybinds (ADR 0017) *partly* address discoverability — `d` lights up in the hints exactly when its frontier has a spawn candidate, and reads **"resume"** rather than "dispatch" on an in-progress PRD — so once you have the PRD selected, the affordance is legible. What remains is the **board-level, at-a-glance** signal: a PRD-card marker (an Issue→PRD roll-up) that flags *"this PRD has unblocked agent work but nothing is running"* — so you can see *which* PRDs are stalled without selecting each one.
