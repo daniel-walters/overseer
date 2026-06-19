@@ -44,7 +44,45 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
 
    Put the PRD template below in the body, beneath the frontmatter.
 
-5. Tell the user the PRD was written and its path.
+   Write `prd.md` **first** — before any git work below. The Overseer root is not a
+   git repo, so `prd.md` is committed nowhere; writing it first means a git failure in
+   step 5 can never cost the PRD you just wrote.
+
+5. **Commit the grill's docs onto the PRD feature branch.** The `/overseer-grill-with-docs`
+   step that usually precedes this one writes domain-doc edits (`CONTEXT.md` /
+   `CONTEXT-MAP.md` and `docs/adr/`) into each code repo's working tree but leaves them
+   **uncommitted** — and on whatever branch was checked out during the grill, usually
+   `main`. This is the step that lands them where they belong: on the PRD's feature
+   branch, so the agents later dispatched off it inherit the glossary and ADRs that
+   justify their work, instead of you cherry-picking stranded docs across branches by
+   hand. The docs ride a feature branch (not a direct `main` commit) because Overseer is
+   used by people whose flows cannot commit straight to `main` — the docs flow to `main`
+   through the same per-repo review the code does.
+
+   For **each of the session's working directories** — the launch directory plus any
+   repo added with `/add-dir` — run the bundled script, resolving it relative to this
+   skill's own directory:
+
+   ```bash
+   bash scripts/commit-docs.sh <repo> <branch-name>
+   ```
+
+   where `<branch-name>` is the **PRD slug** you chose in step 3 — the slug *is* the
+   feature branch name (it is already kebab-case, so the branch name equals it). The
+   script is self-guarding (a clean no-op in a repo with no pending doc edits, or one
+   that is not a git repo) and idempotent (an existing feature branch is reused, never
+   recreated), and it commits **only** the doc paths, leaving any unrelated work in the
+   repo untouched.
+
+   Do not modify the dispatch-time git setup — it remains the idempotent safety net and
+   now usually finds the branch this step already created.
+
+6. **Report each repo's outcome explicitly** — for every working dir, say whether the
+   script **committed** (and onto which branch), found **nothing to commit**, or
+   **failed** (with the reason it printed). A git failure must be loud here, not a silent
+   stranding you discover at dispatch.
+
+7. Tell the user the PRD was written and its path.
 
 Do not create any Issue files here — that's `/overseer-to-issues`.
 
