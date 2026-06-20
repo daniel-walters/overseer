@@ -1,11 +1,19 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { FIELD, readString, readPresentString, hasValue, safeMatter } from "./issueFile.js";
+import {
+  FIELD,
+  readString,
+  readPresentString,
+  hasValue,
+  safeMatter,
+  parseBlockedBy,
+} from "./issueFile.js";
 import {
   HUMAN_REVIEW_REASONS,
   placeStatus,
   derivePrdLane,
   derivePrdNeedsReview,
+  derivePrdStalled,
   type Board,
   type PRD,
   type Issue,
@@ -178,10 +186,20 @@ function scanPrd(
   // a PRD with nothing in human-review stays unmarked (no `needsReview: false`
   // noise), mirroring the other overlays. It is disjoint from the `done`-only
   // Linked PR marker (needs-review implies the PRD is not yet `done`).
+  // The stalled overlay is the board's second Issue→PRD roll-up: `true` when the
+  // PRD has unblocked `ready-for-agent` work waiting with nothing in flight
+  // (derivePrdStalled) — "dispatchable, but nobody's coming". Like needsReview it
+  // is derived from the Issues, never read from/written to `prd.md`, and only
+  // `true` stamps the field. It is mutually exclusive with needsReview (a stalled
+  // PRD has nothing in flight; a human-review Issue is in-flight-or-later), but
+  // composed independently so neither suppresses the other.
   const base: PRD = { id: dirName, title, lane, issues };
-  const prd: PRD = derivePrdNeedsReview(issues)
+  const withNeedsReview: PRD = derivePrdNeedsReview(issues)
     ? { ...base, needsReview: true }
     : base;
+  const prd: PRD = derivePrdStalled(issues)
+    ? { ...withNeedsReview, stalled: true }
+    : withNeedsReview;
   // The Linked PR overlay rides only on a `done` PRD, keyed by its absolute dir
   // path (ADR 0013). The `done` gate both scopes the marker to PRDs that can have
   // a feature-branch PR and bounds the per-scan `gh` query to finished work — a
@@ -230,10 +248,15 @@ function scanIssue(
   const { data } = safeMatter(readFileSync(path, "utf8"));
   const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
   const { lane, readyFor, malformedStatus } = placeOrBacklog(data[FIELD.status]);
+  // `blocked_by` rides every Issue (it's authored regardless of lane) so the
+  // PRD-level stalled roll-up can check a ready-for-agent Issue's blockers
+  // against its done siblings. Empty list ⇒ omit, keeping the model minimal.
+  const blockedBy = parseBlockedBy(data[FIELD.blockedBy]);
 
-  const issue: Issue = malformedStatus
+  const base: Issue = malformedStatus
     ? { id: fileName, title, lane, malformedStatus }
     : { id: fileName, title, lane };
+  const issue: Issue = blockedBy.length > 0 ? { ...base, blockedBy } : base;
   // A routing badge belongs only on a ready card; an escalation reason only on a
   // human-review card. Each rides its own lane so a stale value can't leak onto
   // a card that has moved on.

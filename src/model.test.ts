@@ -3,6 +3,7 @@ import {
   placeStatus,
   derivePrdLane,
   derivePrdNeedsReview,
+  derivePrdStalled,
   ISSUE_LANES,
   type Lane,
   type Issue,
@@ -12,6 +13,11 @@ import {
 /** Build a minimal Issue carrying just the lane the derivation reads. */
 function issue(lane: Lane): Issue {
   return { id: `${lane}.md`, title: lane, lane };
+}
+
+/** Build a `ready-for-agent` Issue, optionally waiting on the given blockers. */
+function readyForAgent(id: string, blockedBy: readonly string[] = []): Issue {
+  return { id, title: id, lane: "ready", readyFor: "agent", blockedBy };
 }
 
 /**
@@ -162,5 +168,42 @@ describe("derivePrdNeedsReview", () => {
     for (const reason of ["deviation", "non-convergence", "conflict"] as const) {
       expect(derivePrdNeedsReview([humanReviewIssue(reason)])).toBe(true);
     }
+  });
+});
+
+describe("derivePrdStalled", () => {
+  it("is true with an unblocked ready-for-agent Issue and nothing in flight", () => {
+    expect(derivePrdStalled([readyForAgent("001.md"), issue("done")])).toBe(true);
+  });
+
+  it("is false when an Issue is in flight, even with agent work waiting", () => {
+    expect(derivePrdStalled([readyForAgent("001.md"), issue("in-progress")])).toBe(false);
+    expect(derivePrdStalled([readyForAgent("001.md"), issue("in-review")])).toBe(false);
+  });
+
+  it("is false when the ready-for-agent Issue is still blocked", () => {
+    expect(
+      derivePrdStalled([readyForAgent("002.md", ["001.md"]), issue("backlog")]),
+    ).toBe(false);
+  });
+
+  it("is true once the blocker is done", () => {
+    const blocker: Issue = { id: "001.md", title: "001", lane: "done" };
+    expect(derivePrdStalled([readyForAgent("002.md", ["001.md"]), blocker])).toBe(true);
+  });
+
+  it("is false for a ready-for-human Issue (not agent work)", () => {
+    const readyForHuman: Issue = {
+      id: "001.md",
+      title: "001",
+      lane: "ready",
+      readyFor: "human",
+    };
+    expect(derivePrdStalled([readyForHuman])).toBe(false);
+  });
+
+  it("is false for a PRD with no waiting agent work", () => {
+    expect(derivePrdStalled([])).toBe(false);
+    expect(derivePrdStalled([issue("backlog"), issue("done")])).toBe(false);
   });
 });

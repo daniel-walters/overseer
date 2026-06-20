@@ -987,4 +987,61 @@ describe("scanBoard needs-review overlay", () => {
 
     expect(prdById(board.prds, "feature").needsReview).toBe(true);
   });
+
+  describe("stalled overlay", () => {
+    function prdWithIssues(files: Record<string, string>): string {
+      const root = mkdtempSync(join(tmpdir(), "overseer-st-"));
+      const dir = join(root, "feature");
+      mkdirSync(dir);
+      writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+      for (const [name, fm] of Object.entries(files)) {
+        writeFileSync(join(dir, name), `---\n${fm}\n---\nbody\n`);
+      }
+      return root;
+    }
+
+    it("sets stalled on a PRD with unblocked ready-for-agent work and nothing in flight", () => {
+      const root = prdWithIssues({
+        "001-a.md": "status: ready-for-agent",
+        "002-b.md": "status: done",
+      });
+
+      const board = scanBoard(root);
+
+      expect(prdById(board.prds, "feature").stalled).toBe(true);
+    });
+
+    it("leaves stalled unset when an Issue is in flight", () => {
+      const root = prdWithIssues({
+        "001-a.md": "status: ready-for-agent",
+        "002-b.md": "status: in-progress",
+      });
+
+      const board = scanBoard(root);
+
+      expect(prdById(board.prds, "feature").stalled).toBeUndefined();
+    });
+
+    it("leaves stalled unset when the ready-for-agent Issue is still blocked", () => {
+      const root = prdWithIssues({
+        "001-a.md": "status: backlog",
+        "002-b.md": "status: ready-for-agent\nblocked_by: [001-a.md]",
+      });
+
+      const board = scanBoard(root);
+
+      expect(prdById(board.prds, "feature").stalled).toBeUndefined();
+    });
+
+    it("sets stalled once the blocker is done", () => {
+      const root = prdWithIssues({
+        "001-a.md": "status: done",
+        "002-b.md": "status: ready-for-agent\nblocked_by: [001-a.md]",
+      });
+
+      const board = scanBoard(root);
+
+      expect(prdById(board.prds, "feature").stalled).toBe(true);
+    });
+  });
 });

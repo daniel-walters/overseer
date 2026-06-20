@@ -21,6 +21,13 @@ interface BoardViewProps {
    * lanes render unbounded as before.
    */
   laneHeight?: number;
+  /**
+   * Whether the global auto-run brake is **off** — threaded to every Column (and
+   * thence each PRD Card) to gate the stalled marker, which only reads "nobody's
+   * coming" when the Reactor is not auto-spawning. Absent in tests, where no PRD
+   * card shows the marker.
+   */
+  autoRunOff?: boolean;
 }
 
 /**
@@ -29,7 +36,7 @@ interface BoardViewProps {
  * derives its lane from its Issues — so this level has no Unsorted, ready, or
  * review columns (ADR 0003).
  */
-export function BoardView({ board, selected, laneHeight }: BoardViewProps) {
+export function BoardView({ board, selected, laneHeight, autoRunOff }: BoardViewProps) {
   const byLane = groupByLane(board.prds);
   const selectedId = cardAtCoord(board.prds, BOARD_LANES, selected)?.id;
   // The board level divides the viewport across its three lanes (vs the Issue
@@ -46,6 +53,7 @@ export function BoardView({ board, selected, laneHeight }: BoardViewProps) {
           selectedId={selectedId}
           width={width}
           availableHeight={laneHeight}
+          autoRunOff={autoRunOff}
           // Only the lane the selection sits in anchors its window on a row; the
           // others window from the top. Matching by the lane's render-order index
           // is exactly how `selected.laneIndex` is defined (an index into

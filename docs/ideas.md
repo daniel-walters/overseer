@@ -530,7 +530,14 @@ no way to page across to them. The follow-up is **horizontal paging / virtualiza
 across columns** so a wide board (the 7-column Issue level on a narrow terminal) stays
 fully reachable left-to-right. Until then, a narrow terminal can hide whole columns.
 
-### Surface "stalled — auto-run off, work waiting" on the board-level PRD card
+### (Shipped) Surface "stalled — auto-run off, work waiting" on the board-level PRD card
+
+**Shipped** — a PRD card now carries a neutral `◌ stalled` marker (CONTEXT.md →
+Stalled) when it has unblocked `ready-for-agent` work with nothing in flight *and*
+auto-run is off. The *stalled* predicate (`derivePrdStalled`) is a pure scan-time
+derivation over the Issues (sibling to the `needs-review` roll-up, never written to
+`prd.md`); the marker is gated on the session auto-run state at render time, because
+with auto-run on the Reactor is coming for the work. The original framing follows.
 
 Surfaced while designing **dynamic keybinds** ([ADR 0017](./adr/0017-keybind-eligibility-gates-matcher-and-hints-but-not-the-help-map.md)). Scenario: [auto-run](../CONTEXT.md#auto-run) is **off**, a PRD is **in-progress**, nothing is in flight, yet it has an unblocked `ready-for-agent` Issue waiting (a blocker just hit `done`). The pipeline is **stalled on you** — nothing will pick that work up until you press `d` (the manual re-dispatch crank). But the board cannot show this: a stalled-with-pending-work PRD looks **identical** to an in-progress-and-humming one. The activity signal says `⏸ auto-run off` / `□ at-rest` (the brake is on) but nothing says *there is dispatchable work nobody is coming for*, and the `ready-for-agent` card is only visible once you zoom in.
 

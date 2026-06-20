@@ -144,6 +144,34 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
   return issues.some((i) => i.lane === "human-review");
 }
 
+/**
+ * Derive a PRD's board-level **stalled** overlay: `true` iff the PRD has agent
+ * work that nobody is coming for — ≥1 unblocked `ready-for-agent` Issue (all its
+ * `blocked_by` blockers are `done`) **and** no Issue currently in flight
+ * (`in-progress` / `in-review`). It answers "this PRD has dispatchable work but
+ * nothing is running" so the board can flag it without zooming in.
+ *
+ * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdLane},
+ * recomputed each scan and never written to `prd.md` (ADR 0002 / 0003). It reads
+ * only the on-disk Issues; whether the marker actually *renders* additionally
+ * depends on **auto-run being off** (session Reactor state the scanner can't see),
+ * so that gate is applied at render time, not here — auto-run *on* means the
+ * Reactor is coming for this work, so "nobody's coming" only holds when it's off.
+ */
+export function derivePrdStalled(issues: readonly Issue[]): boolean {
+  const inFlight = issues.some(
+    (i) => i.lane === "in-progress" || i.lane === "in-review",
+  );
+  if (inFlight) return false;
+  const doneIds = new Set(issues.filter((i) => i.lane === "done").map((i) => i.id));
+  return issues.some(
+    (i) =>
+      i.lane === "ready" &&
+      i.readyFor === "agent" &&
+      (i.blockedBy ?? []).every((id) => doneIds.has(id)),
+  );
+}
+
 /** The lanes that promote a PRD to in-progress (in-progress or later). */
 const IN_PROGRESS_OR_LATER = new Set<Lane>([
   "in-progress",
@@ -261,6 +289,14 @@ export interface Issue {
   readonly lane: Lane;
   /** Set only when `lane === "ready"`; drives the human/agent badge. */
   readonly readyFor?: ReadyFor;
+  /**
+   * The Issue ids this Issue is `blocked_by` (authored frontmatter), empty when
+   * unblocked. Carried on the model Issue (not just the dispatch reader) so the
+   * board can derive the {@link derivePrdStalled} roll-up — "unblocked agent work
+   * is waiting" — without reaching into the dispatch layer. Read straight from the
+   * file each scan; a blocker is cleared when its Issue is `done`.
+   */
+  readonly blockedBy?: readonly string[];
   /** Set only when `lane === "human-review"`; drives the escalation marker. */
   readonly humanReviewReason?: HumanReviewReason;
   /**
@@ -384,6 +420,17 @@ export interface PRD {
    * marker (needs-review implies not-`done`), so the two never co-render.
    */
   readonly needsReview?: boolean;
+  /**
+   * The stalled overlay: `true` on a PRD that has unblocked `ready-for-agent`
+   * work waiting with nothing in flight ({@link derivePrdStalled}) — "dispatchable
+   * work, but nobody's coming for it". A second Issue→PRD roll-up alongside
+   * {@link needsReview}. Set at scan time purely from the Issues; a derived overlay
+   * recomputed each scan and never read from or written to `prd.md` (ADR 0002 /
+   * 0003). Whether the card actually *shows* the stalled marker additionally
+   * requires **auto-run off** (the Reactor is coming when it's on) — that gate is
+   * applied at render time where session state is known, not here. Presence-only.
+   */
+  readonly stalled?: boolean;
 }
 
 export interface Board {

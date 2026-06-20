@@ -2382,6 +2382,34 @@ describe("App auto-run", () => {
     expect(frame).toContain("? Show this help");
   });
 
+  it("shows the stalled marker on a stalled PRD only when auto-run is off", () => {
+    // A stalled PRD: derivePrdStalled would set `stalled` at scan time; here the
+    // board is hand-built, so it carries the overlay directly. The marker is the
+    // join of that overlay with the session auto-run state, so it must appear only
+    // when the brake is on (the Reactor is not coming for the waiting work).
+    const stalledBoard: Board = {
+      prds: [
+        {
+          id: "auth",
+          title: "AuthPRD",
+          lane: "in-progress",
+          stalled: true,
+          issues: [{ id: "010-login", title: "Login", lane: "ready", readyFor: "agent" }],
+        },
+      ],
+    };
+
+    const off = stripAnsi(
+      render(<App board={stalledBoard} autoRun={spyAutoRun(false)} />).lastFrame() ?? "",
+    );
+    expect(off).toContain("◌ stalled");
+
+    const on = stripAnsi(
+      render(<App board={stalledBoard} autoRun={spyAutoRun(true)} />).lastFrame() ?? "",
+    );
+    expect(on).not.toContain("stalled");
+  });
+
   it("ignores `a` while a modal is open", async () => {
     // A dispatcher whose read returns a frontier, so `d` opens a modal.
     const dispatcher = {

@@ -95,6 +95,24 @@ export function readPresentString(
 }
 
 /**
+ * Parse the `blocked_by` frontmatter into a list of sibling filenames. Each
+ * entry is a full filename used verbatim as the reference — the `NNN-` prefix
+ * is part of the value, never split off.
+ *
+ * A bare string (a list written as a scalar by mistake) is read as a
+ * single-entry list rather than dropped: it still names a dependency, and
+ * silently parsing it to `[]` would let a reader treat a typo as unblocked — the
+ * opposite of fail-safe. A missing value yields an empty list. Shared by the
+ * dispatch reader (the frontier's blocker check) and the scanner (the stalled
+ * roll-up) so the two can't drift in how they read the same field.
+ */
+export function parseBlockedBy(value: unknown): readonly string[] {
+  if (typeof value === "string") return [value];
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === "string");
+}
+
+/**
  * Rewrite a single Issue file's `status` frontmatter in place, preserving the
  * rest of the file: every other frontmatter key, any inline comments, and the
  * entire markdown body.

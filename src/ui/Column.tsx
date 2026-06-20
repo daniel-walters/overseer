@@ -18,6 +18,12 @@ export interface CardItem {
   /** The needs-review overlay, set only on a PRD card with an Issue in human-review. */
   readonly needsReview?: boolean;
   /**
+   * The stalled overlay, set only on a PRD card with unblocked agent work waiting
+   * and nothing in flight (derivePrdStalled). The card renders its marker only when
+   * the column-level {@link ColumnProps.autoRunOff} is also set.
+   */
+  readonly stalled?: boolean;
+  /**
    * The review-pass count, set only on a *live* `in-review` Issue card (ADR 0018):
    * the numerator of the `N/cap` marker. Paired with the column-level
    * {@link ColumnProps.reviewCap} for the denominator.
@@ -60,6 +66,13 @@ interface ColumnProps {
    * card carries no count anyway.
    */
   reviewCap?: number;
+  /**
+   * Whether the global auto-run brake is **off** — a board-wide session flag
+   * threaded straight through to each Card, where it gates the stalled marker (a
+   * stalled PRD only reads "nobody's coming" when auto-run is off). Absent in tests
+   * and at Issue level, where no card carries a stalled overlay anyway.
+   */
+  autoRunOff?: boolean;
 }
 
 /**
@@ -78,6 +91,7 @@ export function Column({
   selectedRow,
   width,
   reviewCap,
+  autoRunOff,
 }: ColumnProps) {
   // Without a height the column is unbounded — render every card, as before.
   // With one, slice to the visible window, anchored on the selected row (or the
@@ -110,6 +124,8 @@ export function Column({
           needsReview={card.needsReview}
           reviewPass={card.reviewPass}
           reviewCap={reviewCap}
+          stalled={card.stalled}
+          autoRunOff={autoRunOff}
           selected={card.id === selectedId}
         />
       ))}

@@ -963,6 +963,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         board={board}
         selected={boardSel}
         laneHeight={laneHeight(rows, "board")}
+        // The stalled marker only reads "nobody's coming" when the Reactor is
+        // braked; with auto-run on (or no seam wired) the Reactor is coming for
+        // the work, so the marker stays hidden. (ADR 0007: auto-run is on by
+        // default, so the common case correctly shows no stalled marker.)
+        autoRunOff={autoRun ? !autoRun.enabled : false}
       />
     );
   // The view sits in a flex-shrinking region that clips under overflow; the

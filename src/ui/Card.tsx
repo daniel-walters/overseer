@@ -70,6 +70,25 @@ interface CardProps {
    * the marker renders only when both it and {@link reviewPass} are present.
    */
   reviewCap?: number;
+  /**
+   * Stalled marker, present on a PRD card with unblocked `ready-for-agent` work
+   * waiting and nothing in flight (CONTEXT.md;
+   * {@link import("../model.js").derivePrdStalled}). The second Issue→PRD roll-up,
+   * a sibling to {@link needsReview} — it tells the board "this PRD has
+   * dispatchable work but nobody's coming for it" without zooming. Rendered only
+   * when {@link autoRunOff} is also set: auto-run *on* means the Reactor is coming
+   * for the work, so the "nobody's coming" framing only holds when the brake is on.
+   * A PRD-level marker, disjoint from the Issue-level markers and (like
+   * needs-review) from the `done`-only Linked PR marker.
+   */
+  stalled?: boolean;
+  /**
+   * Whether the global auto-run brake is **off** (the Reactor is not auto-spawning)
+   * — a board-wide session flag threaded down from {@link import("./App.js")}, not a
+   * per-card field. It gates the {@link stalled} marker: a stalled PRD only reads as
+   * "nobody's coming" when nothing is coming, i.e. auto-run is off.
+   */
+  autoRunOff?: boolean;
   /** Whether this card is the current selection. */
   selected?: boolean;
 }
@@ -141,6 +160,20 @@ const LINKED_PR_MARKER: Record<LinkedPr["state"], { text: string; color: string 
 const NEEDS_REVIEW_MARKER = "⚠ needs review";
 
 /**
+ * The stalled marker on a PRD card with unblocked agent work waiting and nothing
+ * in flight while auto-run is off (CONTEXT.md; derivePrdStalled). Deliberately
+ * *cyan/neutral* with `◌` (an empty-circle "nothing running"), set apart from the
+ * yellow `⚠` "needs a human" family (orphan, needs-review, bad-status) and the red
+ * `⊘` "nothing-ran-and-failed" suppressed marker: stalled is not a warning or a
+ * failure — it is a healthy queue waiting on a keypress (`d`/resume). Its own
+ * own-line truncating idiom, like every other marker.
+ */
+const STALLED_MARKER = "◌ stalled";
+
+/** The colour of the neutral stalled marker — distinct from the warning family. */
+const STALLED_COLOR = "cyan";
+
+/**
  * The glyph leading the review-pass `N/cap` marker (the Reviewer Iteration Count
  * PRD, ADR 0018). Deliberately **neutral**: `◷` (a partial-clock "in progress")
  * reads apart from the yellow "needs a human" warning family (`⚠ orphaned`,
@@ -174,6 +207,8 @@ export function Card({
   needsReview,
   reviewPass,
   reviewCap,
+  stalled,
+  autoRunOff,
   selected = false,
 }: CardProps) {
   return (
@@ -259,6 +294,19 @@ export function Card({
         // it co-renders with none of them.
         <Text wrap="truncate-end" color="yellow">
           {NEEDS_REVIEW_MARKER}
+        </Text>
+      )}
+      {stalled && autoRunOff && (
+        // Its own truncating line, neutral cyan — a PRD with unblocked agent work
+        // waiting and nothing in flight, rolled up so the board reads "nobody's
+        // coming" without zooming (CONTEXT.md, derivePrdStalled). The `autoRunOff`
+        // gate is load-bearing: with auto-run on the Reactor *is* coming, so the
+        // marker would lie. A PRD-level marker disjoint from the Issue-level
+        // families; mutually exclusive with needsReview (a stalled PRD has nothing
+        // in flight, needs-review implies a human-review Issue), so the two never
+        // co-render even though neither guards the other.
+        <Text wrap="truncate-end" color={STALLED_COLOR}>
+          {STALLED_MARKER}
         </Text>
       )}
       {reviewPass !== undefined && reviewCap !== undefined && !suppressed && (

@@ -354,3 +354,25 @@ describe("Card needs-review marker", () => {
     expect(both).not.toMatch(/PR open|PR merged/);
   });
 });
+
+describe("Card stalled marker", () => {
+  it("marks a stalled PRD when auto-run is off", () => {
+    const frame = frameOf(<Card title="Waiting" stalled autoRunOff />);
+
+    expect(frame).toContain("◌ stalled");
+    expect(frame).toContain("Waiting");
+  });
+
+  it("shows no stalled marker when auto-run is on (the Reactor is coming)", () => {
+    const frame = frameOf(<Card title="Humming" stalled />);
+
+    expect(frame).not.toContain("stalled");
+    expect(frame).toContain("Humming");
+  });
+
+  it("shows no stalled marker on a PRD that is not stalled", () => {
+    const frame = frameOf(<Card title="Idle" autoRunOff />);
+
+    expect(frame).not.toContain("stalled");
+  });
+});
