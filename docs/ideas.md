@@ -315,107 +315,22 @@ development back up. Open questions: where does the pause state live (PRD frontm
 vs. external state, given Overseer is a read-only viewer of the files), how it surfaces
 on the board, and how in-flight agents are handled at the moment of pausing.
 
-### Show the AI-review iteration count on an in-review card (e.g. `2/3`)
+### (Shipped) Reactor-driven review passes: fresh reviewer per pass + `N/cap` count
 
-While an Issue is `in-review`, surface how many `/code-review` passes it has been
-through and the cap before it escalates to a human — a `2/3`-style marker on the card.
-It answers "is this review nearly out of road?" at a glance: a card at `1/3` is fresh,
-one at `3/3` is about to either pass clean or land in `human-review` for
-non-convergence.
-
-The catch: **that count does not exist anywhere Overseer can read it today.** The
-loop runs entirely *inside a single reviewer agent's session* — the reviewer spawns
-once, loops `/code-review` up to the cap in-process, and writes back only a *terminal*
-status (`done`, or `human-review` with a reason like `non-convergence`). The iteration
-number lives in the agent's head, never on the Issue file or a sidecar (CONTEXT.md →
-Review outcome). So this is **not a rendering tweak** — it needs the count *exposed*
-first, and the cleanest way to expose it is to stop the agent owning the loop at all.
-
-**Resolved design (grill session, 2026-06-17): build this together with "Use a fresh
-reviewer agent for each review iteration" below — they are one change to the review
-loop, not two.** Once each pass is its own spawn driven by the Reactor, the count is a
-near-free rider:
-
-- **Loop ownership inverts.** The `/code-review` loop moves out of the reviewer prompt
-  and into the Reactor. Each pass is its own spawn on the *existing* review edge.
-- **Between passes, the Issue returns to `ready-for-review`.** A pass that found-and-
-  fixed issues sets status back to `ready-for-review`; the Reactor re-picks it up. No
-  new status — the awaiting→active flip stays the idempotency lock. The card visibly
-  oscillates `ready-for-review ⇄ in-review`, one hop per pass; accepted as honest
-  (column = on-disk status, the viewer invariant holds).
-- **The count lives in the agent sidecar (`agents.json`), Overseer-written per spawn.**
-  Because the Reactor drives each pass, *Overseer* increments and records the count at
-  spawn time — no agent ever writes the sidecar, so the "only Overseer writes
-  `agents.json`" invariant (ADR 0008) survives untouched. The value grows from
-  `string` (handle) to `{ handle, reviewPass }`. This sidesteps the earlier dilemma
-  (agent-writes-the-Issue vs agent-writes-a-sidecar) entirely: the *agent* never writes
-  the count under this model.
-- **The count is both control and display.** Overseer reads `reviewPass = N`: if
-  `N ≥ config.review.cap` it routes to `human-review` (non-convergence) instead of
-  spawning; else it spawns pass `N+1` and records it. The card marker is that same
-  number — one source of truth for control, marker, and the cap config.
-
-The marker itself: `N/cap`, where **N = the currently-running pass** (starts at
-`1/cap`) and **cap = `config.review.cap`** (already configurable today — see the
-correction note below; it is *not* a hardcoded 3). Rendered **neutral**, deliberately
-outside the yellow "needs-a-human" and red `⊘` "nothing-ran" marker families — it is
-the healthy in-progress path, not a warning. **Live-gated, like all sidecar overlays:**
-the marker shows only for a *live* `in-review` agent. If the agent dies mid-loop the
-Issue becomes an `in-review` Orphan — the **Orphan marker wins and the count is
-hidden** (a dead agent is not "on pass 2" of anything).
+**Shipped — see [ADR 0018](./adr/0018-reactor-owns-the-review-loop-not-the-agent.md).**
+The `/code-review` loop moved out of a single reviewer's head and into the Reactor: each
+pass is now its own spawn on the existing review edge, so every pass agent reviews code it
+did not write (no author-reviewer bias), and *Overseer* records the pass number in the
+agent sidecar (`agents.json`, `{ handle, reviewPass }`) at spawn time. That same number
+both enforces the cap (escalate to `human-review` at `N ≥ config.review.cap`) and renders
+the neutral `N/cap` card marker (live-gated; the Orphan marker wins if the agent dies
+mid-loop). This subsumed the two earlier separate ideas — "show the AI-review iteration
+count" and "use a fresh reviewer agent per iteration" — which were one change, not two.
 
 > **Doc correction:** "Configurable AI-review turns and effort" has **shipped** —
 > `config.review.cap` / `config.review.effort` (the `[review]` TOML table, default cap
 > 3 / effort medium) is built and tested (`src/config.ts`, `src/review/reviewConfig.ts`).
 > CONTEXT.md still says the cap is "deliberately hardcoded for v1"; that line is stale.
-
-### Use a fresh reviewer agent for each review iteration
-
-Today all 3 review passes run in **one reviewer session**: the same agent runs
-`/code-review`, fixes the findings *itself*, then re-runs `/code-review` on its own
-fixes, up to the cap (`reviewerPrompt.ts` → How to review). That's a known reviewer
-bias — an agent grading work it just produced is inclined to bless it. The idea: spawn
-a **separate reviewer agent per iteration**, so each pass is a fresh pair of eyes on
-the current state of the worktree, with no memory of having written the fixes under
-review.
-
-Why it might be better: independence. A clean-slate reviewer that never saw the prior
-fix is more likely to catch a flaw the author-reviewer rationalised away; convergence
-("a pass reports zero findings") means more when the passing reviewer has no stake in
-the code. It also separates the two jobs the single agent currently fuses — *review*
-(find problems) and *fix* (resolve them) — which arguably want different agents
-anyway.
-
-Costs / open questions to weigh:
-
-- **Who fixes?** *(Resolved, grill session 2026-06-17: the same per-pass agent both
-  reviews and fixes — but it **reviews first**, so there is no author-reviewer bias.)*
-  Each pass agent reviews the worktree *as it inherited it* (code written by the
-  previous pass's agent, or the implementor on pass 1) — it has no stake in that code —
-  and only *then* fixes the findings it reported. The independence the fresh-reviewer
-  idea is after holds at the **pass boundary**, not within a pass: the agent that fixes
-  in pass N is gone by pass N+1, so pass N+1's fresh agent reviews those fixes with no
-  memory of making them. No separate fixer agent, no new loop edge — every agent only
-  ever *judges* code it did not write.
-- **State handoff.** A single session carries context across passes for free; separate
-  agents need the findings/fixes passed between them (via the worktree commits, or an
-  explicit handoff artifact). The worktree *is* the shared state, so a fresh reviewer
-  reading the latest commit may be enough — worth confirming.
-- **Cost & latency.** N spawns instead of 1 per Issue, each paying cold-start +
-  worktree checkout. Wider fan-out against the same shared-checkout concerns dispatch
-  already navigates.
-
-**Resolved with the iteration-count idea (grill session, 2026-06-17): build the two
-together.** Each pass becoming its own Reactor-driven spawn is what makes the count
-(`N/cap`) clean — *Overseer* records the pass number in `agents.json` at spawn time, so
-no agent self-reports it, and the same number both drives the cap (spawn pass N+1 vs.
-escalate at `N ≥ cap`) and renders the marker. The loop moves from the reviewer prompt
-into the Reactor; between passes the Issue returns to `ready-for-review` and the Reactor
-re-picks it up (no new status). See the full resolved design under "Show the AI-review
-iteration count" above.
-
-This is a meaningful change to the review model (ADR 0005 territory — the review
-reactor), not a prompt tweak; the combined design above is that design pass.
 
 ### Overseer owns the review merge + terminal status write (not the agent)
 
@@ -487,9 +402,8 @@ Open questions:
   is the real fix; the reaper is a band-aid worth naming so it's a conscious rejection,
   not an oversight.
 
-Pairs with "Show the AI-review iteration count" and "Use a fresh reviewer agent for each
-review iteration" (the ADR 0018 cluster) — all three reshape who-owns-what across the
-review loop, and this one closes the gap those leave open.
+Pairs with the shipped Reactor-driven review loop ([ADR 0018](./adr/0018-reactor-owns-the-review-loop-not-the-agent.md))
+— that reshaped who-owns-what across the review loop, and this idea closes the gap it leaves open.
 
 ### Auto-resolve trivial merge conflicts instead of always escalating
 
@@ -520,8 +434,9 @@ human. So the bar for "trivial" must be high and the failure mode must be "escal
 - **What counts as trivial, and who judges?** A mechanical heuristic (e.g. non-overlapping
   hunks, conflict confined to import blocks / additive-only regions), or the reviewer agent's
   own judgment with an explicit instruction to escalate on any doubt? Agent-judgment is more
-  flexible but reintroduces exactly the self-grading bias the "fresh reviewer per iteration"
-  idea above is wary of — an agent motivated to finish may rationalise a risky resolve as
+  flexible but reintroduces exactly the self-grading bias the shipped fresh-reviewer-per-pass
+  loop ([ADR 0018](./adr/0018-reactor-owns-the-review-loop-not-the-agent.md)) was built to
+  avoid — an agent motivated to finish may rationalise a risky resolve as
   trivial. A conservative mechanical gate *in front of* the agent attempt may be the safer
   shape.
 - **Does the resolution get re-reviewed?** A conflict the agent resolves changes the merged
@@ -540,9 +455,9 @@ human. So the bar for "trivial" must be high and the failure mode must be "escal
   PRD): same instinct of promoting a baked-in review-loop default to a knob.
 
 This changes the review-merge contract (CONTEXT.md → Review outcome) and is ADR 0005
-territory — the review reactor — not a prompt tweak. It pairs with "Use a fresh reviewer
-agent for each review iteration" above (both reshape what the reviewer does and when it
-escalates) and should be designed alongside it if both are pursued.
+territory — the review reactor — not a prompt tweak. It builds on the shipped
+fresh-reviewer-per-pass loop ([ADR 0018](./adr/0018-reactor-owns-the-review-loop-not-the-agent.md)),
+extending what the reviewer does and when it escalates.
 
 ### Design-aware evaluation for frontend Issues (pre / during / post coding)
 
@@ -589,10 +504,11 @@ know an Issue is "frontend" and therefore design-gated — a label/tag, a heuris
 explicit Issue field? That gate is the linchpin; without it the track can't selectively
 apply.
 
-Pairs with several existing review-loop ideas. "Use a fresh reviewer agent for each
-review iteration" and "Configurable AI-review turns and effort" are the same review-loop
-surface this would extend — a visual-comparison pass is one more thing a (possibly fresh)
-reviewer does, under its own config knob. And it shares the "reviewer gains a new
+Pairs with several existing review-loop ideas. The shipped fresh-reviewer-per-pass loop
+([ADR 0018](./adr/0018-reactor-owns-the-review-loop-not-the-agent.md)) and the shipped
+configurable review cap/effort are the same review-loop surface this would extend — a
+visual-comparison pass is one more thing a per-pass reviewer does, under its own config
+knob. And it shares the "reviewer gains a new
 capability beyond reading files" shape with "Per-agent logs from a card" (subprocess /
 new IO from a read-only-ish loop). This is ADR 0005 territory (the review reactor) plus a
 new pre-dispatch gate — a meaty multi-layer feature deserving its own grill + PRD, not a
