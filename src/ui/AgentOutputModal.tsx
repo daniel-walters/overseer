@@ -28,6 +28,13 @@ interface AgentOutputModalProps {
    * the whole thing).
    */
   readonly viewportRows?: number;
+  /**
+   * The output's already-split lines, supplied by {@link App} so the split runs once
+   * per frame (the App also needs the lines to size the scroll window) rather than
+   * once here and once there. Omitted by standalone tests, which split `output.output`
+   * directly — matching the {@link import("./DetailModal.js").DetailModal} pattern.
+   */
+  readonly lines?: readonly string[];
 }
 
 /**
@@ -56,11 +63,14 @@ export function AgentOutputModal({
   output,
   scrollOffset = 0,
   viewportRows,
+  lines: suppliedLines,
 }: AgentOutputModalProps) {
-  // Raw scrollback: split on newlines, never markdown-rendered. A trailing newline
-  // yields a final empty line; we drop it so it doesn't read as spurious blank output
-  // (and so a single-line read with a trailing `\n` doesn't falsely show an affordance).
-  const lines = output.output.replace(/\n$/, "").split("\n");
+  // Raw scrollback: split on newlines, never markdown-rendered. Strip all trailing
+  // newlines (not just one) so a `claude logs` output ending in "\n\n\n" doesn't
+  // inflate the line count and allow scrolling into visually blank rows below all
+  // real content. Use App-supplied lines when present (same array App sized
+  // maxOffset from, so the clamp and this window can't drift — the DetailModal pattern).
+  const lines = suppliedLines ?? output.output.replace(/\n+$/, "").split("\n");
   // "Has output" keys off the same lines we window — not a separate trim() of the raw
   // string — so the placeholder branch and the windowed render can never disagree.
   // A whitespace-only multi-line input (e.g. "   \n\n  ") would leave trim() empty but

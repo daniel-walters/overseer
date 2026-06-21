@@ -503,7 +503,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // modal renders from. Only meaningful while an agent-output modal is open.
   const agentOutputRows = Math.max(1, rows - AGENT_OUTPUT_MODAL_CHROME_ROWS);
   const agentOutputLines =
-    modal?.kind === "agent-output" ? modal.output.output.replace(/\n$/, "").split("\n") : [];
+    modal?.kind === "agent-output" ? modal.output.output.replace(/\n+$/, "").split("\n") : [];
   const agentOutputMaxOffset = scrollDetail(
     agentOutputLines,
     detailScroll,
@@ -1046,6 +1046,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     return (
       <AgentOutputModal
         output={modal.output}
+        lines={agentOutputLines}
         scrollOffset={detailScroll}
         viewportRows={agentOutputRows}
       />
