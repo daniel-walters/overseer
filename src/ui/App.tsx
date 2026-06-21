@@ -6,9 +6,11 @@ import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { DetailModal, DETAIL_MODAL_CHROME_ROWS, DETAIL_MODAL_CHROME_COLS } from "./DetailModal.js";
+import { AgentOutputModal, AGENT_OUTPUT_MODAL_CHROME_ROWS } from "./AgentOutputModal.js";
 import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
+import type { AgentOutput } from "./agentOutputReader.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
@@ -247,6 +249,28 @@ export interface DetailReader {
 }
 
 /**
+ * The agent-output seam the `o` keybind drives — the raw-output read sibling of
+ * the {@link DetailReader}'s `v` (CONTEXT.md → Agent output, ADR 0023), and the
+ * read half of the read/stop duo with {@link Killer} over one card's recorded
+ * handle. `readAgentOutput` resolves the selected `live` Issue → its recorded
+ * agent handle (the same sidecar join `readKill` uses) and reads that handle's
+ * recent terminal output once via `claude logs <handle>` when the modal opens.
+ *
+ * It returns `undefined` when the `live` card carries no recorded handle (a
+ * verdict/sidecar race → the App flashes a status-line notice, exactly as Kill
+ * does in the same race) or when the Issue file vanished under the read — the same
+ * scan→keypress race the action seams degrade. Like the detail reader it has no
+ * confirm and no write: the modal only reads, so an {@link AgentOutput} is all it
+ * returns (the output is read on demand, never carried in the `Board` model).
+ */
+export interface AgentOutputReader {
+  readonly readAgentOutput: (
+    prdId: string,
+    issueId: string,
+  ) => AgentOutput | undefined;
+}
+
+/**
  * What the open modal is previewing: a PRD dispatch, a single-Issue review, a
  * single-orphan re-dispatch, a single-agent kill, a PRD Open PR, or a read-only
  * card-body detail view. At most one is ever open (the `nav.confirming` guard for
@@ -261,7 +285,8 @@ type ActiveModal =
   | { readonly kind: "delete"; readonly preview: DeletePreviewData }
   | { readonly kind: "mark-done"; readonly preview: MarkDonePreviewData }
   | { readonly kind: "approve"; readonly preview: ApprovePreviewData }
-  | { readonly kind: "detail"; readonly detail: CardDetail };
+  | { readonly kind: "detail"; readonly detail: CardDetail }
+  | { readonly kind: "agent-output"; readonly output: AgentOutput };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -307,6 +332,8 @@ interface AppProps {
   approve?: Approve;
   /** Wired in production; absent in tests that don't exercise the detail modal. */
   detailReader?: DetailReader;
+  /** Wired in production; absent in tests that don't exercise the agent-output modal. */
+  agentOutputReader?: AgentOutputReader;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
   /** Wired in production; absent in tests that don't exercise `go to PR`. */
@@ -347,7 +374,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
+export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -466,6 +493,22 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   const detailLines =
     modal?.kind === "detail" ? renderDetailLines(modal.detail, detailBodyWidth) : [];
   const detailMaxOffset = scrollDetail(detailLines, detailScroll, detailBodyRows).maxOffset;
+
+  // The agent-output modal's region height and its current scroll window — the
+  // raw-output twin of the detail block above, sharing the same `detailScroll`
+  // offset and `scrollDetail` primitive so its keypress clamp and the modal's window
+  // can't disagree. The output is raw scrollback windowed line-by-line, never
+  // markdown-rendered or hard-wrapped (a wrap would mangle the agent's own layout),
+  // so the lines come straight off the output split on `\n` — the same split the
+  // modal renders from. Only meaningful while an agent-output modal is open.
+  const agentOutputRows = Math.max(1, rows - AGENT_OUTPUT_MODAL_CHROME_ROWS);
+  const agentOutputLines =
+    modal?.kind === "agent-output" ? modal.output.output.replace(/\n+$/, "").split("\n") : [];
+  const agentOutputMaxOffset = scrollDetail(
+    agentOutputLines,
+    detailScroll,
+    agentOutputRows,
+  ).maxOffset;
 
   /**
    * The App-side closures the registry dispatches a matched keypress to. Each is
@@ -663,6 +706,36 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         });
       }
     },
+    viewAgentOutput: () => {
+      // Read the selected `live` Issue's agent output on demand and open the
+      // agent-output modal over it — the read twin of `K`'s stop (CONTEXT.md →
+      // Agent output, ADR 0023). Issue-level only, gated further on the card's own
+      // `live` liveness marker — only a running agent Overseer recorded has output
+      // to show — so `o` is a no-op on an orphaned, unknown, or non-active card,
+      // mirroring how the kill handler gates on `live`. A `live` card with no
+      // recorded handle (the verdict/sidecar race, or the Issue vanished) yields no
+      // output, which — exactly as Kill does in the same race — flashes a legible
+      // status-line notice rather than doing nothing visible. Like the detail modal
+      // it does not enter `nav.confirming`: the modal's own input branch (below)
+      // closes it, there is nothing to confirm.
+      if (
+        agentOutputReader &&
+        selectedPrd &&
+        selectedIssue?.liveness === "live"
+      ) {
+        const output = agentOutputReader.readAgentOutput(selectedPrd.id, selectedIssue.id);
+        if (output) {
+          setDetailScroll(0); // always open at the top, never a stale position
+          setModal({ kind: "agent-output", output });
+        } else {
+          // The card read `live` but readAgentOutput found no recorded handle (the
+          // verdict/sidecar race, or the Issue vanished). Without this notice the
+          // keypress would do nothing at all — indistinguishable from o being
+          // broken — so say plainly there's nothing to read, like Kill.
+          setNotice(`${selectedIssue.id} has no recorded agent to read — re-check the board.`);
+        }
+      }
+    },
     showHelp: () => setShowHelp(true),
     quit: () => {
       if (nav.level === "issues") dispatch({ type: "back" });
@@ -706,6 +779,27 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         exit();
       } else if (input === "j" || key.downArrow) {
         setDetailScroll((o) => Math.min(o + 1, detailMaxOffset));
+      } else if (input === "k" || key.upArrow) {
+        setDetailScroll((o) => Math.max(o - 1, 0));
+      }
+      return;
+    }
+
+    // The agent-output modal owns input while it is open, mirroring the detail
+    // modal's contract: `o` or Esc close it (restoring the prior selection/zoom),
+    // `q` closes it and quits. `j`/`k` and the down/up arrows scroll the output,
+    // clamped to `[0, agentOutputMaxOffset]` (a snapshot that fits has `maxOffset` 0,
+    // so the keys are inert). Everything else is swallowed. It is a read-only viewer
+    // of a frozen snapshot — nothing to confirm, no tail — so closing is just
+    // clearing the frozen capture; close-and-reopen is the refresh gesture.
+    if (modal?.kind === "agent-output") {
+      if (input === "o" || key.escape) {
+        setModal(undefined);
+      } else if (input === "q") {
+        setModal(undefined);
+        exit();
+      } else if (input === "j" || key.downArrow) {
+        setDetailScroll((o) => Math.min(o + 1, agentOutputMaxOffset));
       } else if (input === "k" || key.upArrow) {
         setDetailScroll((o) => Math.max(o - 1, 0));
       }
@@ -941,6 +1035,20 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         lines={detailLines}
         scrollOffset={detailScroll}
         viewportRows={detailBodyRows}
+      />
+    );
+  }
+  if (modal?.kind === "agent-output") {
+    // The raw-output view — a full-screen takeover like the detail modal, rendered
+    // from the frozen capture (read once on open) so a re-scan that removes the card
+    // cannot blank it mid-read. Shares the detail modal's scroll offset + primitive,
+    // not its markdown render: agent output is raw scrollback, shown as-is (ADR 0023).
+    return (
+      <AgentOutputModal
+        output={modal.output}
+        lines={agentOutputLines}
+        scrollOffset={detailScroll}
+        viewportRows={agentOutputRows}
       />
     );
   }
