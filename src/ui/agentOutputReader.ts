@@ -113,9 +113,9 @@ const LOGS_MAX_BUFFER = 8 * 1024 * 1024;
 /**
  * The production {@link LogsSeam}: shell out to `claude logs <handle>` and return
  * its stdout. `claude logs` exits 0 even for a gone handle (printing its "No job
- * matching" message to stdout), so the common path is the clean return. stdout is
- * captured (not inherited) so the output reaches the modal rather than corrupting
- * the alt-screen board; stderr is inherited so any diagnostic still surfaces.
+ * matching" message to stdout), so the common path is the clean return. Both stdout
+ * and stderr are captured (not inherited) so neither corrupts the Ink alt-screen
+ * buffer the TUI is managing.
  *
  * A throw — a non-zero exit, a timeout, a buffer overflow, or `claude` missing from
  * PATH — degrades to a legible error message rather than crashing the read or
@@ -127,18 +127,22 @@ export const realLogs: LogsSeam = (handle) => {
   try {
     return execFileSync("claude", ["logs", handle], {
       encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
+      stdio: ["ignore", "pipe", "pipe"],
       timeout: LOGS_TIMEOUT_MS,
       maxBuffer: LOGS_MAX_BUFFER,
     });
   } catch (err) {
-    // Distinguish a timeout from other failures so the user knows the read
-    // attempted and hung rather than seeing the misleading "(no output yet)"
-    // placeholder that an empty string would produce.
-    const isTimeout =
-      err instanceof Error && "code" in err && err.code === "ETIMEDOUT";
-    return isTimeout
-      ? "(output read timed out — close and press o again to retry)"
-      : "(output unavailable — claude CLI may not be on PATH)";
+    // Distinguish failure modes so the message is accurate rather than uniformly
+    // blaming a missing PATH entry for unrelated errors.
+    const code = err instanceof Error && "code" in err
+      ? (err as NodeJS.ErrnoException).code
+      : undefined;
+    if (code === "ETIMEDOUT") {
+      return "(output read timed out — close and press o again to retry)";
+    }
+    if (code === "ENOBUFS") {
+      return "(output too large to display — close and press o again)";
+    }
+    return "(output unavailable — claude CLI may not be on PATH)";
   }
 };
