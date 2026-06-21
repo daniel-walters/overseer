@@ -1090,22 +1090,32 @@ describe("App re-dispatch (R on an orphan)", () => {
   });
 });
 
+// Shared fixture for kill and agent-output tests: a board with one orphaned and one
+// live Issue, and a helper to navigate to the live card.
+const liveCardBoard: Board = {
+  prds: [
+    {
+      id: "auth",
+      title: "AuthPRD",
+      lane: "in-progress",
+      issues: [
+        { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
+        { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
+      ],
+    },
+  ],
+};
+
+/** Zoom in and move the cursor to the live second Issue (020-oauth). */
+async function selectLiveCard(stdin: { write: (s: string) => void }) {
+  stdin.write(ENTER); // zoom into AuthPRD's Issues
+  await tick();
+  stdin.write(ARROW_DOWN); // first Issue is the orphan; move to the live one
+  await tick();
+}
+
 describe("App kill (K on a live card)", () => {
-  // The same orphanBoard shape: first Issue is the orphan, second (020-oauth) is
-  // the *live* card — the one a kill targets.
-  const orphanBoard: Board = {
-    prds: [
-      {
-        id: "auth",
-        title: "AuthPRD",
-        lane: "in-progress",
-        issues: [
-          { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
-          { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
-        ],
-      },
-    ],
-  };
+  const orphanBoard = liveCardBoard;
 
   function killPreview(id: string): KillPreviewData {
     return {
@@ -1141,19 +1151,11 @@ describe("App kill (K on a live card)", () => {
     };
   }
 
-  /** Zoom in and move the cursor to the live second Issue (020-oauth). */
-  async function selectLive(stdin: { write: (s: string) => void }) {
-    stdin.write(ENTER); // zoom into AuthPRD's Issues
-    await tick();
-    stdin.write(ARROW_DOWN); // first Issue is the orphan; move to the live one
-    await tick();
-  }
-
   it("opens a kill preview on K for the selected live Issue", async () => {
     const killer = spyKiller();
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
 
@@ -1166,7 +1168,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller();
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
     stdin.write(ENTER); // confirm
@@ -1182,7 +1184,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller(() => "not-running");
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
     stdin.write(ENTER);
@@ -1195,7 +1197,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller(() => "uncertain");
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
     stdin.write(ENTER);
@@ -1208,7 +1210,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller(() => "unavailable");
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
     stdin.write(ENTER);
@@ -1223,7 +1225,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller(undefined, () => undefined);
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
 
@@ -1236,7 +1238,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller();
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
     stdin.write(ENTER); // confirm → notice shown
@@ -1252,7 +1254,7 @@ describe("App kill (K on a live card)", () => {
     const killer = spyKiller();
     const { stdin, lastFrame } = render(<App board={orphanBoard} killer={killer} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("K");
     await tick();
     stdin.write(ESC);
@@ -1303,21 +1305,8 @@ describe("App kill (K on a live card)", () => {
 });
 
 describe("App agent output (o on a live card)", () => {
-  // The same orphanBoard shape as the kill block: first Issue is the orphan, second
-  // (020-oauth) is the *live* card — the one `o` reads output for.
-  const orphanBoard: Board = {
-    prds: [
-      {
-        id: "auth",
-        title: "AuthPRD",
-        lane: "in-progress",
-        issues: [
-          { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
-          { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
-        ],
-      },
-    ],
-  };
+  // Uses the shared liveCardBoard / selectLiveCard fixture defined above the kill block.
+  const orphanBoard = liveCardBoard;
 
   const DEFAULT_OUTPUT: AgentOutput = { title: "OAuth", output: "running tests…\n" };
 
@@ -1330,21 +1319,13 @@ describe("App agent output (o on a live card)", () => {
     };
   }
 
-  /** Zoom in and move the cursor to the live second Issue (020-oauth). */
-  async function selectLive(stdin: { write: (s: string) => void }) {
-    stdin.write(ENTER); // zoom into AuthPRD's Issues
-    await tick();
-    stdin.write(ARROW_DOWN); // first Issue is the orphan; move to the live one
-    await tick();
-  }
-
   it("opens the agent-output modal on o for the selected live Issue", async () => {
     const reader = spyOutputReader({ title: "OAuth", output: "compiling…\nlinking…\n" });
     const { stdin, lastFrame } = render(
       <App board={orphanBoard} agentOutputReader={reader} />,
     );
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o");
     await tick();
 
@@ -1364,7 +1345,7 @@ describe("App agent output (o on a live card)", () => {
       <App board={orphanBoard} agentOutputReader={reader} />,
     );
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o");
     await tick();
     expect(stripAnsi(lastFrame() ?? "")).toContain("OUTLINE0"); // top visible at first
@@ -1389,7 +1370,7 @@ describe("App agent output (o on a live card)", () => {
       <App board={orphanBoard} agentOutputReader={reader} />,
     );
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o");
     await tick();
 
@@ -1404,7 +1385,7 @@ describe("App agent output (o on a live card)", () => {
       <App board={orphanBoard} agentOutputReader={reader} />,
     );
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o"); // open
     await tick();
     stdin.write("o"); // close
@@ -1421,7 +1402,7 @@ describe("App agent output (o on a live card)", () => {
       <App board={orphanBoard} agentOutputReader={reader} />,
     );
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o");
     await tick();
     stdin.write(ESC);
@@ -1436,7 +1417,7 @@ describe("App agent output (o on a live card)", () => {
       <App board={orphanBoard} agentOutputReader={reader} />,
     );
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o");
     await tick();
     stdin.write("q");
@@ -1477,7 +1458,7 @@ describe("App agent output (o on a live card)", () => {
   it("does nothing on o when no output reader is wired", async () => {
     const { stdin, lastFrame } = render(<App board={orphanBoard} />);
 
-    await selectLive(stdin);
+    await selectLiveCard(stdin);
     stdin.write("o");
     await tick();
 

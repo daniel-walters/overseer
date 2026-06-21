@@ -118,8 +118,8 @@ const LOGS_MAX_BUFFER = 8 * 1024 * 1024;
  * the alt-screen board; stderr is inherited so any diagnostic still surfaces.
  *
  * A throw — a non-zero exit, a timeout, a buffer overflow, or `claude` missing from
- * PATH — degrades to an empty string rather than crashing the read, so the modal
- * opens on `(no output yet)` instead of taking down the board. Bounded by
+ * PATH — degrades to a legible error message rather than crashing the read or
+ * showing a misleading `(no output yet)` placeholder. Bounded by
  * {@link LOGS_TIMEOUT_MS} and {@link LOGS_MAX_BUFFER} because it runs synchronously
  * on the input path.
  */
@@ -131,7 +131,14 @@ export const realLogs: LogsSeam = (handle) => {
       timeout: LOGS_TIMEOUT_MS,
       maxBuffer: LOGS_MAX_BUFFER,
     });
-  } catch {
-    return "";
+  } catch (err) {
+    // Distinguish a timeout from other failures so the user knows the read
+    // attempted and hung rather than seeing the misleading "(no output yet)"
+    // placeholder that an empty string would produce.
+    const isTimeout =
+      err instanceof Error && "code" in err && err.code === "ETIMEDOUT";
+    return isTimeout
+      ? "(output read timed out — close and press o again to retry)"
+      : "(output unavailable — claude CLI may not be on PATH)";
   }
 };
