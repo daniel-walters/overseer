@@ -85,6 +85,18 @@ describe("scanBoard", () => {
     expect(issueById(prd.issues, "002-ok.md").lane).toBe("done");
   });
 
+  it("returns an empty board instead of throwing when the root is unreadable", () => {
+    // The configured root can vanish out from under a live board — deleted,
+    // renamed, or unmounted while open. The watcher's next re-scan must not
+    // throw uncaught and take down the TUI; an unreadable root reads as an
+    // empty board, the same as a root with no PRDs.
+    const missing = join(tmpdir(), "overseer-does-not-exist-7f3a9c");
+
+    let board!: ReturnType<typeof scanBoard>;
+    expect(() => (board = scanBoard(missing))).not.toThrow();
+    expect(board.prds).toEqual([]);
+  });
+
   it("derives a PRD to done only when it has Issues and all are done", () => {
     // A throwaway root: an all-done PRD derives done; one with a non-done Issue
     // does not. (The shared fixture has no all-done PRD.)

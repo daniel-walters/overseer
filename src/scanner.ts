@@ -134,7 +134,18 @@ export function scanBoard(
   lookupPr?: LinkedPrLookup,
   lookupReviewPass?: ReviewPassLookup,
 ): Board {
-  const entries = readdirSync(root, { withFileTypes: true });
+  // The one I/O at the top of the read path. If the configured root is deleted,
+  // renamed, or unmounted while the board is open, a watcher-triggered re-scan
+  // would otherwise throw uncaught and take down the TUI. Every per-PRD/Issue
+  // read below is already guarded; mirror that here by treating an unreadable
+  // root as an empty board — the same "a folder that vanished is just gone"
+  // contract the rest of the scan follows.
+  let entries;
+  try {
+    entries = readdirSync(root, { withFileTypes: true });
+  } catch {
+    return { prds: [] };
+  }
 
   const prds: PRD[] = [];
   for (const entry of entries) {
