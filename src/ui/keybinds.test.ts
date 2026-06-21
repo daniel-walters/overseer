@@ -63,6 +63,7 @@ function spyHandlers(): KeybindHandlers {
     goToPr: vi.fn(),
     toggleAutoRun: vi.fn(),
     viewDetail: vi.fn(),
+    viewAgentOutput: vi.fn(),
     showHelp: vi.fn(),
     quit: vi.fn(),
   };
@@ -330,6 +331,25 @@ describe("matchKeybind — eligibility gate", () => {
     expect(matchKeybind(press("K"), "issues", ctx({ issueLive: false }))).toBeUndefined();
   });
 
+  it("o matches only on a live Issue (the read twin of K's stop)", () => {
+    // `o` reads a live agent's output — eligible on exactly the same `live` gate as
+    // K, and inert on every other card (an agent that isn't running has nothing to
+    // show, ADR 0023).
+    expect(matchKeybind(press("o"), "issues", ctx({ issueLive: true }))?.label).toContain("output");
+    expect(matchKeybind(press("o"), "issues", ctx({ issueLive: false }))).toBeUndefined();
+  });
+
+  it("o is an issue-level binding (never matches at the board level)", () => {
+    expect(matchKeybind(press("o"), "board", ctx())).toBeUndefined();
+  });
+
+  it("routes the agent-output binding to the viewAgentOutput handler", () => {
+    const handlers = spyHandlers();
+    const p = press("o");
+    matchKeybind(p, "issues", ctx())?.action(handlers, p);
+    expect(handlers.viewAgentOutput).toHaveBeenCalledTimes(1);
+  });
+
   it("v matches only when a card is selected", () => {
     expect(matchKeybind(press("v"), "board", ctx({ cardSelected: true }))?.label).toContain("body");
     expect(matchKeybind(press("v"), "board", ctx({ cardSelected: false }))).toBeUndefined();
@@ -428,6 +448,8 @@ describe("hintsFor — the status-line subset, eligibility-filtered", () => {
     expect(keysOf("issues", ctx({ issueOrphan: false }))).not.toContain("R");
     expect(keysOf("issues", ctx({ issueLive: true, issueReadyForReview: false, issueOrphan: false }))).toContain("K");
     expect(keysOf("issues", ctx({ issueLive: false }))).not.toContain("K");
+    expect(keysOf("issues", ctx({ issueLive: true, issueReadyForReview: false, issueOrphan: false }))).toContain("o");
+    expect(keysOf("issues", ctx({ issueLive: false }))).not.toContain("o");
     expect(keysOf("issues", ctx({ issueReadyForHuman: true }))).toContain("m");
     expect(keysOf("issues", ctx({ issueReadyForHuman: false }))).not.toContain("m");
     expect(keysOf("issues", ctx({ issueApprovable: true }))).toContain("A");
@@ -439,7 +461,7 @@ describe("hintsFor — the status-line subset, eligibility-filtered", () => {
     const boardKeys = keysOf("board", all);
     const issueKeys = keysOf("issues", all);
     // Issue-level action keys never leak onto the board bar.
-    for (const k of ["r", "R", "K", "m", "A"]) expect(boardKeys).not.toContain(k);
+    for (const k of ["r", "R", "K", "m", "A", "o"]) expect(boardKeys).not.toContain(k);
     // Board-only PRD keys never leak onto the issue bar.
     for (const k of ["d", "P", "g", "X"]) expect(issueKeys).not.toContain(k);
   });

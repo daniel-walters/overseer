@@ -12,6 +12,7 @@ import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
 import { realUrlOpener } from "./ui/urlOpener.js";
 import { createDetailReader } from "./ui/detailReader.js";
+import { createAgentOutputReader, realLogs } from "./ui/agentOutputReader.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
 import { createRollback } from "./dispatch/rollback.js";
@@ -239,6 +240,16 @@ function runBoard(): void {
   // (ADR 0003), so it always shows the file's current content. A vanished file makes
   // the keypress a harmless no-op.
   const detailReader = createDetailReader(root);
+  // The agent-output modal (ADR 0023): `o` on a `live` card reads that agent's
+  // recent terminal output once via `claude logs <handle>`, against the same
+  // recorded handle the kill switch joins (the agent sidecar, via `readHandles`).
+  // The read twin of `K` over one card's handle — a pure read seam (no spawn, no
+  // write, no status change). The output is read on demand and frozen for the
+  // modal's lifetime (close-and-reopen is the refresh), so it always reflects the
+  // handle's current scrollback. A vanished Issue/handle makes the keypress a
+  // harmless no-op; a `live` card with no recorded handle flashes a status-line
+  // notice, exactly as Kill does in the same race.
+  const agentOutputReader = createAgentOutputReader(root, readHandles, realLogs);
   // The Reactor reuses the very same validated git/spawn/log machinery, so its
   // automated dispatches behave identically to a manual `d`. The live loop
   // reconciles it after each board rebuild, closing the re-dispatch loop: a
@@ -279,6 +290,7 @@ function runBoard(): void {
       markDone={markDone}
       approve={approve}
       detailReader={detailReader}
+      agentOutputReader={agentOutputReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
       reviewCap={review.cap}

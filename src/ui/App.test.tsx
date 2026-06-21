@@ -24,6 +24,7 @@ import type { ApprovePreviewData } from "./ApprovePreview.js";
 import type { ApproveResult } from "../review/approve.js";
 import { createDelete } from "../dispatch/deletePrd.js";
 import type { CardDetail } from "./detailReader.js";
+import type { AgentOutput } from "./agentOutputReader.js";
 
 const ESC = String.fromCharCode(27);
 const ENTER = "\r";
@@ -1298,6 +1299,202 @@ describe("App kill (K on a live card)", () => {
     // No killer seam ⇒ the kill preview for the live card never opens (the bar may
     // still offer the K hint, which is the registry label, not this preview header).
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("Stop 020-oauth");
+  });
+});
+
+describe("App agent output (o on a live card)", () => {
+  // The same orphanBoard shape as the kill block: first Issue is the orphan, second
+  // (020-oauth) is the *live* card — the one `o` reads output for.
+  const orphanBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [
+          { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
+          { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
+        ],
+      },
+    ],
+  };
+
+  const DEFAULT_OUTPUT: AgentOutput = { title: "OAuth", output: "running tests…\n" };
+
+  /** An output reader resolving fixed output for any Issue; the spy records the call. */
+  function spyOutputReader(output: AgentOutput = DEFAULT_OUTPUT) {
+    return {
+      readAgentOutput: vi.fn<
+        (prdId: string, issueId: string) => AgentOutput | undefined
+      >(() => output),
+    };
+  }
+
+  /** Zoom in and move the cursor to the live second Issue (020-oauth). */
+  async function selectLive(stdin: { write: (s: string) => void }) {
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write(ARROW_DOWN); // first Issue is the orphan; move to the live one
+    await tick();
+  }
+
+  it("opens the agent-output modal on o for the selected live Issue", async () => {
+    const reader = spyOutputReader({ title: "OAuth", output: "compiling…\nlinking…\n" });
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLive(stdin);
+    stdin.write("o");
+    await tick();
+
+    expect(reader.readAgentOutput).toHaveBeenCalledWith("auth", "020-oauth");
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("OAuth"); // the modal title
+    expect(frame).toContain("compiling…"); // the agent's output
+    expect(frame).toContain("to close"); // the close/scroll hint
+  });
+
+  it("scrolls the output on j (a snapshot taller than the viewport)", async () => {
+    // Taller than the test viewport (renderForTest defaults to 200 rows minus the
+    // modal chrome), so the first line genuinely scrolls off as `j` advances.
+    const tall = Array.from({ length: 300 }, (_, i) => `OUTLINE${i}`).join("\n");
+    const reader = spyOutputReader({ title: "OAuth", output: tall });
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLive(stdin);
+    stdin.write("o");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("OUTLINE0"); // top visible at first
+    // Scroll down several lines, then assert the top line has scrolled off.
+    for (let i = 0; i < 5; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("OUTLINE0"); // first line scrolled off
+  });
+
+  it("flashes a status-line notice (and opens no modal) when a live card has no handle", async () => {
+    // The verdict/sidecar race: the card reads `live` but readAgentOutput finds no
+    // recorded handle. Without feedback `o` would look broken, so it must say so —
+    // exactly as Kill does in the same race.
+    const reader = {
+      readAgentOutput: vi.fn<
+        (prdId: string, issueId: string) => AgentOutput | undefined
+      >(() => undefined),
+    };
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLive(stdin);
+    stdin.write("o");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("to close"); // no modal opened
+    expect(frame).toContain("no recorded agent"); // the legible notice
+  });
+
+  it("closes the modal on o (toggle) and restores the zoom", async () => {
+    const reader = spyOutputReader();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLive(stdin);
+    stdin.write("o"); // open
+    await tick();
+    stdin.write("o"); // close
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("to close"); // modal gone
+    expect(frame).toContain("OAuth"); // still zoomed on the Issue card
+  });
+
+  it("closes the modal on Esc", async () => {
+    const reader = spyOutputReader();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLive(stdin);
+    stdin.write("o");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("to close");
+  });
+
+  it("quits on q from the modal", async () => {
+    const reader = spyOutputReader();
+    const { stdin, frames } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLive(stdin);
+    stdin.write("o");
+    await tick();
+    stdin.write("q");
+    await tick();
+    const framesAfterQuit = frames.length;
+
+    // The app unmounted: further input produces no new frame.
+    stdin.write(ARROW_DOWN);
+    await tick();
+    expect(frames.length).toBe(framesAfterQuit);
+  });
+
+  it("is a no-op on o for a non-live card", async () => {
+    const reader = spyOutputReader();
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    stdin.write(ENTER); // zoom in; first Issue is the *orphan* (not live)
+    await tick();
+    stdin.write("o");
+    await tick();
+
+    expect(reader.readAgentOutput).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("to close"); // no modal
+  });
+
+  it("does nothing on o at the board level (agent output is Issue-level only)", async () => {
+    const reader = spyOutputReader();
+    const { stdin } = render(<App board={orphanBoard} agentOutputReader={reader} />);
+
+    stdin.write("o"); // at board level, no zoom
+    await tick();
+
+    expect(reader.readAgentOutput).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on o when no output reader is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={orphanBoard} />);
+
+    await selectLive(stdin);
+    stdin.write("o");
+    await tick();
+
+    // No reader seam ⇒ the output modal never opens; still on the Issue board.
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("to close");
+  });
+
+  it("shows the o hint only on a live card", async () => {
+    const { stdin, lastFrame } = render(<App board={orphanBoard} agentOutputReader={spyOutputReader()} />);
+
+    stdin.write(ENTER); // zoom in; selection rests on the orphan first
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("o Read"); // not on the orphan
+
+    stdin.write(ARROW_DOWN); // move to the live card
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("o Read"); // now the hint shows
   });
 });
 

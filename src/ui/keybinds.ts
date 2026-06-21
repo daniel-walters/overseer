@@ -48,6 +48,7 @@ export interface KeyPress {
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
  * - `toggleAutoRun` flips the global auto-run brake.
  * - `viewDetail` opens the selected card's body in the detail modal.
+ * - `viewAgentOutput` opens the selected `live` Issue's agent output in its modal.
  * - `showHelp` opens the keybind reference; `quit` backs out or exits.
  */
 export interface KeybindHandlers {
@@ -65,6 +66,7 @@ export interface KeybindHandlers {
   readonly goToPr: () => void;
   readonly toggleAutoRun: () => void;
   readonly viewDetail: () => void;
+  readonly viewAgentOutput: () => void;
   readonly showHelp: () => void;
   readonly quit: () => void;
 }
@@ -244,6 +246,24 @@ export const KEYBINDS: readonly Keybind[] = [
     matches: (p) => p.input === "K",
     eligible: (ctx) => ctx.issueLive,
     action: (h) => h.kill(),
+  },
+  {
+    // The read twin of K's stop (CONTEXT.md → Agent output, ADR 0023): `o` opens
+    // the selected `live` agent's recent terminal output in a scrollable modal.
+    // Lowercase + bare deliberately — it sits in the cheap passive-read family with
+    // `v` (it writes nothing, spawns nothing, changes no status), not the heavy
+    // shift-keyed `K`/`R`/`X`/`A` family. Issue-level, gated on the *same* `live`
+    // verdict as K: an agent that isn't running has nothing to show (`claude logs`
+    // does not outlive the job), so post-mortem viewing of a dead/orphaned agent is
+    // not offered. The hint hides and the matcher inerts on a non-`live` card; the
+    // `?` reference lists it regardless (the eligibility exception, ADR 0017).
+    key: "o",
+    label: "Read a live Issue's agent output",
+    level: "issues",
+    hint: true,
+    matches: (p) => p.input === "o",
+    eligible: (ctx) => ctx.issueLive,
+    action: (h) => h.viewAgentOutput(),
   },
   {
     // The board's first human-triggered status flip with no spawn behind it
