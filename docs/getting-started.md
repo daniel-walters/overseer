@@ -24,8 +24,10 @@ the why):
   (`gh auth login`). The board and the whole author → dispatch → review loop work
   without it.
 
-If `claude` is missing or unauthenticated, dispatch (`d`) will look like it does
-nothing — that's the single most common first-run surprise.
+If `claude` is missing or unauthenticated, dispatch (`d`) won't start any agents —
+but it won't fail silently: the status line tells you the candidates failed to
+start and the cards get a red `⊘ suppressed` marker. That's the single most common
+first-run snag, and the board makes it visible.
 
 ## 1. Install and initialize
 
@@ -123,8 +125,9 @@ You'll see the Issues move across the board live as the agents work — the watc
 re-scans on every filesystem change, so the board reflects whatever the files now
 say.
 
-> If pressing `d` appears to do nothing, `claude` is almost certainly missing from
-> your `PATH` or unauthenticated. See
+> If pressing `d` reports that the candidates **failed to start** (and the cards
+> show a red `⊘ suppressed` marker), `claude` is almost certainly missing from your
+> `PATH` or unauthenticated. See
 > [troubleshooting](../README.md#troubleshooting).
 
 ## 5. Watch the Reactor drive it
