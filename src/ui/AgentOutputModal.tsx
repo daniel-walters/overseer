@@ -61,9 +61,11 @@ export function AgentOutputModal({
   // yields a final empty line; we drop it so it doesn't read as spurious blank output
   // (and so a single-line read with a trailing `\n` doesn't falsely show an affordance).
   const lines = output.output.replace(/\n$/, "").split("\n");
-  // "Has output" keys off the same lines we window, so the placeholder branch can't
-  // disagree with what renders. A whitespace-only read collapses to no real content.
-  const hasOutput = output.output.trim().length > 0;
+  // "Has output" keys off the same lines we window — not a separate trim() of the raw
+  // string — so the placeholder branch and the windowed render can never disagree.
+  // A whitespace-only multi-line input (e.g. "   \n\n  ") would leave trim() empty but
+  // lines non-empty; keying off lines keeps hasOutput and scrollDetail in sync.
+  const hasOutput = lines.some((l) => l.trim().length > 0);
   const rows = viewportRows ?? lines.length;
   const window = scrollDetail(lines, scrollOffset, rows);
 
