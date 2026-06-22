@@ -12,6 +12,7 @@ const issue: DispatchIssue = {
   branch: undefined,
   deviation: undefined,
   reviewVerdict: undefined,
+  slice: undefined,
   body: "Hash passwords with argon2id before persisting them.\n\n## AC\n- [ ] argon2id used",
   path: "/root/auth-system/001-password-hashing.md",
 };

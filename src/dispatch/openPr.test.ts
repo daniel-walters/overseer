@@ -3,6 +3,9 @@ import { openPrFor, createOpenPr, type OpenPrDeps } from "./openPr.js";
 import type { GitSeam } from "./gitSetup.js";
 import { featureBranchName } from "./gitSetup.js";
 import type { PrSeam, PrState } from "./linkedPr.js";
+import type { StackGitSeam, MergeRecord } from "./gitSetup.js";
+import type { SlicedIssue } from "./stackMaterializer.js";
+import { sliceBranchName } from "./gitSetup.js";
 
 /**
  * Open PR is the board's first outward GitHub write: on a `done` PRD it pushes
@@ -37,6 +40,10 @@ class FakePrSeam implements PrSeam {
     if (this.failCreate.has(repo)) throw new Error(`gh pr create failed in ${repo}`);
     return "https://gh/pr/new";
   });
+  readonly createWithBody = vi.fn(
+    (_repo: string, head: string, _base: string, _title: string, _body: string): string =>
+      `https://gh/pr/${head}`,
+  );
 
   /** Register a pre-existing PR so the orchestration's existing-PR guard fires. */
   setPr(repo: string, branch: string, state: PrState, url: string): void {
@@ -58,11 +65,27 @@ function fakeGit(base = "origin/main"): GitSeam {
 const PRD_DIR = "/root/Auth System";
 const BRANCH = featureBranchName("Auth System");
 
+/**
+ * A {@link StackGitSeam} stub for the single-PR tests (no stack), recording cuts
+ * so a test can assert the stack path was *not* taken. Stack-specific behaviour is
+ * exercised in `stackMaterializer.test.ts`; here it just needs to exist.
+ */
+function fakeStackGit(records: MergeRecord[] = []): StackGitSeam {
+  return {
+    stackMergeRecords: vi.fn(() => records),
+    createBranchAt: vi.fn(),
+    cherryPick: vi.fn(),
+  };
+}
+
 function deps(overrides: Partial<OpenPrDeps> = {}): OpenPrDeps {
   return {
     prSeam: new FakePrSeam(),
     git: fakeGit(),
     readRepos: () => ["/repos/api"],
+    stackGit: fakeStackGit(),
+    // Default: a single-slice PRD — the single-PR path, exactly as today.
+    readSlicedIssues: (): readonly SlicedIssue[] => [],
     ...overrides,
   };
 }
@@ -184,6 +207,68 @@ describe("openPrFor", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) expect(result.url).toBe("https://gh/pr/new");
+  });
+
+  it("opens exactly one PR when no Issue carries a slice (today's behaviour)", () => {
+    const prSeam = new FakePrSeam();
+    const d = deps({ prSeam, readSlicedIssues: () => [] });
+
+    const result = openPrFor(PRD_DIR, d);
+
+    expect(result.ok).toBe(true);
+    // The single-PR seam was used; the stacked-PR create was never touched.
+    expect(prSeam.create).toHaveBeenCalledTimes(1);
+    expect(prSeam.createWithBody).not.toHaveBeenCalled();
+  });
+
+  it("opens exactly one PR when every Issue shares a single slice", () => {
+    const prSeam = new FakePrSeam();
+    const d = deps({
+      prSeam,
+      readSlicedIssues: () => [
+        { id: "001.md", slice: "1-only", branch: "wt-a" },
+        { id: "002.md", slice: "1-only", branch: "wt-b" },
+      ],
+    });
+
+    const result = openPrFor(PRD_DIR, d);
+
+    expect(result.ok).toBe(true);
+    expect(prSeam.create).toHaveBeenCalledTimes(1);
+    expect(prSeam.createWithBody).not.toHaveBeenCalled();
+  });
+
+  it("materializes a stack when ≥2 distinct slices are present", () => {
+    const prSeam = new FakePrSeam();
+    const stackGit = fakeStackGit([
+      { branch: "wt-a", workCommits: ["cA"] },
+      { branch: "wt-b", workCommits: ["cB"] },
+    ]);
+    const d = deps({
+      prSeam,
+      stackGit,
+      readSlicedIssues: () => [
+        { id: "001.md", slice: "1-schema", branch: "wt-a" },
+        { id: "002.md", slice: "2-api", branch: "wt-b" },
+      ],
+    });
+
+    const result = openPrFor(PRD_DIR, d);
+
+    expect(result.ok).toBe(true);
+    // The stacked path: two chained PRs via createWithBody, never the single create.
+    expect(prSeam.create).not.toHaveBeenCalled();
+    expect(prSeam.createWithBody).toHaveBeenCalledTimes(2);
+    const s1 = sliceBranchName(BRANCH, "1-schema");
+    expect(prSeam.createWithBody).toHaveBeenCalledWith(
+      "/repos/api",
+      s1,
+      "main",
+      expect.any(String),
+      expect.stringMatching(/Part 1 of 2/),
+    );
+    // The result url is the bottom (entry-point) PR.
+    if (result.ok) expect(result.url).toBe(`https://gh/pr/${s1}`);
   });
 
   it("degrades a thrown repo read to a failed result, never crashing", () => {

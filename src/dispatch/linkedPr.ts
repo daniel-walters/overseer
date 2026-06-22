@@ -78,6 +78,22 @@ export interface PrSeam {
    * non-GitHub remote, network) so the orchestration can surface it loudly.
    */
   create(repo: string, branch: string, base: string): string;
+  /**
+   * Open a GitHub PR from `head` into `base` in `repo` with an explicit `title`
+   * and `body`, returning the new PR's url. The stacked Open PR path uses this
+   * (not {@link create}'s `--fill`) so each stacked PR's body can carry the
+   * "Part N of M — based on #prev, merge after it" metadata + a link to the prior
+   * PR (CONTEXT.md → Stacked output, ADR 0024) — `gh` has no native stacked-PR
+   * concept, so the merge order lives in the body. Throws on failure, like
+   * {@link create}, so the materializer surfaces it loudly.
+   */
+  createWithBody(
+    repo: string,
+    head: string,
+    base: string,
+    title: string,
+    body: string,
+  ): string;
 }
 
 /**
@@ -278,6 +294,35 @@ export const realPrSeam: PrSeam = {
       { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
     );
     // `gh pr create` prints the new PR's url as its last non-empty output line.
+    return out.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+  },
+
+  createWithBody(
+    repo: string,
+    head: string,
+    base: string,
+    title: string,
+    body: string,
+  ): string {
+    // The stacked-PR create: an explicit title + body (the stack metadata) rather
+    // than `--fill`, since `gh` has no native stacked-PR concept and the merge
+    // order must travel in the body. Same throw-on-failure contract as `create`.
+    const out = execFileSync(
+      "gh",
+      [
+        "pr",
+        "create",
+        "--head",
+        head,
+        "--base",
+        base,
+        "--title",
+        title,
+        "--body",
+        body,
+      ],
+      { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+    );
     return out.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
   },
 };
