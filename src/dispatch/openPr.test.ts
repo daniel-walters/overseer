@@ -75,6 +75,7 @@ function fakeStackGit(records: MergeRecord[] = []): StackGitSeam {
     stackMergeRecords: vi.fn(() => records),
     createBranchAt: vi.fn(),
     cherryPick: vi.fn(),
+    checkoutBranch: vi.fn(),
   };
 }
 

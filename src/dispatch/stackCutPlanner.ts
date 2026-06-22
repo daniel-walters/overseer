@@ -87,6 +87,7 @@ export function planStackCut(input: StackCutInput): readonly SliceBranchPlan[] {
     const label = input.sliceOf[m.issueId];
     if (label === undefined) continue; // an Issue with no slice is not in the stack
     const sliceNumber = leadingNumber(label);
+    if (Number.isNaN(sliceNumber)) continue; // malformed label (no leading digit) — skip
     let entry = bySlice.get(sliceNumber);
     if (entry === undefined) {
       entry = { name: label, pick: [] };

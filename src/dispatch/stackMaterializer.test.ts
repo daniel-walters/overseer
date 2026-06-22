@@ -36,6 +36,7 @@ class FakeStackGit implements StackGitSeam {
     const cut = this.cuts.find((c) => c.branch === branch);
     if (cut) cut.pick.push(...commits);
   });
+  readonly checkoutBranch = vi.fn();
 }
 
 /** A {@link PrSeam} recording every push + stacked PR create. */
@@ -196,6 +197,40 @@ describe("materializeStack", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toMatch(/cherry-pick|conflict/i);
+  });
+
+  it("restores HEAD to the feature branch after a failed cherry-pick", () => {
+    // createBranchAt uses git checkout -b, which moves HEAD. On failure the
+    // materializer must restore HEAD so subsequent git operations act on the
+    // right branch.
+    const git = new FakeStackGit();
+    git.records = [
+      { branch: "wt-a", workCommits: ["cA"] },
+      { branch: "wt-b", workCommits: ["cB"] },
+    ];
+    git.cherryPick.mockImplementation(() => {
+      throw new Error("cherry-pick conflict");
+    });
+    materializeStack(PRD_DIR, "/repos/api", deps({ git }));
+
+    expect(git.checkoutBranch).toHaveBeenCalledWith(
+      "/repos/api",
+      featureBranchName("stacked-prs"),
+    );
+  });
+
+  it("restores HEAD to the feature branch after a successful materialization", () => {
+    const git = new FakeStackGit();
+    git.records = [
+      { branch: "wt-a", workCommits: ["cA"] },
+      { branch: "wt-b", workCommits: ["cB"] },
+    ];
+    materializeStack(PRD_DIR, "/repos/api", deps({ git }));
+
+    expect(git.checkoutBranch).toHaveBeenCalledWith(
+      "/repos/api",
+      featureBranchName("stacked-prs"),
+    );
   });
 
   it("refuses when fewer than 2 slice branches resolve from history", () => {

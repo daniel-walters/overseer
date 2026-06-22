@@ -124,10 +124,16 @@ export function materializeStack(
 
     // Cut + replay + push each slice branch, bottom-up, before opening any PR — a
     // PR's base branch must exist on the remote first.
-    for (const slice of plan) {
-      deps.git.createBranchAt(repo, slice.branch, slice.base);
-      if (slice.pick.length > 0) deps.git.cherryPick(repo, slice.branch, slice.pick);
-      deps.prSeam.push(repo, slice.branch);
+    // createBranchAt uses `git checkout -b`, which moves HEAD; restore it afterward
+    // so the repo is left on the feature branch regardless of success or failure.
+    try {
+      for (const slice of plan) {
+        deps.git.createBranchAt(repo, slice.branch, slice.base);
+        if (slice.pick.length > 0) deps.git.cherryPick(repo, slice.branch, slice.pick);
+        deps.prSeam.push(repo, slice.branch);
+      }
+    } finally {
+      deps.git.checkoutBranch(repo, featureBranch);
     }
 
     return { ok: true, url: openChainedPrs(repo, plan, deps.prSeam) };

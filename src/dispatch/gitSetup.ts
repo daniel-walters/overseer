@@ -96,6 +96,8 @@ export interface StackGitSeam {
    * a clean cut, by the no-forward-dependency invariant — ADR 0024).
    */
   cherryPick(repo: string, branch: string, commits: readonly string[]): void;
+  /** Check out `branch` in `repo`, restoring HEAD to a known branch. */
+  checkoutBranch(repo: string, branch: string): void;
 }
 
 /** The outcome of setting up a single repo for dispatch. */
@@ -356,5 +358,9 @@ export const realStackGitSeam: StackGitSeam = {
     execFileSync("git", ["-C", repo, "cherry-pick", ...commits], {
       stdio: ["ignore", "pipe", "inherit"],
     });
+  },
+
+  checkoutBranch(repo: string, branch: string): void {
+    execFileSync("git", ["-C", repo, "checkout", branch], { stdio: "ignore" });
   },
 };

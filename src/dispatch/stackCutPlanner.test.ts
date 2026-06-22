@@ -87,6 +87,36 @@ describe("planStackCut — interleaved / parallel merge history", () => {
   });
 });
 
+describe("planStackCut — malformed slice labels", () => {
+  it("skips issues whose slice label has no leading digit (no NaN key collision)", () => {
+    // Labels like 'frontend' and 'backend' (no leading digit) must not collapse
+    // into one Map entry via parseInt('frontend') === NaN === parseInt('backend').
+    const plan = planStackCut({
+      featureBranch: FEATURE,
+      base: BASE,
+      merges: [merge("A", "wA"), merge("B", "wB")],
+      sliceOf: { A: "frontend", B: "backend" },
+    });
+
+    // Both labels are malformed (no leading digit) so they are skipped entirely.
+    expect(plan).toEqual([]);
+  });
+
+  it("accepts digit-prefixed labels and skips non-digit ones in the same input", () => {
+    // 'frontend' is skipped; '1-schema' and '2-api' produce two valid slices.
+    const plan = planStackCut({
+      featureBranch: FEATURE,
+      base: BASE,
+      merges: [merge("A", "wA"), merge("B", "wB"), merge("C", "wC")],
+      sliceOf: { A: "frontend", B: "1-schema", C: "2-api" },
+    });
+
+    expect(plan).toHaveLength(2);
+    expect(plan.map((s) => s.name)).toEqual(["1-schema", "2-api"]);
+    expect(plan.map((s) => s.pick)).toEqual([["wB"], ["wC"]]);
+  });
+});
+
 describe("planStackCut — degenerate slice counts (M = 1 / none)", () => {
   it("a single distinct slice yields one plan (the materializer falls back to one PR)", () => {
     // Whether to stack at all is the materializer's ≥2-distinct-slices gate; the
