@@ -32,12 +32,14 @@ status: ready-for-agent        # ready-for-agent (AFK) | ready-for-human (HITL)
 repo: /Users/you/code/app      # local toplevel path of the code repo this work happens in
 blocked_by:                    # list of sibling Issue filenames; omit if none
   - 001-auth.md
+slice: 2-api                   # OPTIONAL stack slice; omit unless slicing (see "Slicing judgment")
 ---
 ```
 
 - **`status`** — folded-in triage (see below). AFK slice → `ready-for-agent`; HITL slice → `ready-for-human`. There is no `backlog`/`needs-triage` limbo; an Issue is born routed.
 - **`repo`** — the **local absolute toplevel path** of the code repo where this Issue's work happens (`git rev-parse --show-toplevel`). Required for AFK Issues — the dispatcher *skips* an Issue with a missing/invalid `repo`. See "Sourcing `repo`" below.
 - **`blocked_by`** — a YAML list of **full sibling filenames** (`001-auth.md`), `NNN-` prefix included. The dispatcher reads this verbatim to gate dispatch. Omit the field entirely when there are no blockers. Blocking lives here in frontmatter, **not** in the body.
+- **`slice`** — an **optional** `N-name` stack slice (e.g. `2-api`): the number is the slice's chain position, the name the one-line concern. **Omit it entirely by default** — an absent `slice:` is today's single-PR behaviour. Emit it **only** when the "Slicing judgment" step below decides to slice, and then on **every** Issue. Authored here and only here; the board only reads it (CONTEXT.md → Slice, ADR 0024).
 
 **Body:** `## What to build` + `## Acceptance criteria` (template below). No "Parent" section — the folder is the parent.
 
@@ -86,6 +88,23 @@ Iterate until the user approves.
 ### Sourcing `repo` (triage detail)
 
 A feature may span several code repos — typically the session's working directories (the dir you launched in plus any `/add-dir`'d). A good `/overseer-grill-with-docs` + `/overseer-to-prd` session will have established which repo each slice targets; read that from context. For each candidate repo, the `repo` value is its `git rev-parse --show-toplevel`. When only one repo is in play, stamp them all the same. When a slice's repo is genuinely ambiguous, ask.
+
+### Slicing judgment (the `slice:` field)
+
+> **Word warning.** A *vertical slice* above is the tracer-bullet authoring unit (one Issue). A **Slice** here is something else: a **named, ordered group of Issues that becomes one PR in a stack** (CONTEXT.md → Slice). This step decides whether to group the Issues you just drafted into a **stack of PRs** instead of one.
+
+This is the **default-off exception**: the common case is **one PR per PRD**, so **most PRDs emit no `slice:` field at all**. Only consider slicing when **both gates pass** — fail either and you emit no `slice:` fields:
+
+1. **Too big** — the predicted whole-PRD diff would not be comfortably reviewable as one PR. Judge from a rough size estimate (anchors: ~400 lines starts to hurt; ~600+ lines or ~10+ files is worth splitting) **plus** a cognitive-load sniff test ("reviewable in one sitting?") that can override the anchors either way: don't split a 1000-line mechanical rename; do split a gnarly 350-line PR of three unrelated concerns.
+2. **Clear split** — you can group the Issues into **2–4 contiguous, one-line-nameable concerns** (e.g. `schema`, `api`, `ui`), in chain order, where the grouping respects the **no-forward-dependency invariant**: every Issue in slice N may be `blocked_by:` only Issues in slice ≤ N. A forward edge makes the stack unbuildable.
+
+When both gates pass, hand your candidate grouping to the pure **slice planner** (`src/dispatch/slicePlanner.ts` → `planSlices`) rather than numbering by hand — it verifies the invariant, applies the **soft cap of ~3–4 slices** (merging adjacent nameable groups to fit), and **falls back to a single PR** (no `slice:` fields) on any failure:
+
+- Pass it `{ tooBig: true, groups, blockedBy }`. `groups` is your ordered list of `{ name, issues, mergeable? }` (bottom-of-stack first; mark a group `mergeable: false` when folding it into a neighbour would make it un-nameable). `blockedBy` is the `blocked_by` graph keyed by Issue filename.
+- If it returns `{ sliced: false }`, **emit no `slice:` field** — that is the single-PR fallback, literally today's behaviour.
+- If it returns `{ sliced: true, assignments }`, stamp each Issue's `slice:` from `assignments[issueFilename]` (e.g. `slice: 2-api`) when you write the files below.
+
+Slicing is **orthogonal to dispatch** — every Issue still dispatches in parallel off the one feature branch (ADR 0024); the `slice:` field is read only later, at the human's Open PR keypress, to materialize the stack.
 
 ### 5. Write the Issue files
 
