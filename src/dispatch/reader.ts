@@ -62,6 +62,12 @@ export interface DispatchIssue {
    * `non-convergence`) Overseer already has from elsewhere.
    */
   readonly reviewVerdict: string | undefined;
+  /**
+   * The Issue's `slice: N-name` value (authored by overseer-to-issues), or
+   * undefined when absent/blank. Read only by the Open PR / Linked PR stack path
+   * to materialize a stack (CONTEXT.md → Slice, ADR 0024); never written.
+   */
+  readonly slice: string | undefined;
   /** The Issue's markdown body (frontmatter stripped). */
   readonly body: string;
 }
@@ -141,6 +147,9 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     // A blank verdict reads as absent, like `deviation`: only a real value puts
     // the Issue on the resolve frontier (ADR 0019).
     reviewVerdict: readPresentString(data, FIELD.reviewVerdict),
+    // A blank `slice:` reads as absent — only a real `N-name` value puts the
+    // Issue in a stack.
+    slice: readPresentString(data, FIELD.slice),
     body: content,
   };
 }

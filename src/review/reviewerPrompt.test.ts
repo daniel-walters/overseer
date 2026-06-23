@@ -13,6 +13,7 @@ const issue: DispatchIssue = {
   branch: "worktree-blue-cat-fox",
   deviation: undefined,
   reviewVerdict: undefined,
+  slice: undefined,
   body: "Hash passwords with argon2id before persisting them.",
   path: "/root/auth-system/001-password-hashing.md",
 };

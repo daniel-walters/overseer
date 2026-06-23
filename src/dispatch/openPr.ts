@@ -1,6 +1,18 @@
 import { basename, join } from "node:path";
-import { featureBranchName, realGitSeam, type GitSeam } from "./gitSetup.js";
+import {
+  featureBranchName,
+  realGitSeam,
+  realStackGitSeam,
+  type GitSeam,
+  type StackGitSeam,
+} from "./gitSetup.js";
 import { realPrSeam, realReadRepos, type PrSeam } from "./linkedPr.js";
+import {
+  isStacked,
+  materializeStack,
+  realReadSlicedIssues,
+  type SlicedIssue,
+} from "./stackMaterializer.js";
 import { errorMessage } from "../errorMessage.js";
 import type { OpenPr } from "../ui/App.js";
 
@@ -68,6 +80,20 @@ export interface OpenPrDeps {
    * from in-memory state.
    */
   readonly readRepos: (prdDir: string) => readonly string[];
+  /**
+   * The git seam the stacked-PR path drives (read merge history, cut + replay
+   * slice branches). Separate from {@link git} because stacking reads/writes the
+   * feature branch's commit graph, not just its default base. Only used when the
+   * PRD's Issues carry ≥2 distinct `slice:` values.
+   */
+  readonly stackGit: StackGitSeam;
+  /**
+   * The PRD's sliced Issues (id + `slice:` + `branch:`) — the stack gate's input.
+   * ≥2 distinct `slice:` values materializes a stack (CONTEXT.md, ADR 0024); an
+   * absent or single slice takes today's single-PR path below, untouched. The
+   * default reads each Issue's frontmatter; a test fake answers from memory.
+   */
+  readonly readSlicedIssues: (prdDir: string) => readonly SlicedIssue[];
 }
 
 /**
@@ -128,6 +154,21 @@ export function openPrFor(prdDir: string, deps: OpenPrDeps): OpenPrResult {
       };
     }
 
+    const base = prBase(deps.git.defaultBase(repo));
+
+    // When the PRD's Issues carry ≥2 distinct slices, materialize a stack instead
+    // of one PR (CONTEXT.md → Stacked output, ADR 0024). Absent or single slice
+    // falls through to the single-PR path below — literally today's behaviour, no
+    // new code path taken, all stack behaviour gated here.
+    if (isStacked(deps.readSlicedIssues(prdDir))) {
+      return materializeStack(prdDir, repo, {
+        git: deps.stackGit,
+        prSeam: deps.prSeam,
+        defaultBase: base,
+        readSlicedIssues: deps.readSlicedIssues,
+      });
+    }
+
     // Push before create: the feature branch normally only ever lived locally
     // (review merges into it locally, nothing pushes it), so `gh pr create` would
     // fail on a missing remote branch without this. A push failure throws and is
@@ -136,7 +177,7 @@ export function openPrFor(prdDir: string, deps: OpenPrDeps): OpenPrResult {
 
     // Open the PR into the repo's *resolved* default base — the same base the
     // feature branch was created from (gitSetup.defaultBase), not a hardcoded main.
-    const url = deps.prSeam.create(repo, branch, prBase(deps.git.defaultBase(repo)));
+    const url = deps.prSeam.create(repo, branch, base);
     return { ok: true, url };
   } catch (err) {
     // A `git push` / `gh pr create` failure (no auth, network, non-GitHub remote)
@@ -251,5 +292,11 @@ export function createOpenPr(root: string, deps: OpenPrDeps): OpenPr {
  * {@link import("./linkedPr.js").realLinkedPrLookup}.
  */
 export function realOpenPrDeps(): OpenPrDeps {
-  return { prSeam: realPrSeam, git: realGitSeam, readRepos: realReadRepos };
+  return {
+    prSeam: realPrSeam,
+    git: realGitSeam,
+    readRepos: realReadRepos,
+    stackGit: realStackGitSeam,
+    readSlicedIssues: realReadSlicedIssues,
+  };
 }

@@ -32,6 +32,7 @@ class FakePrSeam implements PrSeam {
   // (exercised in openPr.test.ts), present only so the fake satisfies the seam.
   readonly push = vi.fn();
   readonly create = vi.fn(() => "https://gh/pr/new");
+  readonly createWithBody = vi.fn(() => "https://gh/pr/stacked");
 
   /** Register a PR the fake should report for `repo` + `branch`. */
   setPr(repo: string, branch: string, state: PrState, url: string): void {
@@ -137,6 +138,7 @@ describe("createLinkedPrLookup", () => {
       },
       push: () => {},
       create: () => "",
+      createWithBody: () => "",
     };
     const lookup = createLinkedPrLookup({
       seam,
