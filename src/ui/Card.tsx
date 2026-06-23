@@ -150,6 +150,27 @@ const LINKED_PR_MARKER: Record<LinkedPr["state"], { text: string; color: string 
 };
 
 /**
+ * Resolve a `done` PRD's {@link LinkedPr} to its card marker (text + color),
+ * collapsing the single-PR and stacked cases into one line. A **stacked** overlay
+ * (ADR 0025) reads as an aggregate `N/M merged` count instead of the three-state
+ * word: green once the whole stack has landed (N = M — the `merged` headline,
+ * mirroring a single merged PR's "good, done" green), else cyan while any slice is
+ * still unmerged (the in-progress reading, mirroring a single open PR's neutral
+ * cyan). A **single-PR** overlay (no `stack`) keeps exactly the three-state
+ * {@link LINKED_PR_MARKER} — the M = 1 collapse, byte-identical to today.
+ */
+function linkedPrMarker(linkedPr: LinkedPr): { text: string; color: string } {
+  if (linkedPr.stack) {
+    const { merged, total } = linkedPr.stack;
+    return {
+      text: `${merged}/${total} merged`,
+      color: linkedPr.state === "merged" ? "green" : "cyan",
+    };
+  }
+  return LINKED_PR_MARKER[linkedPr.state];
+}
+
+/**
  * The needs-review marker on a PRD card with ≥1 Issue in `human-review`, following
  * the same own-line truncating idiom as the other markers (CONTEXT.md). Yellow and
  * `⚠` place it in the "needs a human" warning family — the same family as the
@@ -277,13 +298,15 @@ export function Card({
       {linkedPr && !needsReview && (
         // Its own truncating line — a `done` PRD's Linked PR overlay. A PRD-level
         // marker (the Issue-level fields above are never set on a PRD card), so it
-        // co-renders with none of them; cyan for open, green for merged (ADR 0013).
+        // co-renders with none of them; cyan for open, green for merged (ADR 0013),
+        // or the aggregate `N/M merged` count for a stacked PRD (ADR 0025) —
+        // {@link linkedPrMarker} resolves which.
         // The `!needsReview` guard is the last line of defence between the two
         // PRD-level markers: their lanes are disjoint (Linked PR is `done`-only,
         // needs-review implies not-`done`), so the scanner never co-sets them, but
         // even handed both the card reads as one coherent state — needs-review wins.
-        <Text wrap="truncate-end" color={LINKED_PR_MARKER[linkedPr.state].color}>
-          {LINKED_PR_MARKER[linkedPr.state].text}
+        <Text wrap="truncate-end" color={linkedPrMarker(linkedPr).color}>
+          {linkedPrMarker(linkedPr).text}
         </Text>
       )}
       {needsReview && (
