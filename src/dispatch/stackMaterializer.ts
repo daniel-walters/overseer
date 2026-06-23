@@ -186,13 +186,14 @@ function openChainedPrs(
   const total = plan.length;
   const urls: string[] = [];
   plan.forEach((slice, index) => {
+    const position = index + 1;
     const priorUrl = index === 0 ? undefined : urls[index - 1];
     const url = prSeam.createWithBody(
       repo,
       slice.branch,
       slice.base,
-      stackTitle(slice, total),
-      stackBody(slice, total, priorUrl),
+      stackTitle(slice, position, total),
+      stackBody(slice, position, total, priorUrl),
     );
     urls.push(url);
   });
@@ -216,8 +217,8 @@ export function realReadSlicedIssues(prdDir: string): readonly SlicedIssue[] {
 }
 
 /** The stacked PR's title: its slice name + position, e.g. `2-api (part 2 of 3)`. */
-function stackTitle(slice: SliceBranchPlan, total: number): string {
-  return `${slice.name} (part ${slice.sliceNumber} of ${total})`;
+function stackTitle(slice: SliceBranchPlan, position: number, total: number): string {
+  return `${slice.name} (part ${position} of ${total})`;
 }
 
 /**
@@ -228,10 +229,11 @@ function stackTitle(slice: SliceBranchPlan, total: number): string {
  */
 function stackBody(
   slice: SliceBranchPlan,
+  position: number,
   total: number,
   priorUrl: string | undefined,
 ): string {
-  const header = `Part ${slice.sliceNumber} of ${total}`;
+  const header = `Part ${position} of ${total}`;
   if (priorUrl === undefined) {
     return `${header} — base of the stack, merge this first.`;
   }

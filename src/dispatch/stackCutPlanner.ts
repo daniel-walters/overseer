@@ -54,7 +54,7 @@ export interface StackCutInput {
  * branch reconstructs exactly its own Issues' work and nothing else.
  */
 export interface SliceBranchPlan {
-  /** The slice's 1-based position in the chain. */
+  /** The leading integer from the `slice: N-name` label (e.g. 2 for `2-api`). */
   readonly sliceNumber: number;
   /** The slice's `N-name` label (its `slice:` value), for the PR title/body. */
   readonly name: string;

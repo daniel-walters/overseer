@@ -157,6 +157,33 @@ describe("materializeStack", () => {
     expect(prSeam.created[1]!.body).toContain(prSeam.created[0]!.url);
   });
 
+  it("uses 1-based position in Part N of M even when slice labels are non-contiguous", () => {
+    // Slice labels "1-schema" and "3-ui" (gap: no "2-*") must produce
+    // "Part 1 of 2" and "Part 2 of 2", not "Part 1 of 2" / "Part 3 of 2".
+    const git = new FakeStackGit();
+    git.records = [
+      { branch: "wt-a", workCommits: ["cA"] },
+      { branch: "wt-b", workCommits: ["cB"] },
+    ];
+    const prSeam = new FakeStackPr();
+    materializeStack(
+      PRD_DIR,
+      "/repos/api",
+      deps({
+        git,
+        prSeam,
+        readSlicedIssues: () => [
+          { id: "001-schema.md", slice: "1-schema", branch: "wt-a" },
+          { id: "002-ui.md", slice: "3-ui", branch: "wt-b" },
+        ],
+      }),
+    );
+
+    expect(prSeam.created[0]!.body).toMatch(/Part 1 of 2/);
+    expect(prSeam.created[1]!.body).toMatch(/Part 2 of 2/);
+    expect(prSeam.created[1]!.body).not.toMatch(/Part 3 of 2/);
+  });
+
   it("returns the bottom PR's url (the stack's entry point)", () => {
     const git = new FakeStackGit();
     git.records = [
