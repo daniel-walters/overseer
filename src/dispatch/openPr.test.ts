@@ -272,6 +272,27 @@ describe("openPrFor", () => {
     if (result.ok) expect(result.url).toBe(`https://gh/pr/${s1}`);
   });
 
+  it("refuses to re-open a stack when the bottom slice branch already has a PR", () => {
+    // For a stacked PRD the duplicate-PR guard checks the bottom slice branch (where
+    // materializeStack opens the entry-point PR), not the feature branch (which never
+    // has a PR after a stack materialization).
+    const prSeam = new FakePrSeam();
+    const s1 = sliceBranchName(BRANCH, "1-schema");
+    prSeam.setPr("/repos/api", s1, "OPEN", "https://gh/pr/1");
+    const d = deps({
+      prSeam,
+      readSlicedIssues: () => [
+        { id: "001.md", slice: "1-schema", branch: "wt-a" },
+        { id: "002.md", slice: "2-api", branch: "wt-b" },
+      ],
+    });
+
+    const result = openPrFor(PRD_DIR, d);
+
+    expect(result.ok).toBe(false);
+    expect(prSeam.createWithBody).not.toHaveBeenCalled();
+  });
+
   it("degrades a thrown repo read to a failed result, never crashing", () => {
     const prSeam = new FakePrSeam();
     const d = deps({
