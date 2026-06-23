@@ -62,6 +62,16 @@ export interface DispatchIssue {
    * `non-convergence`) Overseer already has from elsewhere.
    */
   readonly reviewVerdict: string | undefined;
+  /**
+   * The previous review pass's findings ledger (ADR 0024): a one-line summary
+   * of what a `findings`-exit pass found and fixed, so the next fresh pass can
+   * confirm closure before its own review. Agent-written, like {@link deviation}
+   * — the only channel a detached reviewer has back to Overseer is the Issue
+   * file. Each findings exit overwrites it (last-pass-only), and a blank value
+   * reads as absent (`undefined`); a first pass with none simply omits the
+   * confirm step from its prompt.
+   */
+  readonly reviewFindings: string | undefined;
   /** The Issue's markdown body (frontmatter stripped). */
   readonly body: string;
 }
@@ -141,6 +151,10 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     // A blank verdict reads as absent, like `deviation`: only a real value puts
     // the Issue on the resolve frontier (ADR 0019).
     reviewVerdict: readPresentString(data, FIELD.reviewVerdict),
+    // The prior pass's findings ledger (ADR 0024). Blank reads as absent, like
+    // `deviation`: a first pass (or one a previous reviewer never wrote) simply
+    // carries no confirm-closure step into the next prompt.
+    reviewFindings: readPresentString(data, FIELD.reviewFindings),
     body: content,
   };
 }

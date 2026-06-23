@@ -30,6 +30,7 @@ export const FIELD = {
   branch: "branch",
   deviation: "deviation",
   reviewVerdict: "review_verdict",
+  reviewFindings: "review_findings",
   blockedBy: "blocked_by",
   humanReviewReason: "human_review_reason",
   humanReviewNote: "human_review_note",

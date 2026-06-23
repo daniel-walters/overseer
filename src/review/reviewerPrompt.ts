@@ -1,4 +1,4 @@
-import type { DispatchIssue } from "../dispatch/reader.js";
+import { hasValue, type DispatchIssue } from "../dispatch/reader.js";
 import type { ReviewConfig } from "./reviewConfig.js";
 
 /**
@@ -51,8 +51,21 @@ export interface ReviewerPromptInput {
  *   frontmatter, leave the status untouched, and stop. The agent does NOT merge
  *   and does NOT write a terminal status — Overseer reads the verdict, merges the
  *   worktree branch into the PRD feature branch, and marks the Issue `done`.
- * - **Findings** → fix them, commit to the worktree, set `status:
- *   ready-for-review`, and stop, so the Reactor spawns the next pass.
+ * - **Findings** → fix them, commit to the worktree, record a one-line
+ *   `review_findings` summary of what was fixed, set `status: ready-for-review`,
+ *   and stop, so the Reactor spawns the next pass.
+ *
+ * That `review_findings` summary is the findings ledger (ADR 0024): a fresh pass
+ * reviews honestly precisely *because* it did not write the code, but blind to
+ * what the prior pass flagged it cannot confirm those fixes actually landed. When
+ * the Issue carries a prior pass's `review_findings`, the template grows a
+ * "confirm the previous pass" section folding it in, so the new agent verifies
+ * each is genuinely resolved (and that no fix regressed) as part of its own
+ * review. The ledger is last-pass-only — each findings exit overwrites it — so
+ * the section is absent on the first pass (no prior findings) and after a clean
+ * pass it is never read (the clean exit is terminal). It rides the Issue
+ * frontmatter, the only channel a detached `--bg` reviewer has back to Overseer,
+ * exactly as the implementor's `deviation` does.
  *
  * The cap / non-convergence escalation lives in the Reactor, not here, so the
  * prompt never counts passes or names the cap. The agent no longer reasons about
@@ -65,6 +78,27 @@ export function buildReviewerPrompt(input: ReviewerPromptInput): string {
   // The /code-review skill names effort in lowercase; the prompt has long
   // written it in caps for emphasis, so uppercase the configured value to match.
   const effortLabel = effort.toUpperCase();
+
+  // The findings ledger (ADR 0024): when a prior pass recorded what it fixed,
+  // fold it in so this fresh agent confirms closure. Absent on the first pass —
+  // a blank/missing field reads as undefined, so the section simply drops out and
+  // the first pass is byte-for-byte the pre-ledger prompt. Placed after the
+  // `/code-review` step so the review-before-fix ordering is undisturbed.
+  const priorFindingsSection = hasValue(issue.reviewFindings)
+    ? `
+
+## Confirm the previous pass
+
+A previous review pass reported and addressed the findings below, then handed the
+work back. You did not write those fixes, so confirm them: as part of the review
+above, verify each is genuinely resolved in the code you inherited, and that no
+fix introduced a regression. Treat anything still open, or any regression, as a
+finding of this pass.
+
+Previous pass's findings:
+
+${issue.reviewFindings}`
+    : "";
 
   return `You are an autonomous reviewer agent dispatched by Overseer.
 
@@ -106,7 +140,7 @@ these — never guess or rederive them:
    ${effortLabel} effort on the worktree exactly as inherited. Reviewing before
    you touch the code is what keeps the review honest — you never grade your own
    fixes.
-3. Then take exactly one exit below based on what the review reported.
+3. Then take exactly one exit below based on what the review reported.${priorFindingsSection}
 
 ## How to finish
 
@@ -125,7 +159,12 @@ Take exactly one of these two exits:
 
 - FINDINGS EXIT — the review reported one or more findings. Fix every finding,
   committing the fixes to the worktree (${issue.worktree}) as you go. Do NOT
-  re-review your own fixes. Then set \`status: ready-for-review\` on the Issue and
-  stop. Overseer picks it back up and a fresh agent reviews your fixes in the next
-  pass.`;
+  re-review your own fixes. Then, in a single edit to the Issue frontmatter, set
+  \`status: ready-for-review\` AND set \`review_findings\` to a one-line summary of
+  the findings you fixed this pass, written as a double-quoted string on one line
+  (e.g. \`review_findings: "Unvalidated input in parser; missing test for the
+  empty-list case"\`). Keep it to one line and quote it so the frontmatter stays
+  valid YAML. That summary lets the fresh agent on the next pass confirm your
+  fixes actually landed. Then stop — Overseer picks it back up and a fresh agent
+  reviews your fixes in the next pass.`;
 }
