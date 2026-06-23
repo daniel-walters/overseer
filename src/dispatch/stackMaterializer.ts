@@ -75,7 +75,9 @@ export function isStacked(issues: readonly SlicedIssue[]): boolean {
   const distinct = new Set<string>();
   for (const issue of issues) {
     const slice = issue.slice.trim();
-    if (slice) distinct.add(slice);
+    // Require a leading digit (matching orderedSliceLabels/planStackCut's NaN
+    // guard) so a malformed label like "frontend" never activates the stack path.
+    if (slice && !Number.isNaN(Number.parseInt(slice, 10))) distinct.add(slice);
   }
   return distinct.size >= 2;
 }

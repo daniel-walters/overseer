@@ -62,6 +62,12 @@ export interface OpenPrPreviewData {
   readonly branch: string;
   /** The resolved default base the PR opens into (not a hardcoded `main`). */
   readonly base: string;
+  /**
+   * The number of slices in the stack, when the PRD will open a stack (≥2
+   * distinct `slice:` values). Absent for single-PR PRDs — the preview renders
+   * differently so the user sees "N stacked PRs" rather than one push/create.
+   */
+  readonly sliceCount?: number;
   /** Whether the action can proceed, or why it is refused. */
   readonly eligibility:
     | { readonly canOpen: true }
@@ -266,7 +272,10 @@ function resolveEligibility(
     );
   }
 
-  return { prdTitle, branch, base, eligibility: { canOpen: true } };
+  const sliceCount = stackedPreview
+    ? orderedSliceLabels(slicedIssues.map((i) => i.slice)).length
+    : undefined;
+  return { prdTitle, branch, base, sliceCount, eligibility: { canOpen: true } };
 }
 
 /**

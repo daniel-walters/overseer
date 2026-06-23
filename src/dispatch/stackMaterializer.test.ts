@@ -297,4 +297,17 @@ describe("isStacked", () => {
       ]),
     ).toBe(false);
   });
+
+  it("is false for non-numeric labels without a leading digit (malformed — would error in planStackCut)", () => {
+    // Malformed labels like 'frontend'/'backend' have no leading digit and are
+    // dropped by orderedSliceLabels/planStackCut. isStacked must apply the same
+    // guard so a malformed-label PRD takes the single-PR path, not the stack
+    // path that would then error.
+    expect(
+      isStacked([
+        { id: "1.md", slice: "frontend", branch: "a" },
+        { id: "2.md", slice: "backend", branch: "b" },
+      ]),
+    ).toBe(false);
+  });
 });
