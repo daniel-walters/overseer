@@ -181,8 +181,12 @@ export function createLinkedPrLookup(deps: LinkedPrLookupDeps): LinkedPrLookup {
       // The stack gate (ADR 0025): ≥2 distinct slices means Open PR materialized a
       // chain of slice PRs, so query each derived slice branch and roll them up.
       // One (or no) distinct slice is the M = 1 collapse — the single feature
-      // branch below, exactly today's three-state path.
-      const sliceLabels = orderedSliceLabels(deps.readSlices?.(prdDir) ?? []);
+      // branch below, exactly today's three-state path. Cap at STACK_QUERY_CAP to
+      // bound the blocking shell-outs on the render-loop scan path.
+      const sliceLabels = orderedSliceLabels(deps.readSlices?.(prdDir) ?? []).slice(
+        0,
+        STACK_QUERY_CAP,
+      );
       if (sliceLabels.length >= 2) {
         const states = sliceLabels.map((label) =>
           deps.seam.query(repo, sliceBranchName(feature, label)),
@@ -240,12 +244,42 @@ export function realReadSlices(prdDir: string): readonly string[] {
  * real per-PRD repo read, and the real per-PRD slice read — the one the CLI passes
  * to `scanBoard`. A thin convenience over {@link createLinkedPrLookup} so the
  * wiring site need not name the default seams.
+ *
+ * The two reads ({@link realReadRepos} and {@link realReadSlices}) each call
+ * `readDispatchView`, which reads every Issue file from disk. To avoid reading the
+ * same Issue files twice per scan tick, this shares a single `readDispatchView`
+ * result between both reads within a single `prdDir` invocation via a one-slot
+ * cache keyed on `prdDir` (the lookup is called once per `done` PRD per scan).
  */
 export function realLinkedPrLookup(): LinkedPrLookup {
+  // One-slot cache: the two reads (repos + slices) fire in sequence for the same
+  // prdDir within a single lookup call, so a single cached view covers both.
+  let cachedDir: string | undefined;
+  let cachedView: ReturnType<typeof readDispatchView> | undefined;
+  function getView(prdDir: string) {
+    if (cachedDir !== prdDir) {
+      cachedView = readDispatchView(prdDir);
+      cachedDir = prdDir;
+    }
+    return cachedView!;
+  }
   return createLinkedPrLookup({
     seam: realPrSeam,
-    readRepos: realReadRepos,
-    readSlices: realReadSlices,
+    readRepos: (prdDir) => {
+      const seen = new Set<string>();
+      for (const issue of getView(prdDir).issues) {
+        const repo = issue.repo?.trim();
+        if (repo) seen.add(repo);
+      }
+      return [...seen];
+    },
+    readSlices: (prdDir) => {
+      const slices: string[] = [];
+      for (const issue of getView(prdDir).issues) {
+        if (issue.slice !== undefined) slices.push(issue.slice);
+      }
+      return slices;
+    },
   });
 }
 
@@ -257,6 +291,15 @@ export function realLinkedPrLookup(): LinkedPrLookup {
  * the cap fails safe: a slow query costs at most this delay, never a frozen board.
  */
 const QUERY_TIMEOUT_MS = 3000;
+
+/**
+ * Maximum number of slice-branch queries issued per stacked PRD per scan tick.
+ * Each query is a blocking `gh pr list` shell-out capped at {@link QUERY_TIMEOUT_MS}.
+ * The slice planner's soft cap is 4 slices, so this is a safety ceiling that
+ * prevents unbounded blocking on the render loop if a PRD was authored with more
+ * distinct `slice:` values than the planner would normally allow.
+ */
+const STACK_QUERY_CAP = 8;
 
 /**
  * Cap on captured stdout. A branch's PR list is tiny (at most a handful of rows),
