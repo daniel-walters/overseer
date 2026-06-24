@@ -272,12 +272,33 @@ export type Liveness = "live" | "unknown" | "orphaned";
  * Three-state, with *no PR* being the overlay's **absence** (no marker): only an
  * *open* and a *merged* PR carry a value. A closed-unmerged PR folds into *no PR*
  * (the marker disappears), so it is deliberately not a fourth state. The `url` is
- * what the `go to PR` keybind opens (a later slice). Opening/merging a PR never
- * changes the PRD's derived lane (ADR 0003) — this is a pure overlay.
+ * what the `go to PR` keybind opens. Opening/merging a PR never changes the PRD's
+ * derived lane (ADR 0003) — this is a pure overlay.
+ *
+ * When the PRD opened a **stack** (its Issues carried ≥2 distinct `slice:` values,
+ * so Open PR materialized a chain of slice PRs — CONTEXT.md → Stacked output, ADR
+ * 0025), the overlay rolls all the slice PRs' states into the {@link stack}
+ * aggregate. There is no single PR then: `state` carries the aggregate's headline
+ * (`merged` only when the whole stack has landed — N = M; `open` while any slice
+ * is still unmerged — 0 ≤ N < M, the *in-progress* reading), and `url` points at
+ * the **bottom** PR (slice 1, the stack's entry point a human merges first and
+ * `go to PR` opens). The single-PR case is exactly the M = 1 collapse of this
+ * aggregate, and there {@link stack} is absent — the marker reads as today's plain
+ * three states, no count.
  */
 export interface LinkedPr {
   readonly state: "open" | "merged";
   readonly url: string;
+  /**
+   * The stack roll-up, present **only** when the PRD opened a stack of ≥2 slice
+   * PRs (M ≥ 2): `merged` of `total` slice PRs have landed. The card renders it as
+   * an `N/M merged` signal instead of the plain three-state marker, and the PRD
+   * reads as fully landed only at `merged === total` — any `merged < total` is the
+   * *in-progress* reading even though every Issue (and so the PRD's lane) is
+   * `done`. Absent for the single-PR (M = 1) case, which keeps exactly today's
+   * three-state marker.
+   */
+  readonly stack?: { readonly merged: number; readonly total: number };
 }
 
 export interface Issue {

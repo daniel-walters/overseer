@@ -282,7 +282,7 @@ export const realGitSeam: GitSeam = {
 };
 
 /** Matches git's default `--no-ff` merge-commit subject to recover the source branch. */
-const MERGE_SUBJECT = /^Merge branch '([^']+)'/;
+const MERGE_SUBJECT = /^Merge branch '([^']+)'/i;
 /** Cap on captured `git log` stdout when reading the merge history (fail-safe). */
 const STACK_MAX_BUFFER = 16 * 1024 * 1024;
 
@@ -345,9 +345,22 @@ export const realStackGitSeam: StackGitSeam = {
     // Create and check out the slice branch at its base, so the subsequent
     // cherry-pick replays onto it. Bottom-up cutting means each base (the prior
     // slice's branch) already exists when this runs.
-    execFileSync("git", ["-C", repo, "checkout", "-b", branch, startPoint], {
-      stdio: "ignore",
-    });
+    // On retry after a partial failure the branch may already exist locally;
+    // use `git checkout` (not `-b`) in that case so the seam is idempotent.
+    try {
+      execFileSync(
+        "git",
+        ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+        { stdio: "ignore" },
+      );
+      // Branch exists — just check it out (don't re-create it).
+      execFileSync("git", ["-C", repo, "checkout", branch], { stdio: "ignore" });
+    } catch {
+      // Branch doesn't exist — create it at the start point.
+      execFileSync("git", ["-C", repo, "checkout", "-b", branch, startPoint], {
+        stdio: "ignore",
+      });
+    }
   },
 
   cherryPick(repo: string, branch: string, commits: readonly string[]): void {

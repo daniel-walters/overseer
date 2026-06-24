@@ -72,10 +72,12 @@ export type StackResult =
  * the Open PR orchestration can branch on it before reaching for this module.
  */
 export function isStacked(issues: readonly SlicedIssue[]): boolean {
-  const distinct = new Set<string>();
+  const distinct = new Set<number>();
   for (const issue of issues) {
-    const slice = issue.slice.trim();
-    if (slice) distinct.add(slice);
+    const n = Number.parseInt(issue.slice.trim(), 10);
+    // Require a leading digit (matching orderedSliceLabels/planStackCut's NaN
+    // guard) so a malformed label like "frontend" never activates the stack path.
+    if (!Number.isNaN(n)) distinct.add(n);
   }
   return distinct.size >= 2;
 }
