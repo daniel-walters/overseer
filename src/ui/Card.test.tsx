@@ -282,6 +282,33 @@ describe("Card linked-PR marker", () => {
     expect(frame).not.toMatch(/PR open|PR merged/);
     expect(frame).toContain("Unopened");
   });
+
+  it("renders an N/M merged signal for a stacked PRD instead of the three-state marker", () => {
+    // A stack has no single PR — the card shows the aggregate `N/M merged` count
+    // (ADR 0025), not the plain `PR open`/`PR merged` marker.
+    const frame = frameOf(
+      <Card
+        title="Stacked"
+        linkedPr={{ state: "open", url: "https://gh/1", stack: { merged: 2, total: 3 } }}
+      />,
+    );
+
+    expect(frame).toContain("2/3 merged");
+    expect(frame).not.toContain("PR open");
+    expect(frame).toContain("Stacked");
+  });
+
+  it("reads a fully-landed stack (N = M) as its complete N/M merged count", () => {
+    const frame = frameOf(
+      <Card
+        title="Landed"
+        linkedPr={{ state: "merged", url: "https://gh/1", stack: { merged: 3, total: 3 } }}
+      />,
+    );
+
+    expect(frame).toContain("3/3 merged");
+    expect(frame).toContain("Landed");
+  });
 });
 
 describe("Card review-pass marker", () => {

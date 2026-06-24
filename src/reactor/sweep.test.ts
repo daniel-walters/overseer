@@ -14,6 +14,7 @@ function issue(over: Partial<DispatchIssue> & { id: string }): DispatchIssue {
     branch: undefined,
     deviation: undefined,
     reviewVerdict: undefined,
+    slice: undefined,
     body: "",
     ...over,
   };

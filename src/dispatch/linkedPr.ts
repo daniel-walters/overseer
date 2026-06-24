@@ -1,7 +1,8 @@
 import { execFileSync } from "node:child_process";
 import { basename } from "node:path";
-import { featureBranchName } from "./gitSetup.js";
+import { featureBranchName, sliceBranchName } from "./gitSetup.js";
 import { readDispatchView } from "./reader.js";
+import { orderedSliceLabels, rollUpStack } from "./overlayAggregate.js";
 import type { LinkedPr } from "../model.js";
 
 /**
@@ -78,6 +79,22 @@ export interface PrSeam {
    * non-GitHub remote, network) so the orchestration can surface it loudly.
    */
   create(repo: string, branch: string, base: string): string;
+  /**
+   * Open a GitHub PR from `head` into `base` in `repo` with an explicit `title`
+   * and `body`, returning the new PR's url. The stacked Open PR path uses this
+   * (not {@link create}'s `--fill`) so each stacked PR's body can carry the
+   * "Part N of M — based on #prev, merge after it" metadata + a link to the prior
+   * PR (CONTEXT.md → Stacked output, ADR 0024) — `gh` has no native stacked-PR
+   * concept, so the merge order lives in the body. Throws on failure, like
+   * {@link create}, so the materializer surfaces it loudly.
+   */
+  createWithBody(
+    repo: string,
+    head: string,
+    base: string,
+    title: string,
+    body: string,
+  ): string;
 }
 
 /**
@@ -111,6 +128,16 @@ export interface LinkedPrLookupDeps {
    * lookup queries only when this yields exactly one.
    */
   readonly readRepos: (prdDir: string) => readonly string[];
+  /**
+   * The PRD's per-Issue `slice:` labels (several Issues may share a slice), the
+   * stack gate's input (ADR 0025). The default reads each Issue's frontmatter; a
+   * test fake answers from in-memory state. When this folds to **≥2 distinct
+   * slices**, the lookup takes the stack-aware path — deriving each slice branch
+   * from the labels and querying each — instead of the single feature-branch
+   * query. Absent or single-slice takes exactly today's path (the M = 1 collapse),
+   * so omitting it (or returning none) is the unchanged single-PR behaviour.
+   */
+  readonly readSlices?: (prdDir: string) => readonly string[];
 }
 
 /**
@@ -123,11 +150,22 @@ export interface LinkedPrLookupDeps {
  * 0013) — a PR opened, merged, or closed outside Overseer is reflected on the
  * next scan.
  *
+ * **Stack-aware (ADR 0025):** when the PRD opened a stack — its Issues carry **≥2
+ * distinct `slice:` values** — there is no single feature-branch PR to surface.
+ * The lookup then derives each slice branch from the `slice:` labels + the
+ * feature-branch scheme ({@link sliceBranchName} — the exact names Open PR
+ * pushed), queries each through the seam, and folds them with {@link rollUpStack}
+ * to the aggregate `N/M merged` overlay (`url` = the bottom PR, the entry point
+ * `go to PR` opens). Nothing is stored: the branch identities are re-derived each
+ * scan, exactly as the single feature branch is (ADR 0013). Absent or single
+ * `slice:` is the M = 1 collapse — exactly today's single feature-branch query.
+ *
  * Total by construction: a multi-repo or repo-less PRD (no single feature-branch
  * PR to surface in v1) yields no overlay without shelling out, and any failure —
- * a thrown repo read (the watched root deleting the PRD mid-scan) or a thrown
- * `gh` query (missing, unauthed, non-GitHub remote, network) — degrades to *no
- * PR* (no marker), never an error state, hang, or crash (ADR 0013).
+ * a thrown repo read, a thrown slice read (the watched root deleting the PRD
+ * mid-scan), or a thrown `gh` query (missing, unauthed, non-GitHub remote,
+ * network) — degrades to *no PR* (no marker), never an error state, hang, or
+ * crash (ADR 0013).
  */
 export function createLinkedPrLookup(deps: LinkedPrLookupDeps): LinkedPrLookup {
   return (prdDir: string): LinkedPr | undefined => {
@@ -138,11 +176,28 @@ export function createLinkedPrLookup(deps: LinkedPrLookupDeps): LinkedPrLookup {
       // repo-less PRD has nothing to query. Either way, no overlay, no shell-out.
       const [repo, ...rest] = repos;
       if (repo === undefined || rest.length > 0) return undefined;
-      const branch = featureBranchName(basename(prdDir));
-      return deriveLinkedPr(deps.seam, repo, branch);
+      const feature = featureBranchName(basename(prdDir));
+
+      // The stack gate (ADR 0025): ≥2 distinct slices means Open PR materialized a
+      // chain of slice PRs, so query each derived slice branch and roll them up.
+      // One (or no) distinct slice is the M = 1 collapse — the single feature
+      // branch below, exactly today's three-state path. Cap at STACK_QUERY_CAP to
+      // bound the blocking shell-outs on the render-loop scan path.
+      const sliceLabels = orderedSliceLabels(deps.readSlices?.(prdDir) ?? []).slice(
+        0,
+        STACK_QUERY_CAP,
+      );
+      if (sliceLabels.length >= 2) {
+        const states = sliceLabels.map((label) =>
+          deps.seam.query(repo, sliceBranchName(feature, label)),
+        );
+        return rollUpStack(states);
+      }
+
+      return deriveLinkedPr(deps.seam, repo, feature);
     } catch {
-      // A repo read that threw (the PRD vanished mid-scan) or a query that threw
-      // (a `gh` failure the seam didn't itself absorb) degrades to no marker —
+      // A repo/slice read that threw (the PRD vanished mid-scan) or a query that
+      // threw (a `gh` failure the seam didn't itself absorb) degrades to no marker —
       // never out of the scan, never an error state on the card (ADR 0013).
       return undefined;
     }
@@ -167,13 +222,65 @@ export function realReadRepos(prdDir: string): readonly string[] {
 }
 
 /**
- * Build the production Linked PR overlay lookup wired to the real `gh` seam and
- * the real per-PRD repo read — the one the CLI passes to `scanBoard`. A thin
- * convenience over {@link createLinkedPrLookup} so the wiring site need not name
- * both default seams.
+ * The production `readSlices`: each Issue's `slice:` value (omitting Issues with
+ * no `slice:`), read via the dispatch reader — the same frontmatter Open PR's
+ * stack materializer reads to decide whether to materialize a stack. The lookup
+ * folds these per-Issue labels to the distinct slices (one branch per slice), so
+ * a PRD whose Issues carry ≥2 distinct slices takes the stack-aware overlay; an
+ * un-sliced PRD reports none and falls through to the single feature-branch query.
+ * Wrapped by the lookup's try/catch, so a PRD that vanished mid-scan (the read
+ * throwing) degrades to no marker rather than out of the scan.
+ */
+export function realReadSlices(prdDir: string): readonly string[] {
+  const slices: string[] = [];
+  for (const issue of readDispatchView(prdDir).issues) {
+    if (issue.slice !== undefined) slices.push(issue.slice);
+  }
+  return slices;
+}
+
+/**
+ * Build the production Linked PR overlay lookup wired to the real `gh` seam, the
+ * real per-PRD repo read, and the real per-PRD slice read — the one the CLI passes
+ * to `scanBoard`. A thin convenience over {@link createLinkedPrLookup} so the
+ * wiring site need not name the default seams.
+ *
+ * The two reads ({@link realReadRepos} and {@link realReadSlices}) each call
+ * `readDispatchView`, which reads every Issue file from disk. To avoid reading the
+ * same Issue files twice per scan tick, this shares a single `readDispatchView`
+ * result between both reads within a single `prdDir` invocation via a one-slot
+ * cache keyed on `prdDir` (the lookup is called once per `done` PRD per scan).
  */
 export function realLinkedPrLookup(): LinkedPrLookup {
-  return createLinkedPrLookup({ seam: realPrSeam, readRepos: realReadRepos });
+  // One-slot cache: the two reads (repos + slices) fire in sequence for the same
+  // prdDir within a single lookup call, so a single cached view covers both.
+  let cachedDir: string | undefined;
+  let cachedView: ReturnType<typeof readDispatchView> | undefined;
+  function getView(prdDir: string) {
+    if (cachedDir !== prdDir) {
+      cachedView = readDispatchView(prdDir);
+      cachedDir = prdDir;
+    }
+    return cachedView!;
+  }
+  return createLinkedPrLookup({
+    seam: realPrSeam,
+    readRepos: (prdDir) => {
+      const seen = new Set<string>();
+      for (const issue of getView(prdDir).issues) {
+        const repo = issue.repo?.trim();
+        if (repo) seen.add(repo);
+      }
+      return [...seen];
+    },
+    readSlices: (prdDir) => {
+      const slices: string[] = [];
+      for (const issue of getView(prdDir).issues) {
+        if (issue.slice !== undefined) slices.push(issue.slice);
+      }
+      return slices;
+    },
+  });
 }
 
 /**
@@ -184,6 +291,15 @@ export function realLinkedPrLookup(): LinkedPrLookup {
  * the cap fails safe: a slow query costs at most this delay, never a frozen board.
  */
 const QUERY_TIMEOUT_MS = 3000;
+
+/**
+ * Maximum number of slice-branch queries issued per stacked PRD per scan tick.
+ * Each query is a blocking `gh pr list` shell-out capped at {@link QUERY_TIMEOUT_MS}.
+ * The slice planner's soft cap is 4 slices, so this is a safety ceiling that
+ * prevents unbounded blocking on the render loop if a PRD was authored with more
+ * distinct `slice:` values than the planner would normally allow.
+ */
+const STACK_QUERY_CAP = 8;
 
 /**
  * Cap on captured stdout. A branch's PR list is tiny (at most a handful of rows),
@@ -278,6 +394,35 @@ export const realPrSeam: PrSeam = {
       { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
     );
     // `gh pr create` prints the new PR's url as its last non-empty output line.
+    return out.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
+  },
+
+  createWithBody(
+    repo: string,
+    head: string,
+    base: string,
+    title: string,
+    body: string,
+  ): string {
+    // The stacked-PR create: an explicit title + body (the stack metadata) rather
+    // than `--fill`, since `gh` has no native stacked-PR concept and the merge
+    // order must travel in the body. Same throw-on-failure contract as `create`.
+    const out = execFileSync(
+      "gh",
+      [
+        "pr",
+        "create",
+        "--head",
+        head,
+        "--base",
+        base,
+        "--title",
+        title,
+        "--body",
+        body,
+      ],
+      { cwd: repo, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
+    );
     return out.trim().split(/\r?\n/).filter(Boolean).at(-1) ?? "";
   },
 };

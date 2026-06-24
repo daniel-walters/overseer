@@ -63,6 +63,12 @@ export interface DispatchIssue {
    */
   readonly reviewVerdict: string | undefined;
   /**
+   * The Issue's `slice: N-name` value (authored by overseer-to-issues), or
+   * undefined when absent/blank. Read only by the Open PR / Linked PR stack path
+   * to materialize a stack (CONTEXT.md → Slice, ADR 0024); never written.
+   */
+  readonly slice: string | undefined;
+  /**
    * The previous review pass's findings ledger (ADR 0024): a one-line summary
    * of what a `findings`-exit pass found and fixed, so the next fresh pass can
    * confirm closure before its own review. Agent-written, like {@link deviation}
@@ -151,6 +157,9 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     // A blank verdict reads as absent, like `deviation`: only a real value puts
     // the Issue on the resolve frontier (ADR 0019).
     reviewVerdict: readPresentString(data, FIELD.reviewVerdict),
+    // A blank `slice:` reads as absent — only a real `N-name` value puts the
+    // Issue in a stack.
+    slice: readPresentString(data, FIELD.slice),
     // The prior pass's findings ledger (ADR 0024). Blank reads as absent, like
     // `deviation`: a first pass (or one a previous reviewer never wrote) simply
     // carries no confirm-closure step into the next prompt.

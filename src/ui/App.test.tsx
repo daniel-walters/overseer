@@ -189,7 +189,7 @@ describe("App", () => {
 
 describe("App dispatch", () => {
   function di(id: string): DispatchIssue {
-    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, reviewVerdict: undefined, body: "" };
+    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, reviewVerdict: undefined, slice: undefined, body: "" };
   }
 
   /** A frontier with one spawn candidate and one skipped Issue. */
@@ -463,6 +463,7 @@ describe("App review", () => {
       branch: "blue-cat-fox",
       deviation: undefined,
       reviewVerdict: undefined,
+      slice: undefined,
       body: "",
       ...overrides,
     };
@@ -937,6 +938,7 @@ describe("App re-dispatch (R on an orphan)", () => {
         branch: undefined,
         deviation: undefined,
         reviewVerdict: undefined,
+        slice: undefined,
         body: "",
       },
     };
@@ -1133,6 +1135,7 @@ describe("App kill (K on a live card)", () => {
         branch: undefined,
         deviation: undefined,
         reviewVerdict: undefined,
+        slice: undefined,
         body: "",
       },
     };
@@ -1535,6 +1538,33 @@ describe("App go to PR (g on a done PRD)", () => {
     await tick();
 
     expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/9");
+  });
+
+  it("opens the bottom PR on g for a stacked PRD (the stack's entry point)", async () => {
+    // A stacked PRD's overlay carries the bottom PR (slice 1) as its url, so `go to
+    // PR` opens the one a human merges first (ADR 0025) — not an upper slice.
+    const opener = spyOpener();
+    const stackedBoard: Board = {
+      prds: [
+        {
+          id: "stacked",
+          title: "StackedPRD",
+          lane: "done",
+          issues: [{ id: "010-schema", title: "Schema", lane: "done" }],
+          linkedPr: {
+            state: "open",
+            url: "https://github.com/o/r/pull/41", // the bottom PR (slice 1)
+            stack: { merged: 1, total: 3 },
+          },
+        },
+      ],
+    };
+    const { stdin } = render(<App board={stackedBoard} urlOpener={opener} />);
+
+    stdin.write("g");
+    await tick();
+
+    expect(opener.open).toHaveBeenCalledWith("https://github.com/o/r/pull/41");
   });
 
   it("is genuinely inert on a done PRD with no linked PR (g unbound there — P owns that card)", async () => {

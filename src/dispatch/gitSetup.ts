@@ -48,6 +48,58 @@ export interface GitSeam {
   checkoutBranch(repo: string, branch: string): void;
 }
 
+/**
+ * One Issue's merge as the {@link StackGitSeam} reads it off the feature branch's
+ * own history: the implementor branch that was `merge --no-ff`'d (recovered from
+ * the default merge message, `Merge branch '<branch>' …`) and the work commit(s)
+ * that merge contributed (the merge's second-parent history), oldest-first. The
+ * recorded `branch:` field on each Issue joins this back to the Issue, so the
+ * materializer can group merges by slice without anything being stored beyond the
+ * `slice:`/`branch:` frontmatter the implementor and to-issues already write.
+ */
+export interface MergeRecord {
+  /** The implementor branch this merge brought in, from the merge message. */
+  readonly branch: string;
+  /** The work commits the merge contributed, oldest-first (to replay). */
+  readonly workCommits: readonly string[];
+}
+
+/**
+ * The git seam the stack materializer drives to cut per-slice branches from the
+ * feature branch's merge history (CONTEXT.md → Stacked output, ADR 0024). Kept
+ * separate from {@link GitSeam} (which dispatch uses): a test fake answers from
+ * in-memory state and records the cuts, the {@link realStackGitSeam} shells out.
+ *
+ * The cut is a *replay*, not a truncation: a naive "branch the feature at slice
+ * N's last merge commit" leaks a later-but-earlier-merged slice's work into an
+ * earlier slice for an interleaved history. So the seam exposes the merge records
+ * (resolved to Issues by branch), and the materializer cherry-picks only each
+ * slice's own work onto the prior slice — reconstructing a clean per-slice diff.
+ */
+export interface StackGitSeam {
+  /**
+   * Walk `featureBranch`'s first-parent merge history down to `base` and return
+   * each Issue merge — its source branch and the work commits it contributed —
+   * oldest-first. The order is the feature-history order a faithful replay keeps.
+   */
+  stackMergeRecords(
+    repo: string,
+    featureBranch: string,
+    base: string,
+  ): readonly MergeRecord[];
+  /** Create `branch` in `repo` at `startPoint` (a slice's base) without checking it out into a worktree-affecting state beyond HEAD. */
+  createBranchAt(repo: string, branch: string, startPoint: string): void;
+  /**
+   * Cherry-pick `commits` (oldest-first) onto `branch`, replaying one slice's
+   * work onto the branch just cut from its base. Throws on a conflict or any git
+   * failure so the materializer surfaces it loudly (it should never conflict for
+   * a clean cut, by the no-forward-dependency invariant — ADR 0024).
+   */
+  cherryPick(repo: string, branch: string, commits: readonly string[]): void;
+  /** Check out `branch` in `repo`, restoring HEAD to a known branch. */
+  checkoutBranch(repo: string, branch: string): void;
+}
+
 /** The outcome of setting up a single repo for dispatch. */
 export type RepoSetupResult =
   | { readonly ok: true }
@@ -70,6 +122,29 @@ export function featureBranchName(prdDir: string): string {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
   return slug || `prd-${asciiFallbackHash(prdDir)}`;
+}
+
+/**
+ * Derive a per-slice branch name for a stacked Open PR (CONTEXT.md → Stacked
+ * output, ADR 0024): the PRD feature branch with the slice's `N-name` label
+ * appended after a `-slice-` segment, e.g. `stacked-prs-slice-2-api`. Slugged the
+ * same way as {@link featureBranchName} so the label's number and name fold to a
+ * stable, valid git ref, and derived purely from the feature branch + label so
+ * the Linked PR overlay (ADR 0025) can re-derive the very same names from the
+ * `slice:` fields without anything being stored.
+ *
+ * The `-slice-` infix is deliberately a **flat** sibling of the feature branch,
+ * not a `<feature>/slice/...` path: git refs are files under `.git/refs/heads`,
+ * so a branch named `<feature>/slice/...` would need `<feature>` to be a
+ * directory while the feature branch itself is a file of that name — git rejects
+ * the collision ("cannot lock ref"). A flat name avoids it entirely.
+ */
+export function sliceBranchName(featureBranch: string, sliceLabel: string): string {
+  const slug = sliceLabel
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  return `${featureBranch}-slice-${slug || asciiFallbackHash(sliceLabel)}`;
 }
 
 /** A short, stable hex hash of a name with no ASCII alphanumerics to slug. */
@@ -203,5 +278,102 @@ export const realGitSeam: GitSeam = {
     execFileSync("git", ["-C", repo, "checkout", branch], {
       stdio: "ignore",
     });
+  },
+};
+
+/** Matches git's default `--no-ff` merge-commit subject to recover the source branch. */
+const MERGE_SUBJECT = /^Merge branch '([^']+)'/i;
+/** Cap on captured `git log` stdout when reading the merge history (fail-safe). */
+const STACK_MAX_BUFFER = 16 * 1024 * 1024;
+
+/**
+ * The real {@link StackGitSeam}: shells out to `git -C <repo>` to read the feature
+ * branch's merge history and to cut + replay the slice branches. The un-fakeable
+ * shell-out boundary, kept thin and excluded from unit tests exactly as
+ * {@link realGitSeam} is; the testable logic lives in {@link planStackCut} and the
+ * materializer, driven by an in-memory fake.
+ */
+export const realStackGitSeam: StackGitSeam = {
+  stackMergeRecords(
+    repo: string,
+    featureBranch: string,
+    base: string,
+  ): readonly MergeRecord[] {
+    // Walk the feature branch's own first-parent merges down to the base,
+    // oldest-first (the feature-history order a faithful replay keeps). Each line
+    // is `<merge-sha>\t<subject>`; the subject is git's default merge message,
+    // `Merge branch '<branch>' …`, from which we recover the merged branch.
+    const out = execFileSync(
+      "git",
+      [
+        "-C",
+        repo,
+        "log",
+        "--first-parent",
+        "--merges",
+        "--reverse",
+        "--format=%H%x09%s",
+        `${base}..${featureBranch}`,
+      ],
+      { encoding: "utf8", maxBuffer: STACK_MAX_BUFFER },
+    );
+
+    const records: MergeRecord[] = [];
+    for (const line of out.split("\n")) {
+      const tab = line.indexOf("\t");
+      if (tab < 0) continue;
+      const merge = line.slice(0, tab);
+      const subject = line.slice(tab + 1);
+      const branchMatch = MERGE_SUBJECT.exec(subject);
+      if (!branchMatch) continue; // not a recognisable Issue merge — skip it
+      const branch = branchMatch[1]!;
+      // The merge's work commits are exactly the commits on the merged branch:
+      // `merge^1..merge^2`, oldest-first, so the cherry-pick replays them in order.
+      const work = execFileSync(
+        "git",
+        ["-C", repo, "rev-list", "--reverse", `${merge}^1..${merge}^2`],
+        { encoding: "utf8", maxBuffer: STACK_MAX_BUFFER },
+      )
+        .split("\n")
+        .filter((sha) => sha.trim() !== "");
+      records.push({ branch, workCommits: work });
+    }
+    return records;
+  },
+
+  createBranchAt(repo: string, branch: string, startPoint: string): void {
+    // Create and check out the slice branch at its base, so the subsequent
+    // cherry-pick replays onto it. Bottom-up cutting means each base (the prior
+    // slice's branch) already exists when this runs.
+    // On retry after a partial failure the branch may already exist locally;
+    // use `git checkout` (not `-b`) in that case so the seam is idempotent.
+    try {
+      execFileSync(
+        "git",
+        ["-C", repo, "show-ref", "--verify", "--quiet", `refs/heads/${branch}`],
+        { stdio: "ignore" },
+      );
+      // Branch exists — just check it out (don't re-create it).
+      execFileSync("git", ["-C", repo, "checkout", branch], { stdio: "ignore" });
+    } catch {
+      // Branch doesn't exist — create it at the start point.
+      execFileSync("git", ["-C", repo, "checkout", "-b", branch, startPoint], {
+        stdio: "ignore",
+      });
+    }
+  },
+
+  cherryPick(repo: string, branch: string, commits: readonly string[]): void {
+    if (commits.length === 0) return;
+    // The branch was just checked out by createBranchAt; replay its slice's work.
+    // A failure (a conflict — which the no-forward-dependency invariant should
+    // preclude — or any git error) throws, and the materializer surfaces it.
+    execFileSync("git", ["-C", repo, "cherry-pick", ...commits], {
+      stdio: ["ignore", "pipe", "inherit"],
+    });
+  },
+
+  checkoutBranch(repo: string, branch: string): void {
+    execFileSync("git", ["-C", repo, "checkout", branch], { stdio: "ignore" });
   },
 };

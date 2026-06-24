@@ -1,6 +1,20 @@
 import { basename, join } from "node:path";
-import { featureBranchName, realGitSeam, type GitSeam } from "./gitSetup.js";
+import {
+  featureBranchName,
+  sliceBranchName,
+  realGitSeam,
+  realStackGitSeam,
+  type GitSeam,
+  type StackGitSeam,
+} from "./gitSetup.js";
 import { realPrSeam, realReadRepos, type PrSeam } from "./linkedPr.js";
+import { orderedSliceLabels } from "./overlayAggregate.js";
+import {
+  isStacked,
+  materializeStack,
+  realReadSlicedIssues,
+  type SlicedIssue,
+} from "./stackMaterializer.js";
 import { errorMessage } from "../errorMessage.js";
 import type { OpenPr } from "../ui/App.js";
 
@@ -48,6 +62,12 @@ export interface OpenPrPreviewData {
   readonly branch: string;
   /** The resolved default base the PR opens into (not a hardcoded `main`). */
   readonly base: string;
+  /**
+   * The number of slices in the stack, when the PRD will open a stack (≥2
+   * distinct `slice:` values). Absent for single-PR PRDs — the preview renders
+   * differently so the user sees "N stacked PRs" rather than one push/create.
+   */
+  readonly sliceCount?: number;
   /** Whether the action can proceed, or why it is refused. */
   readonly eligibility:
     | { readonly canOpen: true }
@@ -68,6 +88,20 @@ export interface OpenPrDeps {
    * from in-memory state.
    */
   readonly readRepos: (prdDir: string) => readonly string[];
+  /**
+   * The git seam the stacked-PR path drives (read merge history, cut + replay
+   * slice branches). Separate from {@link git} because stacking reads/writes the
+   * feature branch's commit graph, not just its default base. Only used when the
+   * PRD's Issues carry ≥2 distinct `slice:` values.
+   */
+  readonly stackGit: StackGitSeam;
+  /**
+   * The PRD's sliced Issues (id + `slice:` + `branch:`) — the stack gate's input.
+   * ≥2 distinct `slice:` values materializes a stack (CONTEXT.md, ADR 0024); an
+   * absent or single slice takes today's single-PR path below, untouched. The
+   * default reads each Issue's frontmatter; a test fake answers from memory.
+   */
+  readonly readSlicedIssues: (prdDir: string) => readonly SlicedIssue[];
 }
 
 /**
@@ -116,16 +150,52 @@ export function openPrFor(prdDir: string, deps: OpenPrDeps): OpenPrResult {
 
   const branch = featureBranchName(basename(prdDir));
 
+  let slicedIssues: readonly SlicedIssue[];
+  try {
+    slicedIssues = deps.readSlicedIssues(prdDir);
+  } catch (err) {
+    return { ok: false, error: errorMessage(err) };
+  }
+
+  // Read once: both the duplicate-PR guard and the materializer see the same slice
+  // snapshot, removing the TOCTOU between the gate check and the execution.
+  const stacked = isStacked(slicedIssues);
+
+  // For a stacked PRD the duplicate-PR guard must check the bottom slice branch
+  // (slice-1, the PR a human merges first) — PRs live on slice branches, not the
+  // feature branch. For a single-PR PRD it checks the feature branch as before.
+  const bottomSliceLabel = stacked
+    ? orderedSliceLabels(slicedIssues.map((i) => i.slice))[0]
+    : undefined;
+  const guardBranch =
+    bottomSliceLabel !== undefined ? sliceBranchName(branch, bottomSliceLabel) : branch;
+
   try {
     // Refuse if a PR already exists for the branch (open or merged) — never open a
     // duplicate. Reuses the read path's query; a `gh` failure here resolves to
     // *no PR* (undefined), so a degraded query doesn't block the action — the
     // push/create below would then surface the same failure loudly.
-    if (deps.prSeam.query(repo, branch) !== undefined) {
+    if (deps.prSeam.query(repo, guardBranch) !== undefined) {
       return {
         ok: false,
-        error: `a PR already exists for ${branch} — not opening a duplicate`,
+        error: `a PR already exists for ${guardBranch} — not opening a duplicate`,
       };
+    }
+
+    const base = prBase(deps.git.defaultBase(repo));
+
+    // When the PRD's Issues carry ≥2 distinct slices, materialize a stack instead
+    // of one PR (CONTEXT.md → Stacked output, ADR 0024). Absent or single slice
+    // falls through to the single-PR path below — literally today's behaviour, no
+    // new code path taken, all stack behaviour gated here.
+    if (stacked) {
+      return materializeStack(prdDir, repo, {
+        git: deps.stackGit,
+        prSeam: deps.prSeam,
+        defaultBase: base,
+        // Return the already-read snapshot so the materializer doesn't re-read.
+        readSlicedIssues: () => slicedIssues,
+      });
     }
 
     // Push before create: the feature branch normally only ever lived locally
@@ -136,7 +206,7 @@ export function openPrFor(prdDir: string, deps: OpenPrDeps): OpenPrResult {
 
     // Open the PR into the repo's *resolved* default base — the same base the
     // feature branch was created from (gitSetup.defaultBase), not a hardcoded main.
-    const url = deps.prSeam.create(repo, branch, prBase(deps.git.defaultBase(repo)));
+    const url = deps.prSeam.create(repo, branch, base);
     return { ok: true, url };
   } catch (err) {
     // A `git push` / `gh pr create` failure (no auth, network, non-GitHub remote)
@@ -174,16 +244,38 @@ function resolveEligibility(
   }
 
   const base = prBase(deps.git.defaultBase(repo));
-  if (deps.prSeam.query(repo, branch) !== undefined) {
+
+  // For a stacked PRD the duplicate-PR guard checks the bottom slice branch; for a
+  // single-PR PRD it checks the feature branch (mirrors the guard in openPrFor).
+  let slicedIssues: readonly SlicedIssue[] = [];
+  try {
+    slicedIssues = deps.readSlicedIssues(prdDir);
+  } catch {
+    // A failed read degrades to single-PR eligibility — the guard below uses the
+    // feature branch, consistent with the fallback in openPrFor.
+  }
+  const stackedPreview = isStacked(slicedIssues);
+  const bottomSliceLabelPreview = stackedPreview
+    ? orderedSliceLabels(slicedIssues.map((i) => i.slice))[0]
+    : undefined;
+  const guardBranchPreview =
+    bottomSliceLabelPreview !== undefined
+      ? sliceBranchName(branch, bottomSliceLabelPreview)
+      : branch;
+
+  if (deps.prSeam.query(repo, guardBranchPreview) !== undefined) {
     return refused(
       prdTitle,
       branch,
       base,
-      `a PR already exists for ${branch} — not opening a duplicate`,
+      `a PR already exists for ${guardBranchPreview} — not opening a duplicate`,
     );
   }
 
-  return { prdTitle, branch, base, eligibility: { canOpen: true } };
+  const sliceCount = stackedPreview
+    ? orderedSliceLabels(slicedIssues.map((i) => i.slice)).length
+    : undefined;
+  return { prdTitle, branch, base, sliceCount, eligibility: { canOpen: true } };
 }
 
 /**
@@ -251,5 +343,11 @@ export function createOpenPr(root: string, deps: OpenPrDeps): OpenPr {
  * {@link import("./linkedPr.js").realLinkedPrLookup}.
  */
 export function realOpenPrDeps(): OpenPrDeps {
-  return { prSeam: realPrSeam, git: realGitSeam, readRepos: realReadRepos };
+  return {
+    prSeam: realPrSeam,
+    git: realGitSeam,
+    readRepos: realReadRepos,
+    stackGit: realStackGitSeam,
+    readSlicedIssues: realReadSlicedIssues,
+  };
 }

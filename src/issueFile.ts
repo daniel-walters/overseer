@@ -34,6 +34,12 @@ export const FIELD = {
   blockedBy: "blocked_by",
   humanReviewReason: "human_review_reason",
   humanReviewNote: "human_review_note",
+  /**
+   * The `slice: N-name` value authored by overseer-to-issues, read only by the
+   * board's Open PR / Linked PR path to materialize a stack (CONTEXT.md → Slice,
+   * ADR 0024). Never written by the board.
+   */
+  slice: "slice",
 } as const;
 
 /** The untyped frontmatter bag gray-matter parses out of a file. */

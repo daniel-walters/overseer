@@ -20,6 +20,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     branch: "blue-cat-fox",
     deviation: undefined,
     reviewVerdict: undefined,
+    slice: undefined,
     body: "",
     ...overrides,
   };

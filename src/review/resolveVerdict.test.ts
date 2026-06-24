@@ -16,6 +16,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     branch: "branch" in overrides ? overrides.branch : "blue-cat-fox",
     deviation: overrides.deviation,
     reviewVerdict: "reviewVerdict" in overrides ? overrides.reviewVerdict : "clean",
+    slice: overrides.slice,
     body: overrides.body ?? "",
   };
 }

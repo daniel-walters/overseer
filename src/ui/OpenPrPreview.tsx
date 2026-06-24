@@ -31,13 +31,27 @@ export function OpenPrPreview({ preview }: OpenPrPreviewProps) {
       {eligibility.canOpen ? (
         <>
           <Box flexDirection="column" marginTop={1}>
-            <Text>
-              Push <Text color="cyan">{branch}</Text> to{" "}
-              <Text color="cyan">origin</Text>
-            </Text>
-            <Text>
-              Open PR into <Text color="cyan">{base}</Text>
-            </Text>
+            {preview.sliceCount !== undefined ? (
+              <>
+                <Text>
+                  Open <Text color="cyan">{preview.sliceCount} stacked PRs</Text>{" "}
+                  into <Text color="cyan">{base}</Text>
+                </Text>
+                <Text dimColor>
+                  (pushes {preview.sliceCount} slice branches — not {branch})
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text>
+                  Push <Text color="cyan">{branch}</Text> to{" "}
+                  <Text color="cyan">origin</Text>
+                </Text>
+                <Text>
+                  Open PR into <Text color="cyan">{base}</Text>
+                </Text>
+              </>
+            )}
           </Box>
 
           <Box marginTop={1}>

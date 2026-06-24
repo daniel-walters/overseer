@@ -6,7 +6,7 @@ import {
   type PrSeam,
   type PrState,
 } from "./linkedPr.js";
-import { featureBranchName } from "./gitSetup.js";
+import { featureBranchName, sliceBranchName } from "./gitSetup.js";
 
 /**
  * The Linked PR overlay is the highest-value surface of this slice: it joins a
@@ -32,6 +32,7 @@ class FakePrSeam implements PrSeam {
   // (exercised in openPr.test.ts), present only so the fake satisfies the seam.
   readonly push = vi.fn();
   readonly create = vi.fn(() => "https://gh/pr/new");
+  readonly createWithBody = vi.fn(() => "https://gh/pr/stacked");
 
   /** Register a PR the fake should report for `repo` + `branch`. */
   setPr(repo: string, branch: string, state: PrState, url: string): void {
@@ -137,6 +138,7 @@ describe("createLinkedPrLookup", () => {
       },
       push: () => {},
       create: () => "",
+      createWithBody: () => "",
     };
     const lookup = createLinkedPrLookup({
       seam,
@@ -153,6 +155,111 @@ describe("createLinkedPrLookup", () => {
     const lookup = createLinkedPrLookup({
       seam,
       readRepos: () => {
+        throw new Error("PRD vanished mid-scan");
+      },
+    });
+
+    expect(lookup("/root/gone")).toBeUndefined();
+  });
+});
+
+describe("createLinkedPrLookup — stack-aware (≥2 distinct slices)", () => {
+  // When Open PR materialized a stack, there is no single feature-branch PR — the
+  // overlay derives each slice branch from the `slice:` labels + the feature-branch
+  // scheme, queries each through the seam, and rolls them to the `N/M merged`
+  // aggregate (ADR 0025). Nothing is stored; the branch names are re-derived here.
+
+  it("queries each slice branch and rolls a fully-merged stack to N/M merged", () => {
+    const seam = new FakePrSeam();
+    const feature = featureBranchName("stacked prs");
+    const b1 = sliceBranchName(feature, "1-schema");
+    const b2 = sliceBranchName(feature, "2-api");
+    const b3 = sliceBranchName(feature, "3-ui");
+    seam.setPr("/repo", b1, "MERGED", "https://gh/1");
+    seam.setPr("/repo", b2, "MERGED", "https://gh/2");
+    seam.setPr("/repo", b3, "MERGED", "https://gh/3");
+
+    const lookup = createLinkedPrLookup({
+      seam,
+      readRepos: () => ["/repo"],
+      // The per-Issue labels (several Issues per slice) fold to the distinct slices.
+      readSlices: () => ["1-schema", "1-schema", "2-api", "3-ui"],
+    });
+
+    expect(lookup("/root/stacked prs")).toEqual({
+      state: "merged",
+      url: "https://gh/1", // the bottom PR (slice 1), the stack's entry point
+      stack: { merged: 3, total: 3 },
+    });
+    // It queried each slice branch — never the bare feature branch.
+    expect(seam.query).toHaveBeenCalledWith("/repo", b1);
+    expect(seam.query).toHaveBeenCalledWith("/repo", b2);
+    expect(seam.query).toHaveBeenCalledWith("/repo", b3);
+    expect(seam.query).not.toHaveBeenCalledWith("/repo", feature);
+  });
+
+  it("rolls a half-merged stack to an in-progress N/M (0 < N < M)", () => {
+    // Bottom landed, top still open: the PRD is NOT fully landed, so the headline
+    // is `open` (in-progress) and the count is 1/2 — never `merged` until N = M.
+    const seam = new FakePrSeam();
+    const feature = featureBranchName("half");
+    seam.setPr("/repo", sliceBranchName(feature, "1-schema"), "MERGED", "https://gh/1");
+    seam.setPr("/repo", sliceBranchName(feature, "2-api"), "OPEN", "https://gh/2");
+
+    const lookup = createLinkedPrLookup({
+      seam,
+      readRepos: () => ["/repo"],
+      readSlices: () => ["1-schema", "2-api"],
+    });
+
+    expect(lookup("/root/half")).toEqual({
+      state: "open",
+      url: "https://gh/1",
+      stack: { merged: 1, total: 2 },
+    });
+  });
+
+  it("takes the single-PR path (the bare feature branch) when only one distinct slice", () => {
+    // One distinct slice is the M = 1 collapse: exactly today's three-state marker
+    // on the feature branch, no slice-branch queries, no `stack` count.
+    const seam = new FakePrSeam();
+    const feature = featureBranchName("single");
+    seam.setPr("/repo", feature, "OPEN", "https://gh/feat");
+
+    const lookup = createLinkedPrLookup({
+      seam,
+      readRepos: () => ["/repo"],
+      readSlices: () => ["1-only", "1-only"],
+    });
+
+    expect(lookup("/root/single")).toEqual({ state: "open", url: "https://gh/feat" });
+    expect(seam.query).toHaveBeenCalledWith("/repo", feature);
+  });
+
+  it("takes the single-PR path when the PRD has no slices at all", () => {
+    // Absent `slice:` is the common case — the bare feature branch, unchanged.
+    const seam = new FakePrSeam();
+    const feature = featureBranchName("plain");
+    seam.setPr("/repo", feature, "MERGED", "https://gh/feat");
+
+    const lookup = createLinkedPrLookup({
+      seam,
+      readRepos: () => ["/repo"],
+      readSlices: () => [],
+    });
+
+    expect(lookup("/root/plain")).toEqual({ state: "merged", url: "https://gh/feat" });
+    expect(seam.query).toHaveBeenCalledWith("/repo", feature);
+  });
+
+  it("degrades a thrown slice read to no overlay, never out of the scan", () => {
+    // The slice read parses the Issue frontmatter, which the watched root can
+    // delete mid-scan; a throw there degrades to no marker (ADR 0013).
+    const seam = new FakePrSeam();
+    const lookup = createLinkedPrLookup({
+      seam,
+      readRepos: () => ["/repo"],
+      readSlices: () => {
         throw new Error("PRD vanished mid-scan");
       },
     });
