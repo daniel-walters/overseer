@@ -159,12 +159,20 @@ Take exactly one of these two exits:
 
 - FINDINGS EXIT — the review reported one or more findings. Fix every finding,
   committing the fixes to the worktree (${issue.worktree}) as you go. Do NOT
-  re-review your own fixes. Then, in a single edit to the Issue frontmatter, set
-  \`status: ready-for-review\` AND set \`review_findings\` to a one-line summary of
-  the findings you fixed this pass, written as a double-quoted string on one line
-  (e.g. \`review_findings: "Unvalidated input in parser; missing test for the
-  empty-list case"\`). Keep it to one line and quote it so the frontmatter stays
-  valid YAML. That summary lets the fresh agent on the next pass confirm your
-  fixes actually landed. Then stop — Overseer picks it back up and a fresh agent
-  reviews your fixes in the next pass.`;
+  re-review your own fixes. Then make a single edit to the Issue frontmatter:
+    - The Issue ALREADY has a \`status:\` line. CHANGE that existing line's value
+      in place to \`ready-for-review\` — do NOT add a second \`status:\` line. After
+      your edit there must be exactly ONE \`status:\` line: a duplicate key makes
+      the frontmatter invalid YAML, and Overseer can no longer read the Issue (it
+      drops off the board flagged with a bad-status warning).
+    - Set \`review_findings\` to a one-line summary of the findings you fixed this
+      pass, written as a double-quoted string on one line (e.g.
+      \`review_findings: "Unvalidated input in parser; missing test for the
+      empty-list case"\`). Keep it to one line and quote it so the frontmatter
+      stays valid YAML. If a \`review_findings\` line already exists from an earlier
+      pass, OVERWRITE that line in place rather than adding another — the same
+      no-duplicate-keys rule applies to every field.
+  That summary lets the fresh agent on the next pass confirm your fixes actually
+  landed. Then stop — Overseer picks it back up and a fresh agent reviews your
+  fixes in the next pass.`;
 }

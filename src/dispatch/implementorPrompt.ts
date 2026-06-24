@@ -75,8 +75,12 @@ worktree so that other agents touching the same repo do not collide with you.
    ${issue.path}
 
    In that one edit:
-   - Set \`status: ready-for-review\`. Stop here — do NOT advance the status any
-     further. A later review step flips it onward; that is not your job.
+   - The Issue ALREADY has a \`status:\` line. CHANGE that existing line's value
+     in place to \`ready-for-review\` — do NOT add a second \`status:\` line. After
+     your edit there must be exactly ONE \`status:\` line: a duplicate key makes
+     the frontmatter invalid YAML and Overseer can no longer read the Issue. Stop
+     at \`ready-for-review\` — do NOT advance the status any further. A later
+     review step flips it onward; that is not your job.
    - Record \`worktree:\` set to the absolute path of the worktree you worked in,
      and \`branch:\` set to its branch name. Record both verbatim from the
      worktree you actually used — never guess or derive them. The reviewer
