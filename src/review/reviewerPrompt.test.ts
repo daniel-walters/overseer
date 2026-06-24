@@ -14,6 +14,7 @@ const issue: DispatchIssue = {
   deviation: undefined,
   reviewVerdict: undefined,
   slice: undefined,
+  reviewFindings: undefined,
   body: "Hash passwords with argon2id before persisting them.",
   path: "/root/auth-system/001-password-hashing.md",
 };
@@ -152,6 +153,43 @@ describe("buildReviewerPrompt", () => {
     expect(prompt.toLowerCase()).not.toMatch(/deviation|human-review|conflict/);
     // Even with a deviation recorded on the Issue, the prompt never surfaces it.
     expect(prompt).not.toContain("Used a queue instead of inline send.");
+  });
+
+  // The findings ledger (ADR 0024): carry the prior pass's findings forward so a
+  // fresh agent confirms closure, without it grading its own fixes.
+
+  it("FINDINGS exit: records a review_findings summary for the next pass", () => {
+    const prompt = build();
+    expect(prompt).toContain("review_findings");
+  });
+
+  it("first pass (no prior findings) carries no confirm-the-previous-pass step", () => {
+    // The default Issue has no reviewFindings; the section must drop out entirely
+    // so the first pass is the pre-ledger prompt.
+    const prompt = build();
+    expect(prompt).not.toContain("Confirm the previous pass");
+    expect(prompt).not.toContain("Previous pass's findings");
+  });
+
+  it("with prior findings: folds them in and asks the agent to confirm closure", () => {
+    const findings = "Unvalidated parser input; missing empty-list test";
+    const prompt = build({ reviewFindings: findings });
+    expect(prompt).toContain("Confirm the previous pass");
+    expect(prompt).toContain(findings);
+    // It asks the fresh agent to verify the prior fixes, not re-grade its own.
+    expect(prompt.toLowerCase()).toContain("verify");
+  });
+
+  it("with prior findings: still reviews before fixing (confirm step is post-review)", () => {
+    // The confirm-closure section must not push a `fix` ahead of `/code-review`:
+    // the pass still reviews the inherited code first.
+    const prompt = build({
+      reviewFindings: "Fix the off-by-one in the paginator",
+    }).toLowerCase();
+    const reviewIdx = prompt.indexOf("/code-review");
+    const fixIdx = prompt.indexOf("fix");
+    expect(reviewIdx).toBeGreaterThanOrEqual(0);
+    expect(reviewIdx).toBeLessThan(fixIdx);
   });
 
   it("writes the verdict/status into the Issue file by its path", () => {

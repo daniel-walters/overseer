@@ -161,6 +161,34 @@ describe("readDispatchView", () => {
     expect(readDispatchIssue(dir, "002-blank.md").reviewVerdict).toBeUndefined();
   });
 
+  it("reads review_findings (the prior-pass ledger) onto the read model", () => {
+    // The findings ledger a findings-exit pass writes (ADR 0024): the next fresh
+    // pass reads it off the Issue to confirm those fixes landed.
+    const dir = tmpPrd({
+      "001-fixed.md":
+        '---\nstatus: ready-for-review\nreview_findings: "Unvalidated parser input"\n---\nbody\n',
+    });
+    expect(readDispatchIssue(dir, "001-fixed.md").reviewFindings).toBe(
+      "Unvalidated parser input",
+    );
+  });
+
+  it("treats an absent or blank review_findings as undefined", () => {
+    // A first pass (no prior findings) and a blank field both read as "no ledger"
+    // — the next prompt simply carries no confirm-closure step.
+    const dir = tmpPrd({
+      "001-none.md": "---\nstatus: ready-for-review\n---\nbody\n",
+      "002-blank.md":
+        '---\nstatus: ready-for-review\nreview_findings: ""\n---\nbody\n',
+    });
+    expect(
+      readDispatchIssue(dir, "001-none.md").reviewFindings,
+    ).toBeUndefined();
+    expect(
+      readDispatchIssue(dir, "002-blank.md").reviewFindings,
+    ).toBeUndefined();
+  });
+
   it("does not throw on malformed frontmatter; reads the fields as absent", () => {
     // A `deviation:` value with an unquoted ': ' is invalid YAML. The reader
     // must degrade to absent fields rather than throwing out of the read.

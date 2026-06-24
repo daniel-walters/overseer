@@ -59,6 +59,10 @@ Ask: "What should the public interface look like? Which behaviors are most impor
 
 **You can't test everything.** Confirm with the user exactly which behaviors matter most. Focus testing effort on critical paths and complex logic, not every possible edge case.
 
+### Test scope during the loop
+
+**While looping, run only the test file(s) you are changing — never the whole suite.** Every RED and GREEN below means running just the file under development (e.g. `vitest run path/to/thing.test.ts`, or its watch mode), not `pnpm test`. The full suite is a one-time gate when you believe the issue is complete; it catches regressions in code you didn't open. Running everything on each cycle makes feedback scale with total project size — on a large project that is the difference between seconds and minutes per cycle.
+
 ### 2. Tracer Bullet
 
 Write ONE test that confirms ONE thing about the system:
@@ -94,7 +98,7 @@ After all tests pass, look for [refactor candidates](refactoring.md):
 - [ ] Deepen modules (move complexity behind simple interfaces)
 - [ ] Apply SOLID principles where natural
 - [ ] Consider what new code reveals about existing code
-- [ ] Run tests after each refactor step
+- [ ] Run the scoped test file(s) after each refactor step (full suite stays at the done-gate)
 
 **Never refactor while RED.** Get to GREEN first.
 
