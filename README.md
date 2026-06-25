@@ -53,17 +53,17 @@ the board, never inside your files.
 Build the package and put the `overseer` command on your `PATH`, then run `init`:
 
 ```sh
-npm install
-npm run build
-npm install -g .        # or `npm link` — puts the `overseer` bin on your PATH
+pnpm install
+pnpm build
+pnpm link --global      # puts the `overseer` bin on your PATH
 overseer init
 ```
 
-The global install (`npm install -g .` / `npm link`) is what lets you type
-`overseer` anywhere instead of `node dist/cli.js`; it points the bin at the
-compiled output, so `npm run build` must come first. Prefer to run from source
-without installing globally? Use `node dist/cli.js init` (or `npm start init`)
-instead — everywhere below that says `overseer`, substitute one of those.
+The global link (`pnpm link --global`) is what lets you type `overseer`
+anywhere instead of `node dist/cli.js`; it points the bin at the compiled
+output, so `pnpm build` must come first. Prefer to run from source without
+linking globally? Use `node dist/cli.js init` (or `pnpm start init`) instead —
+everywhere below that says `overseer`, substitute one of those.
 
 `init` is the one-step onboarding: it installs Overseer's bundled agent skills
 into your global Claude skills directory and, if you have no config yet, writes one
@@ -172,10 +172,10 @@ logged follow-up in [`docs/ideas.md`](./docs/ideas.md)).
 ## Run
 
 ```sh
-npm start          # run from source via tsx
-npm run build      # compile to dist/
+pnpm start         # run from source via tsx
+pnpm build         # compile to dist/
 node dist/cli.js   # run the built CLI
-overseer           # run the installed bin
+overseer           # run the linked bin
 ```
 
 ## Troubleshooting
@@ -199,9 +199,9 @@ each of these prerequisites in order.
 ## Develop
 
 ```sh
-npm test           # run the test suite once (vitest)
-npm run test:watch # watch mode
-npm run typecheck  # type-check the whole tree, tests included
+pnpm test          # run the test suite once (vitest)
+pnpm test:watch    # watch mode
+pnpm typecheck     # type-check the whole tree, tests included
 ```
 
 ### Architecture

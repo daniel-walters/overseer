@@ -34,9 +34,9 @@ first-run snag, and the board makes it visible.
 From a fresh checkout:
 
 ```sh
-npm install
-npm run build
-node dist/cli.js init   # or `npm start init` to run from source
+pnpm install
+pnpm build
+node dist/cli.js init   # or `pnpm start init` to run from source
 ```
 
 `init` is the one-step onboarding ([Setup](../README.md#setup)). It does two things:
@@ -54,8 +54,12 @@ home of your PRD and Issue markdown. The code your PRDs are *about* lives in
 separate repos. To point the root somewhere else, edit `root` in the config; a
 leading `~` expands to your home directory, and the path must exist.
 
-Optionally `npm link` (or `npm install -g .`) to get the `overseer` command on your
-`PATH` — the rest of this guide uses `overseer` for brevity.
+Optionally `pnpm link --global` to get the `overseer` command on your `PATH` — the
+rest of this guide uses `overseer` for brevity.
+
+Then run `overseer doctor` to confirm your environment is ready — it checks Node,
+the `claude` / `git` / `gh` CLIs, and your config, and prints a checklist of
+anything left to fix before you open the board.
 
 ## 2. Author your first PRD with the skills
 
@@ -94,7 +98,7 @@ board, where dispatch is tracked.
 ## 3. Open the board
 
 ```sh
-overseer            # or: npm start
+overseer            # or: pnpm start
 ```
 
 Overseer scans your root and renders a **full-screen** kanban board on the
