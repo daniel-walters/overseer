@@ -35,11 +35,13 @@ import { createMarkDone, realMarkDoneDeps } from "./dispatch/markDone.js";
 import { createApprove, realApproveDeps } from "./review/approve.js";
 import type { Board } from "./model.js";
 import { runInit } from "./init/runInit.js";
+import { runDoctor, formatReport, realProbe } from "./doctor/doctor.js";
 
 const HELP = `
   Usage
     $ overseer            Render the live kanban board
     $ overseer init       Install bundled skills into the global Claude skills dir
+    $ overseer doctor     Check prerequisites (Node, claude, git, gh, config)
 
   Options
     --help                Show this help
@@ -319,6 +321,19 @@ function main(): void {
       fail(err instanceof Error ? err.message : String(err));
     }
     return;
+  }
+  if (subcommand === "doctor") {
+    // A one-shot preflight: print the checklist and exit non-zero iff a required
+    // check failed, so `overseer doctor && overseer` (or a CI gate) can branch on
+    // it. Runs *before* loadConfig — a missing/invalid config is itself one of the
+    // checks, not a precondition for running them.
+    const report = runDoctor({
+      nodeVersion: process.version,
+      probe: realProbe,
+      loadConfig,
+    });
+    process.stdout.write(formatReport(report));
+    process.exit(report.ok ? 0 : 1);
   }
   if (subcommand !== undefined) {
     fail(`unknown command '${subcommand}'. Run 'overseer --help' for usage.`);

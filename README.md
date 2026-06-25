@@ -70,6 +70,17 @@ into your global Claude skills directory and, if you have no config yet, writes 
 pointing at a default board root of `~/overseer-board` (creating that directory).
 It never overwrites an existing config.
 
+Then run `overseer doctor` to confirm your environment is ready — it checks Node,
+the `claude` / `git` / `gh` CLIs, and your config, and prints a green/red checklist
+of anything left to fix:
+
+```sh
+overseer doctor
+```
+
+It exits non-zero if a *required* prerequisite is missing (so you can gate on it),
+and only *warns* about `gh`, which powers just the optional PR features.
+
 For a guided first run from here — authoring a PRD with the skills, opening the
 board, and igniting the work — follow the
 [getting-started walkthrough](./docs/getting-started.md).
@@ -170,7 +181,9 @@ overseer           # run the installed bin
 ## Troubleshooting
 
 First-timer failures are mostly missing or unauthenticated CLIs that Overseer
-shells out to. Match the symptom to the fix:
+shells out to. **Run `overseer doctor` first** — it checks every prerequisite
+below at once and tells you exactly what's missing. Then match any remaining
+symptom to the fix:
 
 | Symptom | What it means | Fix |
 | --- | --- | --- |
