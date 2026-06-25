@@ -32,10 +32,20 @@ the board, never inside your files.
   loops `/code-review` (up to a configurable cap), fixes what it finds, and either
   merges the work or escalates to a **human-review** queue when it can't converge,
   hit a merge conflict, or the implementor flagged a deviation.
+- **Keeps you in the loop on escalations.** A `human-review` Issue's card shows
+  *why* it landed there (deviation / conflict / non-convergence). Resolve it in
+  place, then **approve** with `A` — the same merge-and-finish the clean path runs,
+  human-triggered. Work you do yourself (`ready-for-human`) is closed with `m`.
 - **Tracks the agents it launches.** Each card shows **liveness** (live / unknown /
-  orphaned). Recover a dead in-flight Issue with `R`; stop a running agent with `K`.
-- **Closes the loop to GitHub.** Open a PR for a `done` PRD with `P`; a marker shows
-  whether a PRD's PR is open or merged; `g` opens it in the browser.
+  orphaned). Recover a dead in-flight Issue with `R`; stop a running agent with `K`;
+  read a running agent's recent output with `o`.
+- **Lets you read the work.** Press `v` (or `Enter` on an Issue) to view a PRD's or
+  Issue's markdown body in a scrollable modal, without leaving the board.
+- **Closes the loop to GitHub.** Open a PR for a `done` PRD with `P`; when the PRD's
+  Issues were sliced for reviewability, this opens a **stack** of PRs instead of one.
+  A marker shows whether a PRD's PR is open or merged; `g` opens it in the browser.
+- **Tidies up.** Delete a finished PRD — its folder and all its Issue files — with
+  `X`, once the card is just clutter.
 
 ## Requirements
 
@@ -107,6 +117,31 @@ cap = 3            # max /code-review passes before escalating to human-review
 effort = "medium"  # /code-review effort per pass: low | medium | high
 ```
 
+### Tuning the spawned agents (optional)
+
+Separate `[implementor]` and `[reviewer]` tables tune the agents Overseer spawns —
+the `--model` and session `--effort` each launches with. Both fields in both tables
+are optional; an omitted field (or table) inherits the launcher's default, so an
+unconfigured board spawns agents exactly as before. This lets you pair a capable
+model at high effort for the implementor (a correct first cut collapses the review
+loop) with a faster, cheaper model for the per-pass reviewer:
+
+```toml
+root = "~/work/prds"
+
+[implementor]
+model = "opus"     # alias (opus | sonnet | haiku | fable) or a full model id
+effort = "high"    # session reasoning effort: low | medium | high | xhigh | max
+
+[reviewer]
+model = "sonnet"
+effort = "medium"
+```
+
+Note `[review].effort` (the `/code-review` skill's thoroughness) is distinct from
+`[reviewer].effort` (the reviewer agent session's reasoning effort) — they're
+orthogonal knobs.
+
 ## Layout it expects
 
 Folder-per-PRD under the root. A directory containing a `prd.md` **is** a PRD; a
@@ -152,22 +187,28 @@ Press `?` in the app for the full reference. The current map:
 | Key | Action | Where |
 | --- | --- | --- |
 | `h` `j` `k` `l` / arrows | Move selection | both |
-| `Enter` | Zoom into a PRD's Issues | board |
+| `Enter` | Zoom into a PRD's Issues (board) / view an Issue's body (issues) | both |
 | `Esc` | Back out to the board | issues |
-| `d` | Dispatch a wave of agents for the selected PRD | board |
+| `v` | View the selected card's body | both |
+| `d` | Dispatch a wave of agents (resumes an in-progress PRD) | board |
+| `P` | Open a GitHub PR (or a stack) for a done PRD | board |
+| `g` | Go to the selected PRD's PR | board |
+| `X` | Delete a done PRD (folder + all its Issues) | board |
 | `r` | Review the selected Issue | issues |
 | `R` | Re-dispatch an orphaned Issue | issues |
 | `K` | Stop a live Issue's agent | issues |
-| `P` | Open a GitHub PR for a done PRD | board |
-| `g` | Go to the selected PRD's PR | board |
+| `o` | Read a live Issue's agent output | issues |
+| `m` | Mark a ready-for-human Issue done | issues |
+| `A` | Approve a human-review Issue (merge + done) | issues |
 | `a` | Toggle auto-run (the Reactor brake) | both |
 | `?` | Show the keybind reference | both |
 | `q` | Quit (backs out first if zoomed) | both |
 
 The board renders **full screen** on the terminal's alternate screen buffer (like
-vim/htop) and restores your shell on quit. The alt screen has no scrollback, so a
-column with more cards than fit will clip on small terminals (in-app scrolling is a
-logged follow-up in [`docs/ideas.md`](./docs/ideas.md)).
+vim/htop) and restores your shell on quit. A column with more cards than fit
+**scrolls vertically** to keep your selection in view. Horizontal scrolling across
+columns is not yet implemented, so on a narrow terminal the 7-column Issue view can
+clip at the screen edge (a logged follow-up in [`docs/ideas.md`](./docs/ideas.md)).
 
 ## Run
 

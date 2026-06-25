@@ -153,23 +153,44 @@ While that runs you stay in control:
 - Each card shows **liveness** — live, unknown, or orphaned.
 - Press `R` to re-dispatch an Issue whose agent died mid-flight.
 - Press `K` to stop a running agent.
+- Press `o` to read a running agent's recent output — *what is it doing, is it
+  hung?* — without leaving the board.
+- Press `v` (or `Enter` on an Issue) to read a card's markdown body.
 - Press `a` to toggle **auto-run** — the Reactor's brake — if you want to step
   through the work manually instead.
 
 That's the full loop: you authored a PRD, pressed one key, and the board carried it
 from `ready-for-agent` through implementation and review on its own.
 
+### Resolving the human-review queue
+
+When the reviewer can't finish on its own, the Issue lands in **human-review**, and
+its card shows *why* (`deviation` / `conflict` / `non-convergence`). Resolve whatever
+sent it there — read the diff, fix the conflict in the Issue's worktree — then press
+**`A`** to **approve**: Overseer merges the worktree into the PRD's feature branch,
+sets the Issue `done`, and cleans up — the exact merge the clean path runs, now
+human-triggered. For a tree that needs hand-fixing from a separate session, the
+bundled `/overseer-merge` skill does the same merge.
+
+Work routed to you rather than an agent (`ready-for-human` — a manual step, a secret,
+a decision) has no diff to review: do it, then press **`m`** to mark it `done`.
+
 ## 6. (Optional) Close the loop to GitHub
 
 Once a PRD reaches **done**, you can open a pull request for it without leaving the
 board:
 
-- Press **`P`** to open a GitHub PR for the done PRD.
+- Press **`P`** to open a GitHub PR for the done PRD. If the PRD's Issues were
+  *sliced* for reviewability, this opens a **stack** of smaller PRs instead of one.
 - A marker on the card shows whether its PR is open or merged.
 - Press **`g`** to open that PR in your browser.
 
 These are the only features that need `gh`. If `P` or `g` seem to do nothing, run
 `gh auth login` (see [troubleshooting](../README.md#troubleshooting)).
+
+When a PRD is fully landed and its card is just clutter, press **`X`** to delete it
+— the folder and all its Issue files — behind a confirm. (This removes the *record*
+of the work, not the branch or any PR.)
 
 ## Where to go next
 
