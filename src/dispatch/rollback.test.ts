@@ -19,6 +19,7 @@ function orphan(status: string, overrides: Partial<DispatchIssue> = {}): Dispatc
     deviation: undefined,
     reviewVerdict: undefined,
     slice: undefined,
+    reviewFindings: undefined,
     body: "",
     ...overrides,
   };

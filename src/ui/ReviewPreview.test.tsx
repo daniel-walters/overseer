@@ -21,6 +21,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     deviation: undefined,
     reviewVerdict: undefined,
     slice: undefined,
+    reviewFindings: undefined,
     body: "",
     ...overrides,
   };

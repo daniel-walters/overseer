@@ -30,6 +30,7 @@ function view(issues: readonly Partial<DispatchIssue>[]): DispatchView {
       deviation: i.deviation,
       reviewVerdict: i.reviewVerdict,
       slice: i.slice,
+      reviewFindings: i.reviewFindings,
       body: i.body ?? "",
     })),
   };
