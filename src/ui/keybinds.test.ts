@@ -37,6 +37,7 @@ function ctx(over: Partial<BindContext> = {}): BindContext {
     prdHasPr: true,
     issueReadyForReview: true,
     issueReadyForHuman: true,
+    issueReadyForAudit: true,
     issueOrphan: true,
     issueLive: true,
     issueApprovable: true,
@@ -54,6 +55,7 @@ function spyHandlers(): KeybindHandlers {
     back: vi.fn(),
     dispatch: vi.fn(),
     review: vi.fn(),
+    audit: vi.fn(),
     redispatch: vi.fn(),
     kill: vi.fn(),
     markDone: vi.fn(),
@@ -101,6 +103,18 @@ describe("keybind registry", () => {
   it("matches an issue-level binding only at the issue level", () => {
     expect(matchKeybind(press("r"), "issues", ctx())?.label).toContain("Review");
     expect(matchKeybind(press("r"), "board", ctx())).toBeUndefined();
+  });
+
+  it("matches the audit binding only at the issue level (per-Issue, like r)", () => {
+    expect(matchKeybind(press("c"), "issues", ctx())?.label).toContain("audit");
+    expect(matchKeybind(press("c"), "board", ctx())).toBeUndefined();
+  });
+
+  it("routes the audit binding to the audit handler", () => {
+    const handlers = spyHandlers();
+    const p = press("c");
+    matchKeybind(p, "issues", ctx())?.action(handlers, p);
+    expect(handlers.audit).toHaveBeenCalledTimes(1);
   });
 
   it("matches the mark-done binding only at the issue level (per-Issue, like r)", () => {
@@ -305,6 +319,20 @@ describe("matchKeybind — eligibility gate", () => {
     expect(matchKeybind(press("r"), "issues", ctx({ issueReadyForReview: false }))).toBeUndefined();
   });
 
+  it("c matches only on a ready-for-audit Issue and is inert otherwise", () => {
+    // The manual audit crank: eligible exactly on a waiting `ready-for-audit`
+    // card, inert on a running auditor and every other lane — the same
+    // single-Issue gate `r` applies to `ready-for-review` (ADR 0017 / 0026).
+    expect(
+      matchKeybind(press("c"), "issues", ctx({ issueReadyForAudit: true }))?.label,
+    ).toContain("audit");
+    expect(matchKeybind(press("c"), "issues", ctx({ issueReadyForAudit: false }))).toBeUndefined();
+  });
+
+  it("c is an issue-level binding (never matches at the board level)", () => {
+    expect(matchKeybind(press("c"), "board", ctx())).toBeUndefined();
+  });
+
   it("m matches only on a ready-for-human Issue and is inert otherwise", () => {
     expect(
       matchKeybind(press("m"), "issues", ctx({ issueReadyForHuman: true }))?.label,
@@ -450,6 +478,8 @@ describe("hintsFor — the status-line subset, eligibility-filtered", () => {
     expect(keysOf("issues", ctx({ issueLive: false }))).not.toContain("K");
     expect(keysOf("issues", ctx({ issueLive: true, issueReadyForReview: false, issueOrphan: false }))).toContain("o");
     expect(keysOf("issues", ctx({ issueLive: false }))).not.toContain("o");
+    expect(keysOf("issues", ctx({ issueReadyForAudit: true }))).toContain("c");
+    expect(keysOf("issues", ctx({ issueReadyForAudit: false }))).not.toContain("c");
     expect(keysOf("issues", ctx({ issueReadyForHuman: true }))).toContain("m");
     expect(keysOf("issues", ctx({ issueReadyForHuman: false }))).not.toContain("m");
     expect(keysOf("issues", ctx({ issueApprovable: true }))).toContain("A");
@@ -461,7 +491,7 @@ describe("hintsFor — the status-line subset, eligibility-filtered", () => {
     const boardKeys = keysOf("board", all);
     const issueKeys = keysOf("issues", all);
     // Issue-level action keys never leak onto the board bar.
-    for (const k of ["r", "R", "K", "m", "A", "o"]) expect(boardKeys).not.toContain(k);
+    for (const k of ["r", "c", "R", "K", "m", "A", "o"]) expect(boardKeys).not.toContain(k);
     // Board-only PRD keys never leak onto the issue bar.
     for (const k of ["d", "P", "g", "X"]) expect(issueKeys).not.toContain(k);
   });
