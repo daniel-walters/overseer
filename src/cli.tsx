@@ -64,12 +64,14 @@ function runBoard(): void {
   let review: ReviewConfig;
   let implementorAgent: AgentConfig;
   let reviewerAgent: AgentConfig;
+  let auditorAgent: AgentConfig;
   try {
     const config = loadConfig();
     root = config.root;
     review = config.review;
     implementorAgent = config.implementor;
     reviewerAgent = config.reviewer;
+    auditorAgent = config.auditor;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -267,6 +269,7 @@ function runBoard(): void {
     review,
     implementor: implementorAgent,
     reviewer: reviewerAgent,
+    auditor: auditorAgent,
   });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell

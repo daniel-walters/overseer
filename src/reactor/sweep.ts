@@ -3,6 +3,7 @@ import type { DispatchIssue, DispatchView } from "../dispatch/reader.js";
 import { Status } from "../dispatch/status.js";
 import { REVIEW_VERDICT_CLEAN } from "../model.js";
 import { classifyReviewability } from "../review/eligibility.js";
+import { classifyAuditability } from "../audit/eligibility.js";
 
 /**
  * One PRD as the Reactor's sweep ingests it: where it lives (for deriving its
@@ -17,32 +18,44 @@ export interface PrdInput {
 }
 
 /**
- * One PRD after the sweep, carrying *both* spawn edges' candidates so the
+ * One PRD after the sweep, carrying *all three* spawn edges' candidates so the
  * orchestrator drives them in a single pass:
  *
  * - {@link frontier} — every Issue's implementor classification; `runDispatch`
  *   takes only the `spawn`-classified entries, so the spawn-eligibility decision
  *   is the frontier's, computed here, not re-derived downstream.
+ * - {@link auditors} — the auditable `ready-for-audit` Issues, the audit edge's
+ *   frontier; `runAudit` acts on each.
  * - {@link reviewers} — the reviewable `ready-for-review` Issues, the reviewer
  *   edge's frontier; `runReview` acts on each. Eligibility is the *same*
  *   {@link classifyReviewability} the `r` keybind uses, so an Issue missing the
  *   repo, worktree, or branch the reviewer needs is excluded here rather than
  *   spawning a reviewer with nothing to check out, merge, or launch in.
  *
- * Its `view` is carried through so the orchestrator builds both edges' prompts
+ * Its `view` is carried through so the orchestrator builds every edge's prompts
  * from the same read.
  */
 export interface SweptPrd {
   readonly prdDir: string;
   readonly view: DispatchView;
   readonly frontier: readonly FrontierEntry[];
+  /**
+   * The auditable `ready-for-audit` Issues, the audit edge's frontier — the third
+   * spawn edge (ADR 0026), sitting between the implementor frontier and the
+   * reviewers. Eligibility is the shared {@link classifyAuditability} the `c`
+   * keybind uses, so an Issue missing the repo or worktree the auditor needs is
+   * excluded here rather than spawning an auditor with nothing to check out or run
+   * in. No `blocked_by` re-check: blockers already gated the implementor, exactly
+   * as the reviewer frontier does not re-check them.
+   */
+  readonly auditors: readonly DispatchIssue[];
   readonly reviewers: readonly DispatchIssue[];
   /**
    * The resolve-verdict candidates: `in-review` Issues carrying
-   * `review_verdict: clean` (ADR 0019). The non-spawn third edge — the Reactor
+   * `review_verdict: clean` (ADR 0019). The non-spawn fourth edge — the Reactor
    * runs the clean merge → `done` resolve on each, gated on the verdict (not on
    * liveness, so it is independent of the lingering-completed-row quirk). Unlike
-   * {@link reviewers}, surfacing one does not spawn — "exactly two spawn edges"
+   * {@link reviewers}, surfacing one does not spawn — "exactly three spawn edges"
    * holds. The merge handoff (repo/worktree/branch) is checked by the resolve
    * decision, not gated here: the sweep surfaces purely on the verdict.
    */
@@ -51,15 +64,22 @@ export interface SweptPrd {
 
 /**
  * The pure cross-PRD frontier sweep: for every PRD across the whole root,
- * compute both spawn edges' candidates. These are the two — and only two —
- * spawn edges (CONTEXT.md → Status lifecycle); the Reactor never spawns on an
- * agent-owned transition or a human gate.
+ * compute all three spawn edges' candidates. These are the three — and only three
+ * — spawn edges (CONTEXT.md → Status lifecycle; ADR 0026 added the audit edge);
+ * the Reactor never spawns on an agent-owned transition or a human gate.
  *
  * **Implementor edge.** Reuses {@link computeFrontier} so the Reactor's notion of
  * "spawn an implementor now" is exactly the dispatcher's: an Issue is eligible
  * only when it is `ready-for-agent`, names a repo, and all its `blocked_by`
  * blockers are `done` (with `done` blockers cleared, cycles fail-safe to
  * `blocked`, and human/review statuses skipped).
+ *
+ * **Auditor edge.** Reuses {@link classifyAuditability} so the Reactor's notion of
+ * "spawn an auditor now" is exactly the `c` keybind's: an Issue is an auditor
+ * candidate only when it is `ready-for-audit` and carries the repo (the auditor's
+ * launch target) and the worktree it checks out to compare against the plan. No
+ * `blocked_by` re-check — blockers gated the implementor frontier, as the reviewer
+ * edge does not re-check them.
  *
  * **Reviewer edge.** Reuses {@link classifyReviewability} so the Reactor's
  * notion of "spawn a reviewer now" is exactly the `r` keybind's: an Issue is a
@@ -71,7 +91,7 @@ export interface SweptPrd {
  * keeps the auto path from spawning a reviewer with nothing to check out, merge,
  * or launch in, instead of relying on the fields being present by construction.
  *
- * Both edges are computed independently per PRD: `blocked_by` references resolve
+ * All edges are computed independently per PRD: `blocked_by` references resolve
  * only within the same PRD's view (a sibling filename), never across PRDs.
  *
  * Data-in/data-out, no I/O — the orchestrator does the reading and spawning.
@@ -81,9 +101,20 @@ export function sweepFrontier(prds: readonly PrdInput[]): readonly SweptPrd[] {
     prdDir,
     view,
     frontier: computeFrontier(view),
+    auditors: view.issues.filter(isAuditCandidate),
     reviewers: view.issues.filter(isReviewerCandidate),
     resolvers: view.issues.filter(isResolveCandidate),
   }));
+}
+
+/**
+ * Whether an Issue is an auditor-spawn candidate, via the shared
+ * {@link classifyAuditability} the `c` keybind uses: `ready-for-audit` with a
+ * recorded repo and worktree. Reusing it keeps the auto and manual audit edges
+ * from drifting, so the Reactor never spawns an auditor the keybind would skip.
+ */
+function isAuditCandidate(issue: DispatchIssue): boolean {
+  return classifyAuditability(issue).auditable;
 }
 
 /**

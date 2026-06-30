@@ -2,11 +2,14 @@ import { errorMessage } from "../errorMessage.js";
 import type { AgentConfig } from "../agentConfig.js";
 
 /**
- * Which spawn edge a failure came from. The dispatch and review edges share one
- * durable failure log; this discriminator lets an operator tell an implementor
- * launch failure apart from a reviewer launch failure for the same Issue+repo.
+ * Which spawn edge a failure came from. The dispatch, audit, and review edges
+ * share one durable failure log; this discriminator lets an operator tell an
+ * implementor launch failure apart from an auditor or reviewer launch failure for
+ * the same Issue+repo. The auditor is the third spawn edge (ADR 0026), labelled
+ * `audit` after the phase (matching the `audit` board lane), beside the
+ * agent-named `implementor`/`reviewer`.
  */
-export type SpawnEdgeKind = "implementor" | "reviewer";
+export type SpawnEdgeKind = "implementor" | "audit" | "reviewer";
 
 /**
  * Which edge a *suppressible* failure came from — the two spawn edges plus the

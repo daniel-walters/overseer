@@ -227,4 +227,71 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ configPath, home })).toThrow(/xhigh/i);
     });
   });
+
+  describe("auditor runtime knobs", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults the auditor to model opus and inherited effort when the table is absent", () => {
+      // The auditor's model defaults to `opus` — the deliberate divergence from the
+      // inherit-by-default of the other two edges (ADR 0026), so the gate against
+      // silent scope drift is strong even on an unconfigured board.
+      writeFileSync(configPath, 'root = "~"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "opus",
+        effort: null,
+      });
+    });
+
+    it("reads model and effort from the [auditor] table when present", () => {
+      writeWithRoot('[auditor]\nmodel = "sonnet"\neffort = "high"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "sonnet",
+        effort: "high",
+      });
+    });
+
+    it("keeps the opus model default when only effort is set", () => {
+      writeWithRoot('[auditor]\neffort = "max"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "opus",
+        effort: "max",
+      });
+    });
+
+    it("overrides the opus default when only the model is set, leaving effort inherited", () => {
+      writeWithRoot('[auditor]\nmodel = "haiku"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "haiku",
+        effort: null,
+      });
+    });
+
+    it("throws a ConfigError naming the table for a non-table value", () => {
+      writeWithRoot('auditor = "opus"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/auditor/i);
+    });
+
+    it("throws a ConfigError for an empty model string", () => {
+      writeWithRoot('[auditor]\nmodel = ""\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/model/i);
+    });
+
+    it("throws a ConfigError naming the allowed values for an unknown effort", () => {
+      writeWithRoot('[auditor]\neffort = "extreme"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
+    });
+  });
 });

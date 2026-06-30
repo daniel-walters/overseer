@@ -50,6 +50,16 @@ export interface AgentConfig {
 export const DEFAULT_AGENT_CONFIG: AgentConfig = { model: null, effort: null };
 
 /**
+ * The auditor edge's default runtime: model `opus`, effort inherited. The one
+ * intentional asymmetry from {@link DEFAULT_AGENT_CONFIG}'s inherit-everything
+ * (ADR 0026) — a fresh-eyes plan-conformance gate is only worth having if it is
+ * strong, so the auditor reaches for the most capable model by default even on a
+ * board that configures no `[auditor]` table. `effort` still inherits (`null`),
+ * matching the other two edges, so only the model diverges.
+ */
+export const DEFAULT_AUDITOR_CONFIG: AgentConfig = { model: "opus", effort: null };
+
+/**
  * Build the `claude` CLI flag pair for an agent runtime: `--model <m>` and/or
  * `--effort <e>`, each emitted only when its value is set. A `null`/absent value
  * (or absent config) yields no flag for that knob, so the spawn inherits the
