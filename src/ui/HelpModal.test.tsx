@@ -38,6 +38,7 @@ const NOTHING_ELIGIBLE: BindContext = {
   prdHasPr: false,
   issueReadyForReview: false,
   issueReadyForHuman: false,
+  issueReadyForAudit: false,
   issueOrphan: false,
   issueLive: false,
   issueApprovable: false,

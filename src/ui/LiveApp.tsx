@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from "react";
-import { App, type Dispatcher, type Reviewer, type Rollback, type Killer, type OpenPr, type Delete, type MarkDone, type Approve, type DetailReader, type AgentOutputReader, type UrlOpener } from "./App.js";
+import { App, type Dispatcher, type Reviewer, type Auditor, type Rollback, type Killer, type OpenPr, type Delete, type MarkDone, type Approve, type DetailReader, type AgentOutputReader, type UrlOpener } from "./App.js";
 import { useLiveBoard, type UseLiveBoardOptions } from "./useLiveBoard.js";
 
 export interface LiveAppProps extends UseLiveBoardOptions {
@@ -7,6 +7,8 @@ export interface LiveAppProps extends UseLiveBoardOptions {
   readonly dispatcher?: Dispatcher;
   /** The review seams, wired in cli.tsx; absent in board-only tests. */
   readonly reviewer?: Reviewer;
+  /** The manual audit-crank seam (`c`), wired in cli.tsx; absent in board-only tests. */
+  readonly auditor?: Auditor;
   /** The orphan-recovery seam, wired in cli.tsx; absent in board-only tests. */
   readonly rollback?: Rollback;
   /** The kill-switch seam, wired in cli.tsx; absent in board-only tests. */
@@ -42,7 +44,7 @@ export interface LiveAppProps extends UseLiveBoardOptions {
  * preview) separately from the board, so a refresh under the user's feet never
  * loses their place. The dispatcher and reviewer are threaded straight through.
  */
-export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, urlOpener, reviewCap, ...options }: LiveAppProps) {
+export function LiveApp({ dispatcher, reviewer, auditor, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, urlOpener, reviewCap, ...options }: LiveAppProps) {
   const reactor = options.reactor;
   // The board-level reactor-activity signal shown beside the auto-run indicator
   // (Issue: surface reactor state). LiveApp owns it as a single source of truth,
@@ -90,6 +92,7 @@ export function LiveApp({ dispatcher, reviewer, rollback, killer, openPr, delete
       board={board}
       dispatcher={dispatcher}
       reviewer={reviewer}
+      auditor={auditor}
       rollback={rollback}
       killer={killer}
       openPr={openPr}

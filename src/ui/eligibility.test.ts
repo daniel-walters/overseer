@@ -239,6 +239,55 @@ describe("eligibility — computeBindContext", () => {
       ).toBe(false);
     });
 
+    it("issueReadyForAudit iff the selected Issue is a waiting ready-for-audit card", () => {
+      // `c` is eligible only on a `ready-for-audit` Issue. Both `ready-for-audit`
+      // (waiting) and `in-audit` (active) fold into the single `audit` lane
+      // (model.ts), distinguished by the liveness overlay (ADR 0026): a
+      // ready-for-audit card carries no liveness, an in-audit one always does
+      // (live / orphaned / unknown). So the flag keys off lane + the *absence* of
+      // liveness, mirroring how `m` keys off lane + the `readyFor` badge.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "audit" }),
+          frontier: [],
+        }).issueReadyForAudit,
+      ).toBe(true);
+      // An in-audit card sits in the same lane but carries a liveness overlay —
+      // it is the running auditor (`K`/`o` act on it), never a `c` candidate.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "audit", liveness: "live" }),
+          frontier: [],
+        }).issueReadyForAudit,
+      ).toBe(false);
+      // An orphaned in-audit auditor (recover with `R`) is likewise not a `c` candidate.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "audit", liveness: "orphaned" }),
+          frontier: [],
+        }).issueReadyForAudit,
+      ).toBe(false);
+      // Every other lane is false.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "ready-for-review" }),
+          frontier: [],
+        }).issueReadyForAudit,
+      ).toBe(false);
+      // Nothing selected ⇒ false.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: undefined,
+          frontier: [],
+        }).issueReadyForAudit,
+      ).toBe(false);
+    });
+
     it("issueApprovable iff the selected Issue is a human-review card with a recorded merge handoff", () => {
       // `A` is eligible only on a `human-review` Issue carrying a recorded worktree
       // + branch (the model's derived `approvable` overlay), regardless of the
