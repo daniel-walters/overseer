@@ -117,9 +117,11 @@ export interface DriveReviewPassDeps extends Omit<ReviewDeps, "reviewPass"> {
  * 1. Read the pass count `N` already recorded for the Issue (absent ⇒ 0, the
  *    first pass).
  * 2. **At the cap** (`N ≥ review.cap`): the loop ran `cap` passes without
- *    converging. Escalate to `human-review` with `non-convergence` and spawn
- *    nothing — the cap is Overseer-enforced from the count it wrote, not an agent
- *    counting in its own head.
+ *    converging. Escalate to `human-review` and spawn nothing — the cap is
+ *    Overseer-enforced from the count it wrote, not an agent counting in its own
+ *    head. A recorded `deviation` takes precedence over `non-convergence` (ADR
+ *    0026), so the reason is `deviation` when the auditor flagged one and
+ *    `non-convergence` otherwise.
  * 3. **Below the cap**: spawn pass `N+1` through {@link runReview} (which flips
  *    `ready-for-review → in-review` first — the idempotency lock — then records
  *    `N+1` in the sidecar at spawn time).
@@ -134,7 +136,15 @@ export function driveReviewPass(
 ): void {
   const completed = deps.readReviewPass(issue.path) ?? 0;
   if (completed >= deps.review.cap) {
-    escalateNonConvergence(issue.path, completed, deps.review.cap);
+    // Deviation takes precedence over non-convergence (ADR 0026): the auditor
+    // recorded any deviation before review, so it is present here and surfaces as
+    // the reason instead of non-convergence.
+    escalateNonConvergence(
+      issue.path,
+      completed,
+      deps.review.cap,
+      issue.deviation,
+    );
     return;
   }
   runReview(issue, { ...deps, reviewPass: completed + 1 });
