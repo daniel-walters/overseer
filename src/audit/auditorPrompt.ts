@@ -101,7 +101,10 @@ Edit the Issue's frontmatter in the Overseer root. The Issue file to edit is:
 
    ${issue.path}
 
-In a single edit, do BOTH of the following:
+In a single edit, do BOTH of the following — and leave every other frontmatter
+field untouched (in particular, the \`branch\`, \`worktree\`, and \`repo\` fields the
+implementor recorded must survive this edit intact; the downstream reviewer and
+Overseer depend on them):
 
 - **If, and only if, you found a meaningful divergence:** add a \`deviation\` line
   recording it as a short, double-quoted, one-line reason — e.g.

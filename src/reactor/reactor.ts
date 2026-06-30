@@ -453,7 +453,8 @@ function auditEligible(
 
 /**
  * Run the existing `runReview` spawn edge over one PRD's reviewer candidates,
- * minus the failed-set — the third of the three spawn edges. Each candidate is
+ * minus the failed-set — the third and final spawn edge (ADR 0026), running after
+ * the audit frontier. Each candidate is
  * `ready-for-review` and reviewable (the sweep gated that via the shared
  * `classifyReviewability`); `runReview` flips it `ready-for-review → in-review`
  * before spawning, so flip-before-spawn is the idempotency lock here exactly as

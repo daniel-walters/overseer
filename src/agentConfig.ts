@@ -68,7 +68,7 @@ export const DEFAULT_AUDITOR_CONFIG: AgentConfig = { model: "opus", effort: null
  */
 export function agentFlags(agent?: AgentConfig): string[] {
   const flags: string[] = [];
-  if (agent?.model) flags.push("--model", agent.model);
-  if (agent?.effort) flags.push("--effort", agent.effort);
+  if (agent?.model != null) flags.push("--model", agent.model);
+  if (agent?.effort != null) flags.push("--effort", agent.effort);
   return flags;
 }

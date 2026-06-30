@@ -34,7 +34,8 @@ describe("classifyAuditability", () => {
 
   it("is not auditable unless the status is ready-for-audit", () => {
     const result = classifyAuditability({ ...base, status: "in-audit" });
-    expect(result.auditable).toBe(false);
+    expect(result).toMatchObject({ auditable: false });
+    if (!result.auditable) expect(result.reason).toMatch(/in-audit/);
   });
 
   it("is not auditable without a recorded worktree", () => {

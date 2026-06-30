@@ -12,14 +12,15 @@ import type { AgentConfig } from "../agentConfig.js";
 export type SpawnEdgeKind = "implementor" | "audit" | "reviewer";
 
 /**
- * Which edge a *suppressible* failure came from — the two spawn edges plus the
- * non-spawn **resolve** edge (ADR 0019). A transient merge failure on the resolve
- * edge is suppressed and logged exactly as a spawn-launch failure is, so it shares
- * the failure log and the session-scoped failed-set keyed by `(issueKey, edge)`.
- * The `resolve` edge is kept distinct from {@link SpawnEdgeKind} because resolving
- * a verdict never spawns — the "exactly two spawn edges" invariant holds — but it
- * widens the failure-record/failed-set key so the three edges never mask one
- * another for the same Issue.
+ * Which edge a *suppressible* failure came from — the three spawn edges plus the
+ * non-spawn **resolve** edge (ADR 0019 / 0026). A transient merge failure on the
+ * resolve edge is suppressed and logged exactly as a spawn-launch failure is, so it
+ * shares the failure log and the session-scoped failed-set keyed by
+ * `(issueKey, edge)`. The `resolve` edge is kept distinct from
+ * {@link SpawnEdgeKind} because resolving a verdict never spawns (the "exactly
+ * three spawn edges" invariant holds — ADR 0026), but it widens the
+ * failure-record/failed-set key so the four edge values never mask one another for
+ * the same Issue.
  */
 export type FailedEdgeKind = SpawnEdgeKind | "resolve";
 

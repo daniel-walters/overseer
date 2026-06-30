@@ -284,9 +284,10 @@ function scanIssue(
   // and a default of "unknown" when it has none — the honesty boundary below.
   const withLiveness = applyLiveness(withReadyFor, path, rawStatus, lookupLiveness);
 
-  // The suppressed overlay rides the two awaiting `ready-*` lanes (a failed spawn)
-  // plus the `in-review` lane (a failed clean merge on the resolve edge — ADR
-  // 0019), with the edge derived from the same placement. On `in-review` it is NOT
+  // The suppressed overlay rides the three awaiting lanes — `ready` (agent),
+  // `audit` (`ready-for-audit`), and `ready-for-review` (a failed spawn) — plus
+  // the `in-review` lane (a failed clean merge on the resolve edge — ADR 0019),
+  // with the edge derived from the same placement. On `in-review` it is NOT
   // disjoint from the liveness verdict computed above — a held merge can sit on a
   // card whose dead reviewer also reads `orphaned` — so the Card resolves the
   // overlap by precedence: the suppressed marker outranks liveness (and the N/cap
@@ -456,16 +457,21 @@ function applySuppressed(
 
 /**
  * The failed-set edge a lane implies, or `undefined` if the lane carries no
- * suppressible edge. Reads the derived placement, so the three suppressible lanes
- * map to their edge — the two spawn edges plus the non-spawn `resolve` edge (ADR
- * 0019) — and every other lane (including a `ready-for-human` card, which shares
- * the `ready` lane but launches no agent) yields no edge.
+ * suppressible edge. Reads the derived placement, so the four suppressible lanes
+ * map to their edge — the three spawn edges plus the non-spawn `resolve` edge (ADR
+ * 0019 / 0026) — and every other lane (including a `ready-for-human` card, which
+ * shares the `ready` lane but launches no agent) yields no edge. The `audit` lane
+ * folds `ready-for-audit` and `in-audit`; only a `ready-for-audit` card (a rolled-
+ * back failed spawn) is ever in the failed-set under the `audit` edge, so the
+ * suppressed marker lands on the right card and an active `in-audit` card is never
+ * falsely stamped (its path is absent from the set).
  */
 function suppressedEdgeForLane(
   lane: Lane,
   readyFor: ReadyFor | undefined,
 ): FailedEdgeKind | undefined {
   if (lane === "ready" && readyFor === "agent") return "implementor";
+  if (lane === "audit") return "audit";
   if (lane === "ready-for-review") return "reviewer";
   if (lane === "in-review") return "resolve";
   return undefined;

@@ -62,6 +62,7 @@ export interface AuditDeps {
 export function runAudit(issue: DispatchIssue, deps: AuditDeps): void {
   const repo = issue.repo;
   if (!hasValue(repo)) return;
+  if (!hasValue(issue.worktree)) return;
 
   spawnWithFlip({
     edge: "audit",
