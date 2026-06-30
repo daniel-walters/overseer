@@ -937,7 +937,7 @@ describe("createReactor activity", () => {
 });
 
 /**
- * The third, non-spawn reconcile edge (ADR 0019): after the two spawn frontiers,
+ * The fourth, non-spawn reconcile edge (ADR 0019): after the three spawn frontiers,
  * the Reactor sweeps `in-review` Issues carrying `review_verdict: clean` and
  * resolves each — merging the worktree branch into the feature branch and writing
  * `done` — synchronously, under the same re-entrancy guard, gated on the verdict
@@ -983,7 +983,7 @@ describe("createReactor — resolve edge", () => {
     expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
       "status: done",
     );
-    // Resolving is not a spawn — "exactly two spawn edges" holds.
+    // Resolving is not a spawn — "exactly three spawn edges" holds.
     expect(deps.spawns).toEqual([]);
   });
 

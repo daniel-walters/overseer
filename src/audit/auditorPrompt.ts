@@ -106,10 +106,13 @@ field untouched (in particular, the \`branch\`, \`worktree\`, and \`repo\` field
 implementor recorded must survive this edit intact; the downstream reviewer and
 Overseer depend on them):
 
-- **If, and only if, you found a meaningful divergence:** add a \`deviation\` line
+- **If, and only if, you found a meaningful divergence:** write a \`deviation\` line
   recording it as a short, double-quoted, one-line reason — e.g.
   \`deviation: "Added a caching layer the plan never specified"\`. Quote the value
   so a colon or other punctuation in your reason cannot corrupt the frontmatter.
+  If a \`deviation:\` line already exists in the frontmatter, **CHANGE** its value
+  in place — do NOT add a second \`deviation:\` line; a duplicate key makes the
+  frontmatter invalid YAML and Overseer can no longer read the Issue.
   If you found no meaningful divergence, **omit the field entirely** — its mere
   presence forces a human to look, so never write it for an incidental difference.
 - **Unconditionally** — whether or not you recorded a deviation — flip the Issue's

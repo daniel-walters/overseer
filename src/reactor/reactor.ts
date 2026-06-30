@@ -132,7 +132,7 @@ export interface ReactorDeps {
   readonly reviewer?: AgentConfig;
   /**
    * The auditor agent runtime (model + effort) the audit edge launches at — the
-   * third spawn edge's counterpart to {@link implementor}/{@link reviewer},
+   * second spawn edge's counterpart to {@link implementor}/{@link reviewer},
    * sourced from the CLI's `[auditor]` config and shared with the manual `c`
    * auditor. Optional: omitted ⇒ {@link DEFAULT_AUDITOR_CONFIG} (**model `opus`**,
    * effort inherited — the one edge whose default is not inherit-everything, ADR
@@ -191,7 +191,7 @@ export interface Reactor {
  *   reconcile dispatches them: one `d` cascades through the dependency graph with
  *   no second keypress.
  * - **Auditor** for any `ready-for-audit` Issue with a recorded repo and worktree
- *   (ADR 0026). The third spawn edge, between the implementor and reviewer
+ *   (ADR 0026). The second spawn edge, between the implementor and reviewer
  *   frontiers: a fresh-eyes agent compares the diff against the plan and records a
  *   `deviation` only on a meaningful divergence, then flips the Issue on to
  *   `ready-for-review`.

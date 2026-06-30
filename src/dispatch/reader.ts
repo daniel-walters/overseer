@@ -48,9 +48,9 @@ export interface DispatchIssue {
   /** The implementor's recorded branch to merge, or undefined. See {@link worktree}. */
   readonly branch: string | undefined;
   /**
-   * The implementor's deviation note, present only if it strayed from the
-   * Issue's planned approach. Its mere presence (not any value) forces a human
-   * review; undefined when the implementor followed the plan.
+   * The auditor's deviation note, present only if the implementation strayed
+   * from the Issue's planned approach. Its mere presence (not any value) forces
+   * a human review; undefined when the auditor found no meaningful divergence.
    */
   readonly deviation: string | undefined;
   /**
