@@ -11,6 +11,20 @@ If a question can be answered by exploring the codebase, explore the codebase in
 
 This is the **upstream** of the Overseer authoring pipeline: a good grilling session leaves behind the shared understanding (and the repo `repo:` / AFK-vs-HITL decisions) that `/overseer-to-prd` and `/overseer-to-issues` later synthesize into a PRD and Issues. Keep this skill pure — interview and maintain domain docs. Do **not** write a PRD or create Issues here; that's the producer skills' job, working from the conversation you produce.
 
+### Starting from a slate entry
+
+`/overseer-grill-prep` runs one step further upstream: it surfaces a *slate* of candidate PRD shapes into `<root>/_slate/<initiative>.md` (root from `~/.config/overseer/config.toml`). The slate is board-invisible by design, so this skill is where its candidates resurface — at the moment you pick what to grill.
+
+**If the user named a specific area or candidate**, use it: when it matches a slate entry, read that entry and treat its **Problem** as the design under test and its **Unknowns** as the opening agenda. The rest of the grill is unchanged; you're inheriting a starting point instead of eliciting it cold.
+
+**If no specific area was given**, do not start cold. First check `<root>/_slate/` for slate files with `candidate`-status entries. If any exist, present them to the user as a pick-list and let them choose — this doubles as the "view my grilling areas" surface:
+
+- List each candidate as `<slug> — <Problem first line>`, grouped by initiative file if there's more than one.
+- Offer a final **"something not on the slate"** option so grill keeps its cold-start ability.
+- Once they pick, proceed exactly as the "named a candidate" path above.
+
+If `<root>/_slate/` is empty or absent, just grill cold as before — the slate is optional, not a precondition.
+
 ## Domain awareness
 
 During codebase exploration, also look for existing documentation in **each code repo in the session**.
