@@ -29,10 +29,9 @@ const AWAITING: Record<
 
 /** The awaiting target for an active status, or `undefined` for any other. */
 function awaitingFor(status: string | undefined): Status | undefined {
-  if (status === Status.IN_PROGRESS) return AWAITING[Status.IN_PROGRESS];
-  if (status === Status.IN_AUDIT) return AWAITING[Status.IN_AUDIT];
-  if (status === Status.IN_REVIEW) return AWAITING[Status.IN_REVIEW];
-  return undefined;
+  return status !== undefined
+    ? (AWAITING as Record<string, Status | undefined>)[status]
+    : undefined;
 }
 
 /** The single I/O seam the rollback edge depends on. */

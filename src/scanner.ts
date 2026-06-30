@@ -104,8 +104,9 @@ export type LinkedPrLookup = (prdDir: string) => LinkedPr | undefined;
  *
  * `lookupLiveness` is the optional liveness overlay (ADR 0008), recomputed and
  * passed in on each board rebuild — never read from the Issue files (ADR 0002).
- * It is consulted only for `in-progress` / `in-review` Issues (the two lanes a
- * spawned agent owns); every other lane scans with no liveness. Omitting it (the
+ * It is consulted only for `in-progress` / `in-audit` / `in-review` Issues (the
+ * three statuses a spawned agent owns); every other status scans with no liveness.
+ * Omitting it (the
  * eager first render, board-only tests) simply leaves every card unmarked.
  *
  * `lookupSuppressed` is the mirror-image optional overlay, gated to the opposite

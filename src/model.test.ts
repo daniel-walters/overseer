@@ -192,6 +192,9 @@ describe("derivePrdStalled", () => {
   it("is false when an Issue is in flight, even with agent work waiting", () => {
     expect(derivePrdStalled([readyForAgent("001.md"), issue("in-progress")])).toBe(false);
     expect(derivePrdStalled([readyForAgent("001.md"), issue("in-review")])).toBe(false);
+    // `audit` lane covers both in-audit (active) and ready-for-audit (awaiting):
+    // either way work is in-flight or pending handoff, so the PRD is not stalled.
+    expect(derivePrdStalled([readyForAgent("001.md"), issue("audit")])).toBe(false);
   });
 
   it("is false when the ready-for-agent Issue is still blocked", () => {

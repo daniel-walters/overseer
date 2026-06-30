@@ -156,7 +156,7 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
  * Derive a PRD's board-level **stalled** overlay: `true` iff the PRD has agent
  * work that nobody is coming for — ≥1 unblocked `ready-for-agent` Issue (all its
  * `blocked_by` blockers are `done`) **and** no Issue currently in flight
- * (`in-progress` / `in-review`). It answers "this PRD has dispatchable work but
+ * (`in-progress` / `in-audit` / `in-review`). It answers "this PRD has dispatchable work but
  * nothing is running" so the board can flag it without zooming in.
  *
  * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdLane},
@@ -168,7 +168,7 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
  */
 export function derivePrdStalled(issues: readonly Issue[]): boolean {
   const inFlight = issues.some(
-    (i) => i.lane === "in-progress" || i.lane === "in-review",
+    (i) => i.lane === "in-progress" || i.lane === "audit" || i.lane === "in-review",
   );
   if (inFlight) return false;
   const doneIds = new Set(issues.filter((i) => i.lane === "done").map((i) => i.id));
