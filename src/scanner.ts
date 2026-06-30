@@ -341,8 +341,8 @@ function scanIssue(
   const humanReviewNote = readPresentString(data, FIELD.humanReviewNote);
   const withReason =
     humanReviewReason === undefined
-      ? withSuppressed
-      : { ...withSuppressed, humanReviewReason };
+      ? withTolerated
+      : { ...withTolerated, humanReviewReason };
   const withNote =
     humanReviewNote === undefined
       ? withReason

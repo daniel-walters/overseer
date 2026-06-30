@@ -42,14 +42,21 @@ export type Status = (typeof Status)[keyof typeof Status];
  * the liveness overlay (and so Orphan detection, Kill, and Agent-output) belongs:
  * `in-progress` (implementor), `in-audit` (auditor), and `in-review` (reviewer).
  * Each is the active half of a spawn edge's awaiting→active pair, and each has an
- * awaiting target the orphan rollback writes (see rollback's AWAITING map).
+ * awaiting target the orphan rollback writes (see rollback's AWAITING map, which
+ * is keyed on this `ActiveStatus` type — so adding a new active status here forces
+ * a compile error there too, keeping the two in sync).
  *
  * The waiting halves (`ready-for-agent`, `ready-for-audit`, `ready-for-review`)
  * are deliberately absent: no agent owns a waiting card, so it carries no liveness
  * — the distinction that, on the folded `audit` lane, separates a live/orphaned
  * `in-audit` card from a plain waiting `ready-for-audit` one (ADR 0026).
  */
-export const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>([
+export type ActiveStatus =
+  | typeof Status.IN_PROGRESS
+  | typeof Status.IN_AUDIT
+  | typeof Status.IN_REVIEW;
+
+export const ACTIVE_STATUSES: ReadonlySet<ActiveStatus> = new Set<ActiveStatus>([
   Status.IN_PROGRESS,
   Status.IN_AUDIT,
   Status.IN_REVIEW,

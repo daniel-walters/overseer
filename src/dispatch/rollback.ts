@@ -3,7 +3,7 @@ import { writeStatus } from "../issueFile.js";
 import { readReviewTarget } from "../review/reviewReader.js";
 import type { DispatchIssue } from "./reader.js";
 import { rollBackStatus } from "./failureLog.js";
-import { Status } from "./status.js";
+import { Status, type ActiveStatus } from "./status.js";
 import type { Rollback } from "../ui/App.js";
 
 /**
@@ -14,16 +14,13 @@ import type { Rollback } from "../ui/App.js";
  * `in-review` orphan to `ready-for-review` (re-entering the review frontier).
  * Anything else is not an active status and has no awaiting target.
  *
- * Keyed on the active-status subtype, not a bare `string`, so if you update this
- * map's key union to include a fourth active status and forget to provide its value,
- * that is a compile error. Note: the key union here and {@link ACTIVE_STATUSES} in
- * `status.ts` are independently maintained — adding a new active status requires
- * updating both files.
+ * Keyed on {@link ActiveStatus} (imported from `status.ts`), so adding a new
+ * active status to that type forces a compile error here too (missing required
+ * property). Update `ACTIVE_STATUSES` in `status.ts` at the same time — both
+ * name the same set; this map is the structural authority (Record completeness
+ * is compile-checked), and the Set is the runtime gate.
  */
-const AWAITING: Record<
-  typeof Status.IN_PROGRESS | typeof Status.IN_AUDIT | typeof Status.IN_REVIEW,
-  Status
-> = {
+const AWAITING: Record<ActiveStatus, Status> = {
   [Status.IN_PROGRESS]: Status.READY_FOR_AGENT,
   [Status.IN_AUDIT]: Status.READY_FOR_AUDIT,
   [Status.IN_REVIEW]: Status.READY_FOR_REVIEW,
