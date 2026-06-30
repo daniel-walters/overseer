@@ -299,7 +299,7 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
       // is "working" even if that one launch then throws (a failed launch is
       // already surfaced per-card by the suppressed marker — ADR 0011). The
       // counting wrapper sits over `deps.spawn` for the duration of this pass so
-      // every edge (`runDispatch`/`runReview`) is counted through one seam.
+      // every edge (`runDispatch`/`runAudit`/`runReview`) is counted through one seam.
       let spawnedThisReconcile = false;
       const countingDeps: ReactorDeps = {
         ...deps,
@@ -408,7 +408,7 @@ function dispatchEligible(
 
 /**
  * Run the `runAudit` spawn edge over one PRD's auditor candidates, minus the
- * failed-set — the third spawn edge (ADR 0026), sitting between the implementor
+ * failed-set — the second spawn edge (ADR 0026), sitting between the implementor
  * and reviewer frontiers. Each candidate is `ready-for-audit` and auditable (the
  * sweep gated that via the shared `classifyAuditability`); `runAudit` flips it
  * `ready-for-audit → in-audit` before spawning, so flip-before-spawn is the
