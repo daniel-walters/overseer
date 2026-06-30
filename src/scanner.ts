@@ -25,6 +25,7 @@ import {
 } from "./model.js";
 import type { Absence } from "./dispatch/liveness.js";
 import type { FailedEdgeKind } from "./dispatch/failureLog.js";
+import { isActiveStatus } from "./dispatch/status.js";
 
 /**
  * Look up the probe's trust-qualified absence ({@link Absence}) for one Issue by
@@ -103,8 +104,9 @@ export type LinkedPrLookup = (prdDir: string) => LinkedPr | undefined;
  *
  * `lookupLiveness` is the optional liveness overlay (ADR 0008), recomputed and
  * passed in on each board rebuild — never read from the Issue files (ADR 0002).
- * It is consulted only for `in-progress` / `in-review` Issues (the two lanes a
- * spawned agent owns); every other lane scans with no liveness. Omitting it (the
+ * It is consulted only for `in-progress` / `in-audit` / `in-review` Issues (the
+ * three statuses a spawned agent owns); every other status scans with no liveness.
+ * Omitting it (the
  * eager first render, board-only tests) simply leaves every card unmarked.
  *
  * `lookupSuppressed` is the mirror-image optional overlay, gated to the opposite
@@ -245,9 +247,6 @@ function scanIssues(
   );
 }
 
-/** The two lanes an active spawned agent owns, where a liveness marker belongs. */
-const LIVENESS_LANES: ReadonlySet<Lane> = new Set<Lane>(["in-progress", "in-review"]);
-
 /** Parse one Issue file. Identity is the filename; title falls back to the slug. */
 function scanIssue(
   path: string,
@@ -258,7 +257,8 @@ function scanIssue(
 ): Issue {
   const { data } = safeMatter(readFileSync(path, "utf8"));
   const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
-  const { lane, readyFor, malformedStatus } = placeOrBacklog(data[FIELD.status]);
+  const rawStatus = data[FIELD.status];
+  const { lane, readyFor, malformedStatus } = placeOrBacklog(rawStatus);
   // `blocked_by` rides every Issue (it's authored regardless of lane) so the
   // PRD-level stalled roll-up can check a ready-for-agent Issue's blockers
   // against its done siblings. Empty list ⇒ omit, keeping the model minimal.
@@ -274,12 +274,15 @@ function scanIssue(
   const withReadyFor: Issue =
     readyFor === undefined ? issue : { ...issue, readyFor };
 
-  // The liveness overlay rides only on the two active-agent lanes (in-progress,
-  // in-review), keyed by the Issue's absolute path — the sidecar's join key
-  // (ADR 0008). Once a lookup is wired in, such a card always carries a verdict:
-  // the lookup's absence mapped to live/orphaned/unknown, and a default of
-  // "unknown" when it has none — the honesty boundary below.
-  const withLiveness = applyLiveness(withReadyFor, path, lane, lookupLiveness);
+  // The liveness overlay rides only on the active-agent *statuses* (in-progress,
+  // in-audit, in-review), keyed by the Issue's absolute path — the sidecar's join
+  // key (ADR 0008). The gate is per-status, not per-lane, because the `audit` lane
+  // folds an active status (in-audit) and a waiting one (ready-for-audit): only the
+  // active card carries a verdict, and that is the very signal that distinguishes
+  // the two on the shared column (ADR 0026). Once a lookup is wired in, such a card
+  // always carries a verdict: the lookup's absence mapped to live/orphaned/unknown,
+  // and a default of "unknown" when it has none — the honesty boundary below.
+  const withLiveness = applyLiveness(withReadyFor, path, rawStatus, lookupLiveness);
 
   // The suppressed overlay rides the two awaiting `ready-*` lanes (a failed spawn)
   // plus the `in-review` lane (a failed clean merge on the resolve edge — ADR
@@ -334,35 +337,40 @@ function scanIssue(
 }
 
 /**
- * Add the liveness verdict to an Issue, but only on an `in-progress` / `in-review`
- * card. This is the honesty boundary (ADR 0008 / 0009): once a lookup is
- * provided, every active-agent card *must* carry a verdict — silence on an
- * in-progress card is the very ambiguity the feature exists to kill.
+ * Add the liveness verdict to an Issue, but only on an active-agent *status*
+ * (`in-progress` / `in-audit` / `in-review`). This is the honesty boundary (ADR
+ * 0008 / 0009): once a lookup is provided, every active-agent card *must* carry a
+ * verdict — silence on an in-progress card is the very ambiguity the feature
+ * exists to kill.
  *
- * The lane gate lives here, not in the probe: the probe emits a status-ignorant
- * trust-qualified {@link Absence}, and this is the one place that knows these two
- * lanes are owned by an active agent (ADR 0009). It maps the absence to the
- * card-level verdict:
+ * The gate is per-status, not per-lane (ADR 0026): the `audit` lane folds the
+ * active `in-audit` and the waiting `ready-for-audit`, and only the active one is
+ * agent-owned, so keying on the status (not the column) is what keeps a waiting
+ * card unmarked while a live/orphaned auditor reads its verdict — the distinction
+ * the shared column relies on. The gate lives here, not in the probe: the probe
+ * emits a status-ignorant trust-qualified {@link Absence}, and this is the one
+ * place that knows which statuses an active agent owns (ADR 0009). It maps the
+ * absence to the card-level verdict:
  *
  * - `live` → **live** (the handle is in the registry).
  * - `absent-clean` → **orphaned** (a trustworthy query says the agent is gone:
- *   stuck on an active lane, recoverable).
+ *   stuck on an active status, recoverable).
  * - `absent-degraded` → **unknown** (the query couldn't be trusted; a false
  *   `orphaned` would invite a double-spawn, so it degrades to `unknown`).
  * - no recorded handle → **unknown** (a previous session, an empty sidecar, or
  *   the spawn/record gap). Never a false `live`, and never a false `orphaned`.
  *
- * A card outside the two active-agent lanes (ready, done, backlog) — or any
- * card when no lookup is wired in — is returned unchanged and stays unmarked:
- * no agent owns it, so it has no liveness to report.
+ * A card on any non-active status (ready-*, done, backlog) — or any card when no
+ * lookup is wired in — is returned unchanged and stays unmarked: no agent owns
+ * it, so it has no liveness to report.
  */
 function applyLiveness(
   issue: Issue,
   path: string,
-  lane: Lane,
+  status: unknown,
   lookupLiveness?: LivenessLookup,
 ): Issue {
-  if (!lookupLiveness || !LIVENESS_LANES.has(lane)) return issue;
+  if (!lookupLiveness || !isActiveStatus(status)) return issue;
   return { ...issue, liveness: livenessFromAbsence(lookupLiveness(path)) };
 }
 

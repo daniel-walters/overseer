@@ -27,15 +27,20 @@ export type ReadyFor = "human" | "agent";
  * of them; a typo can't silently diverge one copy from another and strand a card
  * in backlog flagged `malformedStatus`.
  *
- * Note the fold the map encodes: `ready-for-human` and `ready-for-agent` both
- * land in the single `ready` lane (distinguished only by the badge), so the
- * eight authored statuses collapse to seven columns.
+ * Note the two folds the map encodes: `ready-for-human` and `ready-for-agent`
+ * both land in the single `ready` lane (distinguished only by the badge), and
+ * `ready-for-audit` (awaiting) and `in-audit` (active) both land in the single
+ * `audit` lane — the active/waiting distinction carried by the liveness overlay,
+ * not a column each (ADR 0026). So the ten authored statuses collapse to eight
+ * columns.
  */
 const STATUS_PLACEMENT = {
   backlog: { lane: "backlog" },
   "ready-for-human": { lane: "ready", readyFor: "human" },
   "ready-for-agent": { lane: "ready", readyFor: "agent" },
   "in-progress": { lane: "in-progress" },
+  "ready-for-audit": { lane: "audit" },
+  "in-audit": { lane: "audit" },
   "ready-for-review": { lane: "ready-for-review" },
   "in-review": { lane: "in-review" },
   "human-review": { lane: "human-review" },
@@ -59,15 +64,18 @@ export type AuthoredStatus = keyof typeof STATUS_PLACEMENT;
 export type Lane = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
 
 /**
- * The Issue-level lanes in render order, left to right: the seven fixed columns.
+ * The Issue-level lanes in render order, left to right: the eight fixed columns.
  * There is no Unsorted column — a missing/unknown status folds into `backlog`
- * flagged `malformedStatus` (CONTEXT.md, ADR 0003). Used by the PRD-zoom (Issue)
- * kanban.
+ * flagged `malformedStatus` (CONTEXT.md, ADR 0003). The `audit` column sits
+ * between `in-progress` and `ready-for-review`, folding the awaiting
+ * `ready-for-audit` and active `in-audit` statuses (ADR 0026). Used by the
+ * PRD-zoom (Issue) kanban.
  */
 export const ISSUE_LANES: readonly Lane[] = [
   "backlog",
   "ready",
   "in-progress",
+  "audit",
   "ready-for-review",
   "in-review",
   "human-review",
@@ -147,9 +155,12 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
 /**
  * Derive a PRD's board-level **stalled** overlay: `true` iff the PRD has agent
  * work that nobody is coming for — ≥1 unblocked `ready-for-agent` Issue (all its
- * `blocked_by` blockers are `done`) **and** no Issue currently in flight
- * (`in-progress` / `in-review`). It answers "this PRD has dispatchable work but
- * nothing is running" so the board can flag it without zooming in.
+ * `blocked_by` blockers are `done`) **and** no Issue in the audit lane or actively
+ * running (`in-progress` / audit-lane / `in-review`). The `audit` lane suppresses
+ * the flag for both `in-audit` (agent running) and `ready-for-audit` (pending
+ * handoff): work already queued in the audit phase means the pipeline is making
+ * progress, so the PRD is not stalled. It answers "this PRD has dispatchable work but
+ * nothing is running and nothing is queued downstream" so the board can flag it.
  *
  * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdLane},
  * recomputed each scan and never written to `prd.md` (ADR 0002 / 0003). It reads
@@ -160,7 +171,7 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
  */
 export function derivePrdStalled(issues: readonly Issue[]): boolean {
   const inFlight = issues.some(
-    (i) => i.lane === "in-progress" || i.lane === "in-review",
+    (i) => i.lane === "in-progress" || i.lane === "audit" || i.lane === "in-review",
   );
   if (inFlight) return false;
   const doneIds = new Set(issues.filter((i) => i.lane === "done").map((i) => i.id));
@@ -175,6 +186,7 @@ export function derivePrdStalled(issues: readonly Issue[]): boolean {
 /** The lanes that promote a PRD to in-progress (in-progress or later). */
 const IN_PROGRESS_OR_LATER = new Set<Lane>([
   "in-progress",
+  "audit",
   "ready-for-review",
   "in-review",
   "human-review",
@@ -186,6 +198,7 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   backlog: "Backlog",
   ready: "Ready",
   "in-progress": "In Progress",
+  audit: "Audit",
   "ready-for-review": "Ready for Review",
   "in-review": "In Review",
   "human-review": "Human Review",
@@ -346,11 +359,14 @@ export interface Issue {
    */
   readonly approvable?: boolean;
   /**
-   * The derived liveness overlay, set only on an `in-progress` / `in-review`
-   * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
-   * query shows the handle is gone, `unknown` otherwise. Absent on every other
-   * lane (and when no lookup is wired in), so a never-dispatched card is distinct
-   * from a dead one.
+   * The derived liveness overlay, set only on an active-agent card
+   * (`in-progress` / `in-audit` / `in-review`) — `live` if its handle is in the
+   * registry, `orphaned` if a trustworthy query shows the handle is gone, `unknown`
+   * otherwise. Absent on every other status (and when no lookup is wired in), so a
+   * never-dispatched card is distinct from a dead one. The gate is per-status, not
+   * per-lane: the `audit` lane folds `in-audit` (active, carries liveness) and
+   * `ready-for-audit` (waiting, no liveness) — the overlay is the signal that
+   * distinguishes them on the shared column (ADR 0026).
    */
   readonly liveness?: Liveness;
   /**

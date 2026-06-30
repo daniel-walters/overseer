@@ -31,8 +31,10 @@ export interface ImplementorPromptInput {
  * auto-permission agent's brief is auditable on every run. The agent inherits an
  * Issue the dispatcher has *already* flipped to `in-progress`, so the template
  * never tells it to set that status — only to park the finished work at
- * `ready-for-review`, recording the worktree, branch, and (if it strayed) a
- * deviation in the same edit so the reviewer and merge can read them (ADR 0006).
+ * `ready-for-audit`, recording the worktree and branch in the same edit so the
+ * auditor can check out the diff and the reviewer/merge can read them (ADR 0026).
+ * It no longer records a `deviation`: that field now has exactly one writer, the
+ * fresh-eyes auditor, so the implementor never grades its own homework (ADR 0026).
  */
 export function buildImplementorPrompt(input: ImplementorPromptInput): string {
   const { issue, prdTitle, prdBody, repo, featureBranch } = input;
@@ -41,7 +43,7 @@ export function buildImplementorPrompt(input: ImplementorPromptInput): string {
 
 You have been handed a single Issue to implement. The Issue has already been
 marked as started — do not change that. Implement it fully, then advance it to
-the review state as described below.
+the audit state as described below.
 
 ## Issue: ${issue.title}
 
@@ -64,33 +66,28 @@ worktree so that other agents touching the same repo do not collide with you.
 
 1. Drive the implementation with the \`overseer-tdd\` skill: work test-first in a
    red-green-refactor loop — write a failing test, make it pass, then refactor —
-   before parking the Issue at \`ready-for-review\`. (A purely docs-only or
+   before parking the Issue at \`ready-for-audit\`. (A purely docs-only or
    config-only Issue with nothing to red-green is the lone exception.)
 2. Implement the Issue in full.
 3. Commit your work to the worktree. Do NOT open a pull request — the worktree
    itself is the review artifact.
-4. When the implementation is complete, park the Issue for review with a single
+4. When the implementation is complete, park the Issue for audit with a single
    edit to its frontmatter in the Overseer root. The Issue file to edit is:
 
    ${issue.path}
 
    In that one edit:
    - The Issue ALREADY has a \`status:\` line. CHANGE that existing line's value
-     in place to \`ready-for-review\` — do NOT add a second \`status:\` line. After
+     in place to \`ready-for-audit\` — do NOT add a second \`status:\` line. After
      your edit there must be exactly ONE \`status:\` line: a duplicate key makes
      the frontmatter invalid YAML and Overseer can no longer read the Issue. Stop
-     at \`ready-for-review\` — do NOT advance the status any further. A later
-     review step flips it onward; that is not your job.
+     at \`ready-for-audit\` — do NOT advance the status any further. A later audit
+     step flips it onward; that is not your job.
    - Record \`worktree:\` set to the absolute path of the worktree you worked in,
      and \`branch:\` set to its branch name. Record both verbatim from the
-     worktree you actually used — never guess or derive them. The reviewer
-     checks out the worktree and merges the branch using exactly these values.
-   - Record a \`deviation:\` field with a short reason ONLY IF you strayed from
-     the Issue's planned approach to get the work done. If you followed the
-     plan, omit the field entirely — its mere presence forces a human review.
-     Quote the value (\`deviation: "..."\`) so a colon or other punctuation in
-     your reason can't corrupt the Issue's frontmatter.
+     worktree you actually used — never guess or derive them. The auditor checks
+     out the worktree to compare the diff against the plan, and the reviewer later
+     merges the branch, using exactly these values.
 
-Leave the Issue at \`ready-for-review\`; a later reviewer step takes it from
-there.`;
+Leave the Issue at \`ready-for-audit\`; a later audit step takes it from there.`;
 }

@@ -32,17 +32,18 @@ interface IssueBoardProps {
 }
 
 /**
- * The Issue-level kanban: one PRD's Issues across the seven status columns. There
+ * The Issue-level kanban: one PRD's Issues across the eight status columns. There
  * is no Unsorted column — a missing/unknown status folds into Backlog flagged with
- * the `⚠ bad status` marker (CONTEXT.md, ADR 0003).
+ * the `⚠ bad status` marker (CONTEXT.md, ADR 0003). The `audit` column folds both
+ * audit-phase statuses, their active/waiting split carried by liveness (ADR 0026).
  */
 export function IssueBoard({ prd, selected, laneHeight, reviewCap }: IssueBoardProps) {
   const byLane = groupByLane(prd.issues);
   const selectedId = cardAtCoord(prd.issues, ISSUE_LANES, selected)?.id;
-  // The zoomed level divides the viewport across its seven status lanes, so each
+  // The zoomed level divides the viewport across its eight status lanes, so each
   // Issue column is narrower than a board column from the same terminal — and on
-  // a standard terminal (7×24 = 168 cells) it holds at the floor and the row
-  // clips horizontally at the screen edge (deferred; see columnWidth).
+  // a standard terminal (8×24 cells) it holds at the floor and the row clips
+  // horizontally at the screen edge (deferred; see columnWidth).
   const width = useColumnWidth(ISSUE_LANES.length);
 
   return (
