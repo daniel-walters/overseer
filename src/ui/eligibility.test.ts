@@ -270,6 +270,14 @@ describe("eligibility — computeBindContext", () => {
           frontier: [],
         }).issueReadyForAudit,
       ).toBe(false);
+      // An in-audit card with unknown liveness (query hiccup) is also not a `c` candidate.
+      expect(
+        computeBindContext({
+          selectedPrd: prd(),
+          selectedIssue: issue({ lane: "audit", liveness: "unknown" }),
+          frontier: [],
+        }).issueReadyForAudit,
+      ).toBe(false);
       // Every other lane is false.
       expect(
         computeBindContext({

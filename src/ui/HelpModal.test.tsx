@@ -80,6 +80,7 @@ describe("HelpModal — the deliberate eligibility exception (ADR 0017)", () => 
       [press("X"), "board", "Delete a done PRD"],
       [press("g"), "board", "Go to the selected PRD's PR"],
       [press("r"), "issues", "Review the selected Issue"],
+      [press("c"), "issues", "Audit a ready-for-audit Issue"],
       [press("R"), "issues", "Re-dispatch an orphaned Issue"],
       [press("K"), "issues", "Stop a live Issue's agent"],
       [press("o"), "issues", "Read a live Issue's agent output"],
