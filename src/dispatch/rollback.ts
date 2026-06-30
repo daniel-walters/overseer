@@ -14,9 +14,11 @@ import type { Rollback } from "../ui/App.js";
  * `in-review` orphan to `ready-for-review` (re-entering the review frontier).
  * Anything else is not an active status and has no awaiting target.
  *
- * Keyed on the active-status subtype, not a bare `string`, so adding a fourth
- * active status to {@link Status} that forgets an entry here is a compile error,
- * not a silent no-op rollback.
+ * Keyed on the active-status subtype, not a bare `string`, so if you update this
+ * map's key union to include a fourth active status and forget to provide its value,
+ * that is a compile error. Note: the key union here and {@link ACTIVE_STATUSES} in
+ * `status.ts` are independently maintained — adding a new active status requires
+ * updating both files.
  */
 const AWAITING: Record<
   typeof Status.IN_PROGRESS | typeof Status.IN_AUDIT | typeof Status.IN_REVIEW,

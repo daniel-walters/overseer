@@ -155,9 +155,12 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
 /**
  * Derive a PRD's board-level **stalled** overlay: `true` iff the PRD has agent
  * work that nobody is coming for — ≥1 unblocked `ready-for-agent` Issue (all its
- * `blocked_by` blockers are `done`) **and** no Issue currently in flight
- * (`in-progress` / `in-audit` / `in-review`). It answers "this PRD has dispatchable work but
- * nothing is running" so the board can flag it without zooming in.
+ * `blocked_by` blockers are `done`) **and** no Issue in the audit lane or actively
+ * running (`in-progress` / audit-lane / `in-review`). The `audit` lane suppresses
+ * the flag for both `in-audit` (agent running) and `ready-for-audit` (pending
+ * handoff): work already queued in the audit phase means the pipeline is making
+ * progress, so the PRD is not stalled. It answers "this PRD has dispatchable work but
+ * nothing is running and nothing is queued downstream" so the board can flag it.
  *
  * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdLane},
  * recomputed each scan and never written to `prd.md` (ADR 0002 / 0003). It reads
@@ -356,11 +359,14 @@ export interface Issue {
    */
   readonly approvable?: boolean;
   /**
-   * The derived liveness overlay, set only on an `in-progress` / `in-review`
-   * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
-   * query shows the handle is gone, `unknown` otherwise. Absent on every other
-   * lane (and when no lookup is wired in), so a never-dispatched card is distinct
-   * from a dead one.
+   * The derived liveness overlay, set only on an active-agent card
+   * (`in-progress` / `in-audit` / `in-review`) — `live` if its handle is in the
+   * registry, `orphaned` if a trustworthy query shows the handle is gone, `unknown`
+   * otherwise. Absent on every other status (and when no lookup is wired in), so a
+   * never-dispatched card is distinct from a dead one. The gate is per-status, not
+   * per-lane: the `audit` lane folds `in-audit` (active, carries liveness) and
+   * `ready-for-audit` (waiting, no liveness) — the overlay is the signal that
+   * distinguishes them on the shared column (ADR 0026).
    */
   readonly liveness?: Liveness;
   /**
