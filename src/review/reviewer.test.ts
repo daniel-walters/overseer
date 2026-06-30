@@ -148,6 +148,29 @@ describe("createReviewer", () => {
       expect(after).not.toContain("human_review_reason: non-convergence");
     });
 
+    it("escalates a non-deviating Issue to human-review with reason non-convergence at the cap", () => {
+      // Complement to the deviation-precedence test above: an Issue with no
+      // auditor-recorded deviation must still surface non-convergence, not
+      // deviation. Exercises the driveReviewPass → escalateNonConvergence wiring
+      // for the no-deviation branch end-to-end (ADR 0026).
+      const deps = recordingDeps({ readReviewPass: () => 3 });
+      const reviewer = createReviewer(root, deps);
+
+      // 005 has no deviation field — non-convergence is the only possible reason.
+      const preview = reviewer.readReview("checkout-flow", "005-shipping-label.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      expect(deps.spawns).toEqual([]); // no 4th pass
+      const after = readFileSync(
+        join(root, "checkout-flow", "005-shipping-label.md"),
+        "utf8",
+      );
+      expect(after).toContain("status: human-review");
+      expect(after).toContain("human_review_reason: non-convergence");
+      expect(after).not.toContain("human_review_reason: deviation");
+    });
+
     it("builds a prompt carrying the worktree, branch, feature branch, and PRD body", () => {
       const deps = recordingDeps();
       const reviewer = createReviewer(root, deps);

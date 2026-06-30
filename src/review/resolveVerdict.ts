@@ -153,14 +153,14 @@ export function resolveVerdict(
 }
 
 /**
- * The `human_review_note` for the deviation fork: fold the implementor's recorded
+ * The `human_review_note` for the deviation fork: fold the auditor's recorded
  * deviation into one coherent reason the human can read off the card without
  * opening the raw field, matching the prose {@link
  * import("./escalate.js").escalateNonConvergence} records for `non-convergence`.
  */
 function deviationNote(deviation: string): string {
   return (
-    `The implementor recorded a deviation from the planned approach: ` +
+    `The auditor recorded a deviation from the planned approach: ` +
     `"${deviation}". The AI review passed clean, but a deviation needs a human ` +
     `to confirm before the merge. Review the change against the Issue, then run ` +
     `the merge skill.`
