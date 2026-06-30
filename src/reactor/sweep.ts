@@ -40,7 +40,7 @@ export interface SweptPrd {
   readonly view: DispatchView;
   readonly frontier: readonly FrontierEntry[];
   /**
-   * The auditable `ready-for-audit` Issues, the audit edge's frontier — the third
+   * The auditable `ready-for-audit` Issues, the audit edge's frontier — the second
    * spawn edge (ADR 0026), sitting between the implementor frontier and the
    * reviewers. Eligibility is the shared {@link classifyAuditability} the `c`
    * keybind uses, so an Issue missing the repo or worktree the auditor needs is
