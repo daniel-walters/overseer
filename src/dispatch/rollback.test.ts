@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { rollBackOrphan, createRollback } from "./rollback.js";
 import type { DispatchIssue } from "./reader.js";
+import { ACTIVE_STATUSES } from "./status.js";
 
 /** A minimal orphan DispatchIssue in a given active status. */
 function orphan(status: string, overrides: Partial<DispatchIssue> = {}): DispatchIssue {
@@ -68,6 +69,18 @@ describe("rollBackOrphan", () => {
 
     expect(outcome).toBe("rolled-back");
     expect(rec.writes).toEqual([["/root/prd/003-c.md", "ready-for-audit"]]);
+  });
+
+  it("every active status has a rollback target — exhaustiveness guard for the AWAITING map", () => {
+    for (const status of ACTIVE_STATUSES) {
+      const rec = recorder();
+      expect(
+        rollBackOrphan(orphan(status, { path: `/root/prd/${status}.md` }), {
+          writeStatus: rec.writeStatus,
+        }),
+        `${status} has no entry in AWAITING — add it to rollback.ts`,
+      ).toBe("rolled-back");
+    }
   });
 
   it("leaves a non-active Issue untouched and reports it advanced — nothing to roll back to", () => {
