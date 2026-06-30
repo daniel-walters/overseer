@@ -18,7 +18,8 @@ import type { Rollback } from "../ui/App.js";
  * map's key union to include a fourth active status and forget to provide its value,
  * that is a compile error. Note: the key union here and {@link ACTIVE_STATUSES} in
  * `status.ts` are independently maintained — adding a new active status requires
- * updating both files.
+ * updating **both** files: add the active → awaiting pair here AND add the active
+ * status to `ACTIVE_STATUSES` in `src/dispatch/status.ts`.
  */
 const AWAITING: Record<
   typeof Status.IN_PROGRESS | typeof Status.IN_AUDIT | typeof Status.IN_REVIEW,
