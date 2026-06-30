@@ -57,6 +57,19 @@ describe("rollBackOrphan", () => {
     expect(rec.writes).toEqual([["/root/prd/002-b.md", "ready-for-review"]]);
   });
 
+  it("rolls an in-audit orphan back to ready-for-audit through the status seam", () => {
+    // The auditor's active→awaiting inverse (ADR 0026): a dead auditor's `in-audit`
+    // Issue rolls back to `ready-for-audit`, re-entering the audit frontier.
+    const rec = recorder();
+    const outcome = rollBackOrphan(
+      orphan("in-audit", { path: "/root/prd/003-c.md" }),
+      { writeStatus: rec.writeStatus },
+    );
+
+    expect(outcome).toBe("rolled-back");
+    expect(rec.writes).toEqual([["/root/prd/003-c.md", "ready-for-audit"]]);
+  });
+
   it("leaves a non-active Issue untouched and reports it advanced — nothing to roll back to", () => {
     const rec = recorder();
     // ready-for-agent / done are not active statuses: a card that already left
@@ -144,6 +157,18 @@ describe("createRollback (against a writable temp root)", () => {
 
     const after = readFileSync(join(root, "auth", "002-pay.md"), "utf8");
     expect(after).toContain("status: ready-for-review");
+  });
+
+  it("re-reads disk on confirm: an in-audit orphan still in-audit rolls to ready-for-audit", () => {
+    seedIssue("auth", "004-audit.md", "in-audit");
+    const rb = createRollback(root);
+
+    const preview = rb.readRollback("auth", "004-audit.md");
+    if (!preview) throw new Error("expected a preview");
+    expect(rb.rollback(preview)).toBe("rolled-back");
+
+    const after = readFileSync(join(root, "auth", "004-audit.md"), "utf8");
+    expect(after).toContain("status: ready-for-audit");
   });
 
   it("reports a vanished Issue on confirm (deleted under the modal)", () => {

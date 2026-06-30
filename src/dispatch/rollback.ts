@@ -9,25 +9,28 @@ import type { Rollback } from "../ui/App.js";
 /**
  * The active → awaiting transition the orphan rollback writes, the *inverse* of
  * the flip each spawn edge performs before launching: an `in-progress` orphan
- * rolls back to `ready-for-agent` (re-entering the implementor frontier) and an
+ * rolls back to `ready-for-agent` (re-entering the implementor frontier), an
+ * `in-audit` orphan to `ready-for-audit` (re-entering the audit frontier), and an
  * `in-review` orphan to `ready-for-review` (re-entering the review frontier).
  * Anything else is not an active status and has no awaiting target.
  *
- * Keyed on the active-status subtype, not a bare `string`, so adding a third
+ * Keyed on the active-status subtype, not a bare `string`, so adding a fourth
  * active status to {@link Status} that forgets an entry here is a compile error,
  * not a silent no-op rollback.
  */
 const AWAITING: Record<
-  typeof Status.IN_PROGRESS | typeof Status.IN_REVIEW,
+  typeof Status.IN_PROGRESS | typeof Status.IN_AUDIT | typeof Status.IN_REVIEW,
   Status
 > = {
   [Status.IN_PROGRESS]: Status.READY_FOR_AGENT,
+  [Status.IN_AUDIT]: Status.READY_FOR_AUDIT,
   [Status.IN_REVIEW]: Status.READY_FOR_REVIEW,
 };
 
 /** The awaiting target for an active status, or `undefined` for any other. */
 function awaitingFor(status: string | undefined): Status | undefined {
   if (status === Status.IN_PROGRESS) return AWAITING[Status.IN_PROGRESS];
+  if (status === Status.IN_AUDIT) return AWAITING[Status.IN_AUDIT];
   if (status === Status.IN_REVIEW) return AWAITING[Status.IN_REVIEW];
   return undefined;
 }

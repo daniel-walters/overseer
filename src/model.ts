@@ -27,15 +27,20 @@ export type ReadyFor = "human" | "agent";
  * of them; a typo can't silently diverge one copy from another and strand a card
  * in backlog flagged `malformedStatus`.
  *
- * Note the fold the map encodes: `ready-for-human` and `ready-for-agent` both
- * land in the single `ready` lane (distinguished only by the badge), so the
- * eight authored statuses collapse to seven columns.
+ * Note the two folds the map encodes: `ready-for-human` and `ready-for-agent`
+ * both land in the single `ready` lane (distinguished only by the badge), and
+ * `ready-for-audit` (awaiting) and `in-audit` (active) both land in the single
+ * `audit` lane — the active/waiting distinction carried by the liveness overlay,
+ * not a column each (ADR 0026). So the ten authored statuses collapse to eight
+ * columns.
  */
 const STATUS_PLACEMENT = {
   backlog: { lane: "backlog" },
   "ready-for-human": { lane: "ready", readyFor: "human" },
   "ready-for-agent": { lane: "ready", readyFor: "agent" },
   "in-progress": { lane: "in-progress" },
+  "ready-for-audit": { lane: "audit" },
+  "in-audit": { lane: "audit" },
   "ready-for-review": { lane: "ready-for-review" },
   "in-review": { lane: "in-review" },
   "human-review": { lane: "human-review" },
@@ -59,15 +64,18 @@ export type AuthoredStatus = keyof typeof STATUS_PLACEMENT;
 export type Lane = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
 
 /**
- * The Issue-level lanes in render order, left to right: the seven fixed columns.
+ * The Issue-level lanes in render order, left to right: the eight fixed columns.
  * There is no Unsorted column — a missing/unknown status folds into `backlog`
- * flagged `malformedStatus` (CONTEXT.md, ADR 0003). Used by the PRD-zoom (Issue)
- * kanban.
+ * flagged `malformedStatus` (CONTEXT.md, ADR 0003). The `audit` column sits
+ * between `in-progress` and `ready-for-review`, folding the awaiting
+ * `ready-for-audit` and active `in-audit` statuses (ADR 0026). Used by the
+ * PRD-zoom (Issue) kanban.
  */
 export const ISSUE_LANES: readonly Lane[] = [
   "backlog",
   "ready",
   "in-progress",
+  "audit",
   "ready-for-review",
   "in-review",
   "human-review",
@@ -175,6 +183,7 @@ export function derivePrdStalled(issues: readonly Issue[]): boolean {
 /** The lanes that promote a PRD to in-progress (in-progress or later). */
 const IN_PROGRESS_OR_LATER = new Set<Lane>([
   "in-progress",
+  "audit",
   "ready-for-review",
   "in-review",
   "human-review",
@@ -186,6 +195,7 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   backlog: "Backlog",
   ready: "Ready",
   "in-progress": "In Progress",
+  audit: "Audit",
   "ready-for-review": "Ready for Review",
   "in-review": "In Review",
   "human-review": "Human Review",

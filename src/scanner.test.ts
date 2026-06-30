@@ -331,10 +331,12 @@ describe("scanBoard approvable overlay (A on a human-review Issue)", () => {
 
 describe("scanBoard liveness overlay", () => {
   /**
-   * A throwaway root with one Issue in each of the four interesting lanes: the
-   * two the overlay applies to (in-progress, in-review) and two it must never
-   * touch (ready-for-agent, done). The liveness lookup is keyed by the Issue's
-   * absolute path — the same `prdDir/filename` key the sidecar records (ADR 0008).
+   * A throwaway root with one Issue in each interesting status: the active ones
+   * the overlay applies to (in-progress, in-review, in-audit) and the ones it must
+   * never touch (ready-for-agent, done, and the waiting ready-for-audit that
+   * shares the audit lane with the active in-audit). The liveness lookup is keyed
+   * by the Issue's absolute path — the same `prdDir/filename` key the sidecar
+   * records (ADR 0008).
    */
   function liveRoot(): { root: string; pathOf: (file: string) => string } {
     const root = mkdtempSync(join(tmpdir(), "overseer-live-"));
@@ -345,6 +347,8 @@ describe("scanBoard liveness overlay", () => {
     writeFileSync(join(dir, "002-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
     writeFileSync(join(dir, "003-queued.md"), "---\nstatus: ready-for-agent\n---\nbody\n");
     writeFileSync(join(dir, "004-shipped.md"), "---\nstatus: done\n---\nbody\n");
+    writeFileSync(join(dir, "006-auditing.md"), "---\nstatus: in-audit\n---\nbody\n");
+    writeFileSync(join(dir, "007-await-audit.md"), "---\nstatus: ready-for-audit\n---\nbody\n");
     return { root, pathOf: (file) => join(dir, file) };
   }
 
@@ -391,6 +395,29 @@ describe("scanBoard liveness overlay", () => {
     );
   });
 
+  it("maps an absent-clean verdict on an in-audit card to orphaned", () => {
+    // `in-audit` is the auditor's active status — an active-agent card like
+    // in-progress / in-review — so a dead auditor surfaces as an Orphan, `R`-able
+    // back to ready-for-audit (ADR 0026).
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("006-auditing.md") ? "absent-clean" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "006-auditing.md").liveness).toBe(
+      "orphaned",
+    );
+  });
+
+  it("overlays a live verdict on an in-audit Issue (so K and o work on a live auditor)", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("006-auditing.md") ? "live" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "006-auditing.md").liveness).toBe("live");
+  });
+
   it("maps an absent-degraded verdict to unknown, never orphaned", () => {
     // An untrustworthy query (it threw, or did not parse to an array): the agent
     // might still be alive behind the hiccup, so the card must read unknown.
@@ -404,17 +431,20 @@ describe("scanBoard liveness overlay", () => {
     );
   });
 
-  it("never overlays liveness on a lane that is not in-progress or in-review", () => {
-    // The lookup claims every Issue is gone-clean; only the two active-agent
-    // lanes may carry the marker — a ready or done card never shows a verdict, so
-    // an Issue that legitimately advanced past the active status never reads
-    // orphaned (ADR 0009).
+  it("never overlays liveness on a status that is not active (in-progress / in-audit / in-review)", () => {
+    // The lookup claims every Issue is gone-clean; only the active-agent statuses
+    // may carry the marker — a ready or done card never shows a verdict, so an
+    // Issue that legitimately advanced past the active status never reads orphaned
+    // (ADR 0009). The waiting `ready-for-audit` card shares the `audit` lane with
+    // the active `in-audit` one, so the gate is per-status, not per-lane: a card
+    // nobody is auditing yet stays unmarked (ADR 0026).
     const { root } = liveRoot();
     const board = scanBoard(root, () => "absent-clean");
     const issues = featureIssues(board);
 
     expect(issueById(issues, "003-queued.md").liveness).toBeUndefined();
     expect(issueById(issues, "004-shipped.md").liveness).toBeUndefined();
+    expect(issueById(issues, "007-await-audit.md").liveness).toBeUndefined();
   });
 
   it("leaves liveness unset when no lookup is provided", () => {

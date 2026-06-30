@@ -54,6 +54,14 @@ describe("placeStatus", () => {
     expect(placeStatus("ready-for-agent")).toEqual({ lane: "ready", readyFor: "agent" });
   });
 
+  it("folds both audit-phase statuses into the single audit lane with no badge", () => {
+    // `ready-for-audit` (awaiting) and `in-audit` (active) collapse to one `audit`
+    // column; the active/waiting distinction is carried by the liveness overlay,
+    // not a second column (ADR 0026).
+    expect(placeStatus("ready-for-audit")).toEqual({ lane: "audit" });
+    expect(placeStatus("in-audit")).toEqual({ lane: "audit" });
+  });
+
   it("returns undefined for an unrecognised, empty, or non-string status", () => {
     expect(placeStatus("nonsense")).toBeUndefined();
     expect(placeStatus("")).toBeUndefined();
@@ -84,6 +92,8 @@ describe("placeStatus", () => {
       "ready-for-human",
       "ready-for-agent",
       "in-progress",
+      "ready-for-audit",
+      "in-audit",
       "ready-for-review",
       "in-review",
       "human-review",
@@ -106,8 +116,11 @@ describe("derivePrdLane", () => {
   });
 
   it("derives in-progress when any Issue is in-progress or later", () => {
+    // `audit` covers both ready-for-audit and in-audit (they fold to one lane): a
+    // PRD with an Issue in the audit phase reads as work-underway (ADR 0026).
     for (const lane of [
       "in-progress",
+      "audit",
       "ready-for-review",
       "in-review",
       "human-review",

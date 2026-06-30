@@ -21,7 +21,11 @@ export const Status = {
   READY_FOR_AGENT: "ready-for-agent",
   /** Set synchronously when an Issue is dispatched, before its agent spawns. */
   IN_PROGRESS: "in-progress",
-  /** Where an implementor agent leaves a finished Issue, awaiting a reviewer. */
+  /** Where an implementor agent leaves a finished Issue, awaiting an auditor. */
+  READY_FOR_AUDIT: "ready-for-audit",
+  /** Set when an auditor picks up a ready-for-audit Issue and starts auditing. */
+  IN_AUDIT: "in-audit",
+  /** Where an auditor leaves an audited Issue, awaiting a reviewer. */
   READY_FOR_REVIEW: "ready-for-review",
   /** Set when a reviewer picks up a ready-for-review Issue and starts reviewing. */
   IN_REVIEW: "in-review",
@@ -32,3 +36,28 @@ export const Status = {
 } as const satisfies Record<string, AuthoredStatus>;
 
 export type Status = (typeof Status)[keyof typeof Status];
+
+/**
+ * The active statuses — those an Overseer-spawned agent owns while it runs, where
+ * the liveness overlay (and so Orphan detection, Kill, and Agent-output) belongs:
+ * `in-progress` (implementor), `in-audit` (auditor), and `in-review` (reviewer).
+ * Each is the active half of a spawn edge's awaiting→active pair, and each has an
+ * awaiting target the orphan rollback writes (see rollback's AWAITING map).
+ *
+ * The waiting halves (`ready-for-agent`, `ready-for-audit`, `ready-for-review`)
+ * are deliberately absent: no agent owns a waiting card, so it carries no liveness
+ * — the distinction that, on the folded `audit` lane, separates a live/orphaned
+ * `in-audit` card from a plain waiting `ready-for-audit` one (ADR 0026).
+ */
+export const ACTIVE_STATUSES: ReadonlySet<Status> = new Set<Status>([
+  Status.IN_PROGRESS,
+  Status.IN_AUDIT,
+  Status.IN_REVIEW,
+]);
+
+/** Whether a frontmatter `status` value names an active (agent-owned) status. */
+export function isActiveStatus(status: unknown): boolean {
+  return (
+    typeof status === "string" && (ACTIVE_STATUSES as ReadonlySet<string>).has(status)
+  );
+}
