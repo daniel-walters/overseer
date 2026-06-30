@@ -1087,3 +1087,105 @@ describe("scanBoard needs-review overlay", () => {
     });
   });
 });
+
+describe("scanBoard tolerated overlay (merged with tolerated findings)", () => {
+  /** Build a throwaway PRD whose Issues carry the given frontmatter blocks. */
+  function prdWithIssues(files: Record<string, string>): string {
+    const root = mkdtempSync(join(tmpdir(), "overseer-tol-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    for (const [name, fm] of Object.entries(files)) {
+      writeFileSync(join(dir, name), `---\n${fm}\n---\nbody\n`);
+    }
+    return root;
+  }
+
+  function featureIssues(root: string): readonly Issue[] {
+    return prdById(scanBoard(root).prds, "feature").issues;
+  }
+
+  it("sets tolerated on a done Issue carrying review_tolerated", () => {
+    // A clean-with-tolerated merge (ADR 0027): the done Issue records what it
+    // waved through, so the board can light the neutral marker.
+    const root = prdWithIssues({
+      "001-merged.md": 'status: done\nreview_tolerated: "style:low — two nits"',
+    });
+
+    expect(issueById(featureIssues(root), "001-merged.md").tolerated).toBe(true);
+  });
+
+  it("leaves tolerated unset on a done Issue with no review_tolerated", () => {
+    // A genuinely zero-findings merge carries no manifest — it must read distinct
+    // from a clean-with-tolerated one, so no marker.
+    const root = prdWithIssues({ "001-clean.md": "status: done" });
+
+    expect(
+      issueById(featureIssues(root), "001-clean.md").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("treats a blank review_tolerated as absent (no marker)", () => {
+    const root = prdWithIssues({
+      "001-blank.md": 'status: done\nreview_tolerated: ""',
+    });
+
+    expect(
+      issueById(featureIssues(root), "001-blank.md").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("gates the marker on the done lane: a human-review Issue carrying the field stays unmarked", () => {
+    // A deviating Issue whose review converged clean-with-tolerated routes to
+    // human-review (deviation wins precedence); there the field is audit trail,
+    // not a marker — the "merged with tolerated" marker is done-only.
+    const root = prdWithIssues({
+      "001-deviated.md":
+        'status: human-review\nreview_tolerated: "style:low — a nit"',
+    });
+
+    expect(
+      issueById(featureIssues(root), "001-deviated.md").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("rolls the marker up to the PRD card", () => {
+    // The Issue→PRD roll-up (user story 12): a PRD reads as carrying tolerated
+    // findings without zooming into its Issues.
+    const root = prdWithIssues({
+      "001-merged.md": 'status: done\nreview_tolerated: "style:low — a nit"',
+      "002-plain.md": "status: done",
+    });
+
+    expect(prdById(scanBoard(root).prds, "feature").tolerated).toBe(true);
+  });
+
+  it("leaves the PRD roll-up unset when no done Issue carries the field", () => {
+    const root = prdWithIssues({
+      "001-clean.md": "status: done",
+      "002-working.md": "status: in-progress",
+    });
+
+    expect(
+      prdById(scanBoard(root).prds, "feature").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("derives the PRD roll-up from the Issues regardless of any prd.md frontmatter", () => {
+    // A derived roll-up, never read from prd.md (ADR 0002 / 0003): a prd.md
+    // asserting review_tolerated: false cannot suppress a genuine marker.
+    const root = mkdtempSync(join(tmpdir(), "overseer-tol-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "prd.md"),
+      "---\ntitle: Feature\nreview_tolerated: false\n---\nbody\n",
+    );
+    writeFileSync(
+      join(dir, "001-merged.md"),
+      '---\nstatus: done\nreview_tolerated: "style:low — a nit"\n---\nbody\n',
+    );
+
+    expect(prdById(scanBoard(root).prds, "feature").tolerated).toBe(true);
+  });
+});

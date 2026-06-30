@@ -18,6 +18,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     reviewVerdict: "reviewVerdict" in overrides ? overrides.reviewVerdict : "clean",
     slice: overrides.slice,
     reviewFindings: overrides.reviewFindings,
+    reviewTolerated: overrides.reviewTolerated,
     body: overrides.body ?? "",
   };
 }

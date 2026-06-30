@@ -183,6 +183,27 @@ export function derivePrdStalled(issues: readonly Issue[]): boolean {
   );
 }
 
+/**
+ * Derive a PRD's board-level **tolerated** overlay: `true` iff ≥1 of its Issues
+ * carries the {@link Issue.tolerated} marker — a `done` Issue that merged with
+ * tolerated findings waved through (review-tolerance PRD, ADR 0027). It rolls the
+ * Issue-level fact up to the PRD card so the board answers "which PRDs carried
+ * tolerated findings?" without zooming.
+ *
+ * Because {@link Issue.tolerated} is set only on a `done` Issue carrying a
+ * non-blank `review_tolerated`, the done-lane gate lives at the Issue level and
+ * this roll-up simply observes it — a `human-review` Issue carrying the field
+ * (audit trail there) never sets `tolerated`, so it can't promote the PRD marker.
+ *
+ * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdStalled},
+ * recomputed each scan and never written to `prd.md` (ADR 0002 / 0003). Purely
+ * **informational** — unlike needs-review it is never a call to action, so it is
+ * not gated on any session state and co-renders freely with the other markers.
+ */
+export function derivePrdTolerated(issues: readonly Issue[]): boolean {
+  return issues.some((i) => i.tolerated);
+}
+
 /** The lanes that promote a PRD to in-progress (in-progress or later). */
 const IN_PROGRESS_OR_LATER = new Set<Lane>([
   "in-progress",
@@ -416,6 +437,20 @@ export interface Issue {
    * recomputed on each board open, never written to the Issue file (ADR 0002).
    */
   readonly reviewPass?: number;
+  /**
+   * `true` on a **`done`** Issue whose frontmatter carries a non-blank
+   * `review_tolerated` — a clean-with-tolerated merge that waved tolerable
+   * findings through (review-tolerance PRD, ADR 0027), surfaced as the neutral
+   * "merged with tolerated findings" card marker (the `◌ stalled` family — cyan,
+   * informational, never a call to action). **Gated on the `done` lane**: the same
+   * field on a `human-review` Issue (a deviating Issue whose review converged
+   * clean-with-tolerated) is audit trail there, not a marker, so this is unset on
+   * every non-`done` card. Read straight from the Issue file each scan (the marker
+   * is the rendering of a recorded fact, not a derived overlay), and only `true`
+   * ever stamps the field. Lane-disjoint from the mid-loop `N/cap` review-progress
+   * marker (in-review vs done).
+   */
+  readonly tolerated?: boolean;
 }
 
 export interface PRD {
@@ -468,6 +503,17 @@ export interface PRD {
    * applied at render time where session state is known, not here. Presence-only.
    */
   readonly stalled?: boolean;
+  /**
+   * The tolerated overlay: `true` on a PRD with ≥1 Issue that merged with
+   * tolerated findings ({@link derivePrdTolerated}) — a third Issue→PRD roll-up
+   * alongside {@link needsReview} and {@link stalled}. Set at scan time purely
+   * from the Issues; a derived overlay recomputed each scan and never read from or
+   * written to `prd.md` (ADR 0002 / 0003). Purely **informational** (the neutral
+   * `◌` family, never a call to action), so — unlike {@link stalled} — it needs no
+   * session-state render gate and co-renders freely with the other PRD markers.
+   * Presence-only.
+   */
+  readonly tolerated?: boolean;
 }
 
 export interface Board {

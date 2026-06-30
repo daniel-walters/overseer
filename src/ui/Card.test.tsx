@@ -403,3 +403,30 @@ describe("Card stalled marker", () => {
     expect(frame).not.toContain("stalled");
   });
 });
+
+describe("Card tolerated marker", () => {
+  it("marks a card that merged with tolerated findings with a tolerated marker", () => {
+    const frame = frameOf(<Card title="Shipped" tolerated />);
+
+    expect(frame).toContain("◌ tolerated");
+    expect(frame).toContain("Shipped");
+  });
+
+  it("shows no tolerated marker on a card without it", () => {
+    const frame = frameOf(<Card title="Clean" />);
+
+    expect(frame).not.toContain("tolerated");
+    expect(frame).toContain("Clean");
+  });
+
+  it("renders the tolerated marker in the neutral family, not the yellow warning family", () => {
+    // Informational, never a call to action — its `◌` glyph reads with the neutral
+    // `◌ stalled` family, apart from the yellow `⚠`/`↻`/`✗` needs-a-human markers
+    // and the red `⊘` nothing-ran marker. (The renderer strips ANSI, so the glyph
+    // is the observable distinction; the cyan colour is the on-screen reinforcement.)
+    const frame = frameOf(<Card title="Shipped" tolerated />);
+
+    expect(frame).toContain("◌ tolerated");
+    expect(frame).not.toMatch(/⚠|↻|✗|⊘/);
+  });
+});

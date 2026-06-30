@@ -14,6 +14,7 @@ import {
   derivePrdLane,
   derivePrdNeedsReview,
   derivePrdStalled,
+  derivePrdTolerated,
   type Board,
   type PRD,
   type Issue,
@@ -206,13 +207,22 @@ function scanPrd(
   // `true` stamps the field. It is mutually exclusive with needsReview (a stalled
   // PRD has nothing in flight; a human-review Issue is in-flight-or-later), but
   // composed independently so neither suppresses the other.
+  // The tolerated overlay is the board's third Issue→PRD roll-up: `true` when ≥1
+  // Issue merged with tolerated findings (derivePrdTolerated, ADR 0027). Like the
+  // other two it is derived from the Issues, never read from/written to `prd.md`,
+  // and only `true` stamps the field. Purely informational, so it is composed
+  // independently and co-renders freely with needsReview / stalled / the Linked PR
+  // marker — none suppresses it and it suppresses none.
   const base: PRD = { id: dirName, title, lane, issues };
   const withNeedsReview: PRD = derivePrdNeedsReview(issues)
     ? { ...base, needsReview: true }
     : base;
-  const prd: PRD = derivePrdStalled(issues)
+  const withStalled: PRD = derivePrdStalled(issues)
     ? { ...withNeedsReview, stalled: true }
     : withNeedsReview;
+  const prd: PRD = derivePrdTolerated(issues)
+    ? { ...withStalled, tolerated: true }
+    : withStalled;
   // The Linked PR overlay rides only on a `done` PRD, keyed by its absolute dir
   // path (ADR 0013). The `done` gate both scopes the marker to PRDs that can have
   // a feature-branch PR and bounds the per-scan `gh` query to finished work — a
@@ -308,7 +318,20 @@ function scanIssue(
   // below untouched.
   const withReviewPass = applyReviewPass(withSuppressed, path, lane, lookupReviewPass);
 
-  if (lane !== "human-review") return withReviewPass;
+  // The merged-with-tolerated marker (review-tolerance PRD, ADR 0027): a `done`
+  // Issue whose frontmatter carries a non-blank `review_tolerated` waved tolerable
+  // findings through at its clean merge, so the card lights the neutral marker.
+  // Gated on the `done` lane (not a verdict): the same field on a `human-review`
+  // Issue — a deviating Issue whose review converged clean-with-tolerated — is
+  // audit trail there, never a marker, so the gate is on placement, not the field.
+  // Read straight from the file (the marker renders a recorded fact); blank reads
+  // as absent (`readPresentString`), so a genuinely zero-findings merge stays bare.
+  const withTolerated: Issue =
+    lane === "done" && readPresentString(data, FIELD.reviewTolerated) !== undefined
+      ? { ...withReviewPass, tolerated: true }
+      : withReviewPass;
+
+  if (lane !== "human-review") return withTolerated;
   // The escalation reason (an enum, drives the card marker) and the free-text
   // note (the reviewer's "why", surfaced in the detail view) are parsed
   // independently: each only lands on a human-review card, each treats an
