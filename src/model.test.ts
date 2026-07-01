@@ -4,6 +4,7 @@ import {
   derivePrdLane,
   derivePrdNeedsReview,
   derivePrdStalled,
+  derivePrdTolerated,
   ISSUE_LANES,
   type Lane,
   type Issue,
@@ -221,5 +222,30 @@ describe("derivePrdStalled", () => {
   it("is false for a PRD with no waiting agent work", () => {
     expect(derivePrdStalled([])).toBe(false);
     expect(derivePrdStalled([issue("backlog"), issue("done")])).toBe(false);
+  });
+});
+
+/** A `done` Issue that merged with tolerated findings (carries the marker). */
+function toleratedIssue(id = "tolerated.md"): Issue {
+  return { id, title: id, lane: "done", tolerated: true };
+}
+
+/**
+ * The board-level tolerated roll-up: a PRD reads as carrying tolerated findings
+ * iff ≥1 of its Issues carries the `tolerated` marker (a `done` Issue that merged
+ * with tolerated findings — ADR 0027). A derived overlay, presence-only, computed
+ * from the Issues each scan and never written to `prd.md`.
+ */
+describe("derivePrdTolerated", () => {
+  it("is true when at least one Issue merged with tolerated findings", () => {
+    expect(derivePrdTolerated([issue("done"), toleratedIssue()])).toBe(true);
+  });
+
+  it("is false when no Issue carries the tolerated marker", () => {
+    expect(derivePrdTolerated([issue("done"), issue("in-progress")])).toBe(false);
+  });
+
+  it("is false for an empty PRD", () => {
+    expect(derivePrdTolerated([])).toBe(false);
   });
 });

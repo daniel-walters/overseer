@@ -83,6 +83,18 @@ interface CardProps {
    */
   stalled?: boolean;
   /**
+   * Tolerated marker, present on a `done` Issue card that merged with tolerated
+   * findings, and rolled up onto a PRD card carrying ≥1 such Issue (CONTEXT.md;
+   * {@link import("../model.js").Issue.tolerated} / {@link import("../model.js").derivePrdTolerated},
+   * ADR 0027). **Neutral/cyan/informational** — the `◌ stalled` family, *not* the
+   * `⚠` needs-a-human family — because nothing needs a human: it records that a
+   * clean-with-tolerated merge waved findings through, never a call to action. So it
+   * is ungated by the other markers and co-renders freely with them (a `done` PRD
+   * can carry both this and the Linked PR marker). Lane-disjoint from the mid-loop
+   * `N/cap` review-progress marker (in-review vs done).
+   */
+  tolerated?: boolean;
+  /**
    * Whether the global auto-run brake is **off** (the Reactor is not auto-spawning)
    * — a board-wide session flag threaded down from {@link import("./App.js")}, not a
    * per-card field. It gates the {@link stalled} marker: a stalled PRD only reads as
@@ -195,6 +207,21 @@ const STALLED_MARKER = "◌ stalled";
 const STALLED_COLOR = "cyan";
 
 /**
+ * The tolerated marker — a `done` Issue (or a PRD rolling one up) that merged with
+ * tolerated findings (ADR 0027). Deliberately in the neutral `◌` family with the
+ * same cyan as {@link STALLED_COLOR}: it is *informational*, never a call to action
+ * (nothing needs a human), so it reads apart from the yellow `⚠` needs-a-human
+ * family and the red `⊘` "nothing ran" marker. Its own own-line truncating idiom,
+ * like every other marker. The `◌` glyph is shared with `◌ stalled` (both neutral
+ * "here's a fact, not an alarm" signals) but the word distinguishes them, and their
+ * lanes never overlap.
+ */
+const TOLERATED_MARKER = "◌ tolerated";
+
+/** The colour of the neutral tolerated marker — the neutral family, not a warning. */
+const TOLERATED_COLOR = "cyan";
+
+/**
  * The glyph leading the review-pass `N/cap` marker (the Reviewer Iteration Count
  * PRD, ADR 0018). Deliberately **neutral**: `◷` (a partial-clock "in progress")
  * reads apart from the yellow "needs a human" warning family (`⚠ orphaned`,
@@ -229,6 +256,7 @@ export function Card({
   reviewPass,
   reviewCap,
   stalled,
+  tolerated,
   autoRunOff,
   selected = false,
 }: CardProps) {
@@ -343,6 +371,17 @@ export function Card({
         // card reads as a held merge, never masked by the healthy in-progress signal.
         <Text wrap="truncate-end" color={REVIEW_PASS_COLOR}>
           {`${REVIEW_PASS_GLYPH} ${reviewPass}/${reviewCap}`}
+        </Text>
+      )}
+      {tolerated && (
+        // Its own truncating line, neutral cyan — a `done` Issue (or a PRD rolling
+        // one up) that merged with tolerated findings (ADR 0027). Purely
+        // informational (nothing needs a human), so it carries no precedence guard
+        // and co-renders freely with the other markers: a `done` PRD can legitimately
+        // show both this and the Linked PR marker, both true facts on their own lines.
+        // Lane-disjoint from the in-review `N/cap` count, so the two never meet.
+        <Text wrap="truncate-end" color={TOLERATED_COLOR}>
+          {TOLERATED_MARKER}
         </Text>
       )}
     </Box>

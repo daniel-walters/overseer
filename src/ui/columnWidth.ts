@@ -13,7 +13,7 @@ export const COLUMN_WIDTH_FLOOR = 24;
  * terminal needed), so the distribution math is unit-testable directly.
  *
  * On a roomy terminal the share exceeds the floor and titles breathe; on a
- * narrow one (or the 7-column zoomed Issue level, which wants 7×24 = 168 cells
+ * narrow one (or the 8-column zoomed Issue level, which wants 8×24 = 192 cells
  * a standard terminal can't give) the share falls below the floor and every
  * column holds at the floor instead. When the floor's total then exceeds the
  * viewport, the row simply clips horizontally at the screen edge — the same

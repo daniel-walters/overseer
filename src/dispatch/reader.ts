@@ -78,6 +78,18 @@ export interface DispatchIssue {
    * confirm step from its prompt.
    */
   readonly reviewFindings: string | undefined;
+  /**
+   * The merge's tolerated-findings manifest (review-tolerance PRD, ADR 0027): a
+   * one-line record of what a clean-with-tolerated review pass waved through,
+   * written at the clean exit when tolerable findings remained. Agent-written,
+   * like {@link deviation} / {@link reviewFindings} — the only channel a detached
+   * reviewer has back to Overseer is the Issue file. Single-line contract (ADR
+   * 0024), and a blank value reads as absent (`undefined`): a genuinely
+   * zero-findings merge simply carries no manifest. It is informational audit
+   * trail — it never changes the merge decision, only drives the neutral
+   * `done`-card marker.
+   */
+  readonly reviewTolerated: string | undefined;
   /** The Issue's markdown body (frontmatter stripped). */
   readonly body: string;
 }
@@ -164,6 +176,10 @@ function readIssue(path: string, fileName: string): DispatchIssue {
     // `deviation`: a first pass (or one a previous reviewer never wrote) simply
     // carries no confirm-closure step into the next prompt.
     reviewFindings: readPresentString(data, FIELD.reviewFindings),
+    // The merge's tolerated manifest (ADR 0027). Blank reads as absent, like
+    // `deviation` / `review_findings`: a genuinely zero-findings merge carries no
+    // manifest, so the neutral marker simply never lights up.
+    reviewTolerated: readPresentString(data, FIELD.reviewTolerated),
     body: content,
   };
 }
