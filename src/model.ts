@@ -220,11 +220,13 @@ export const HUMAN_REVIEW_REASONS = [
 ] as const;
 
 /**
- * The sole `review_verdict` value (ADR 0019): a review pass found zero findings.
- * The pass agent writes it to the Issue frontmatter and leaves `status:
- * in-review`; Overseer reads it to know the clean merge → `done` resolve may run.
- * It is the one bit Overseer cannot derive — `deviation`, `conflict`, and
- * `non-convergence` it already has from elsewhere — so `clean` is the only value.
+ * The sole `review_verdict` value (ADR 0019): a review pass found no *blocking*
+ * findings (ADR 0027 — tolerable findings may remain and are disclosed via
+ * `review_tolerated`). The pass agent writes it to the Issue frontmatter and
+ * leaves `status: in-review`; Overseer reads it to know the clean merge → `done`
+ * resolve may run. It is the one bit Overseer cannot derive — `deviation`,
+ * `conflict`, and `non-convergence` it already has from elsewhere — so `clean`
+ * is the only value.
  */
 export const REVIEW_VERDICT_CLEAN = "clean";
 
