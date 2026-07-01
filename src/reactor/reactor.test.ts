@@ -11,6 +11,10 @@ import { join } from "node:path";
 import { createReactor, type ReactorDeps } from "./reactor.js";
 import type { GitSeam } from "../dispatch/gitSetup.js";
 import type { MergeSeam } from "../review/mergeSeam.js";
+import { DEFAULT_REVIEW_CONFIG } from "../review/reviewConfig.js";
+
+/** The default tolerance policy, for review fixtures that only tune cap/effort. */
+const tolerance = DEFAULT_REVIEW_CONFIG.tolerance;
 
 /** A git seam that treats every repo as valid with the branch already present. */
 function fakeGit(overrides: Partial<GitSeam> = {}): GitSeam {
@@ -741,7 +745,7 @@ describe("createReactor", () => {
 
       const deps = recordingDeps({
         readReviewPass: (key) => (key === issueKey ? 2 : undefined),
-        review: { cap: 3, effort: "medium" },
+        review: { cap: 3, effort: "medium", tolerance },
       });
       createReactor(root, deps).reconcile();
 
@@ -762,7 +766,7 @@ describe("createReactor", () => {
 
       const deps = recordingDeps({
         readReviewPass: (key) => (key === issueKey ? 3 : undefined),
-        review: { cap: 3, effort: "medium" },
+        review: { cap: 3, effort: "medium", tolerance },
       });
       createReactor(root, deps).reconcile();
 
@@ -786,7 +790,7 @@ describe("createReactor", () => {
       let recorded: number | undefined;
       const deps = recordingDeps({
         readReviewPass: () => recorded,
-        review: { cap: 3, effort: "medium" },
+        review: { cap: 3, effort: "medium", tolerance },
         // Spawning records the pass; mirror that into the sidecar fake so the
         // next reconcile reads the advanced count.
         spawn: (repo, prompt) => {
@@ -819,7 +823,7 @@ describe("createReactor", () => {
       writePrd(root, "alpha", { "001-review.md": reviewable() });
       const issueKey = join(root, "alpha", "001-review.md");
 
-      const deps = recordingDeps({ review: { cap: 3, effort: "medium" } });
+      const deps = recordingDeps({ review: { cap: 3, effort: "medium", tolerance } });
       const reactor = createReactor(root, deps);
 
       reactor.reconcile(); // pass 1 spawns

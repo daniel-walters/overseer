@@ -5,7 +5,7 @@
  *
  * Selection is a 2-D `(laneIndex, rowIndex)` grid coordinate per level, not a
  * flat index: `h`/`l` change the lane, `j`/`k` change the row, at both the
- * 3-column board level and the 7-column Issue level (ADR 0015). The reducer
+ * 3-column board level and the 8-column Issue level (ADR 0015). The reducer
  * receives the **lane shape** — the per-lane card counts — as `move` action
  * data, exactly as it received `count` before, so it never imports the Board.
  */
@@ -38,7 +38,7 @@ export interface NavState {
   readonly level: Level;
   /** The grid selection at the board level (PRDs across the three lanes). */
   readonly board: Coord;
-  /** The grid selection while zoomed into a PRD's Issues (seven lanes). */
+  /** The grid selection while zoomed into a PRD's Issues (eight lanes). */
   readonly issues: Coord;
   /**
    * True while a modal preview is open — either the board-level dispatch preview

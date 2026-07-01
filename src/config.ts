@@ -5,9 +5,14 @@ import { parse } from "smol-toml";
 import { errorMessage } from "./errorMessage.js";
 import {
   DEFAULT_REVIEW_CONFIG,
+  isToleranceLevel,
+  REVIEW_CATEGORIES,
   REVIEW_EFFORTS,
+  type ReviewCategory,
   type ReviewConfig,
   type ReviewEffort,
+  type Tolerance,
+  type ToleranceLevel,
 } from "./review/reviewConfig.js";
 import {
   AGENT_EFFORTS,
@@ -162,7 +167,35 @@ function parseReview(raw: unknown, configPath: string): ReviewConfig {
   return {
     cap: parseCap(table.cap, configPath),
     effort: parseEffort(table.effort, configPath),
+    tolerance: parseTolerance(table.tolerance),
   };
+}
+
+/**
+ * Resolve the optional `[review.tolerance]` sub-table into a complete
+ * {@link Tolerance} map, filling each absent Category from
+ * {@link DEFAULT_REVIEW_CONFIG}. Unlike the rest of the module, a malformed value
+ * here **never throws**: an unknown Category key is ignored and an out-of-set
+ * Severity falls back to that Category's default (ADR 0027 / user story 19) — a
+ * typo in the tolerance table must not take config loading, and so the board, down.
+ */
+function parseTolerance(raw: unknown): Tolerance {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    // Absent or malformed sub-table: the default policy stands whole.
+    return DEFAULT_REVIEW_CONFIG.tolerance;
+  }
+  const table = raw as Record<string, unknown>;
+  const resolved: Record<ReviewCategory, ToleranceLevel> = {
+    ...DEFAULT_REVIEW_CONFIG.tolerance,
+  };
+  for (const category of REVIEW_CATEGORIES) {
+    const value = table[category];
+    if (typeof value === "string" && isToleranceLevel(value)) {
+      resolved[category] = value;
+    }
+    // Absent or out-of-set: keep this Category's default (never throw).
+  }
+  return resolved;
 }
 
 /** A review cap must be a positive integer; absent falls back to the default. */

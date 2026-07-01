@@ -190,6 +190,32 @@ describe("readDispatchView", () => {
     ).toBeUndefined();
   });
 
+  it("reads review_tolerated (the merge's tolerated manifest) onto the read model", () => {
+    // The single-line manifest a clean-with-tolerated exit writes (ADR 0027):
+    // what the merge waved through, read off the Issue the same way review_findings
+    // is — present/blank/absent, no structured parsing (ADR 0024).
+    const dir = tmpPrd({
+      "001-merged.md":
+        '---\nstatus: done\nreview_tolerated: "style:low — two trailing-comma nits"\n---\nbody\n',
+    });
+    expect(readDispatchIssue(dir, "001-merged.md").reviewTolerated).toBe(
+      "style:low — two trailing-comma nits",
+    );
+  });
+
+  it("treats an absent or blank review_tolerated as undefined", () => {
+    // A genuinely zero-findings merge (no manifest) and a blank field both read as
+    // "nothing tolerated" — mirroring review_findings' blank-as-absent rule.
+    const dir = tmpPrd({
+      "001-none.md": "---\nstatus: done\n---\nbody\n",
+      "002-blank.md": '---\nstatus: done\nreview_tolerated: ""\n---\nbody\n',
+    });
+    expect(readDispatchIssue(dir, "001-none.md").reviewTolerated).toBeUndefined();
+    expect(
+      readDispatchIssue(dir, "002-blank.md").reviewTolerated,
+    ).toBeUndefined();
+  });
+
   it("does not throw on malformed frontmatter; reads the fields as absent", () => {
     // A `deviation:` value with an unquoted ': ' is invalid YAML. The reader
     // must degrade to absent fields rather than throwing out of the read.

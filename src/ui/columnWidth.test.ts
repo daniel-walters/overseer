@@ -17,18 +17,18 @@ describe("columnWidth", () => {
     expect(columnWidth(72, 3, 24)).toBe(24);
   });
 
-  it("distributes the same terminal width differently across 3 vs 7 columns", () => {
-    // The board level (3) gets generous columns; the zoomed level (7) divides
+  it("distributes the same terminal width differently across 3 vs 8 columns", () => {
+    // The board level (3) gets generous columns; the zoomed level (8) divides
     // the same viewport into narrower ones — different widths, same width in.
     const wide = 420;
     expect(columnWidth(wide, 3, 24)).toBe(140);
-    expect(columnWidth(wide, 7, 24)).toBe(60);
+    expect(columnWidth(wide, 8, 24)).toBe(52);
   });
 
-  it("clamps the 7-column zoomed level to the floor on a standard terminal", () => {
-    // 7 columns at the 24 floor want 168 cols; a standard ~120-col terminal can't
+  it("clamps the 8-column zoomed level to the floor on a standard terminal", () => {
+    // 8 columns at the 24 floor want 192 cols; a standard ~120-col terminal can't
     // hold them, so each holds at 24 and the row clips horizontally (deferred).
-    expect(columnWidth(120, 7, 24)).toBe(24);
+    expect(columnWidth(120, 8, 24)).toBe(24);
   });
 
   it("returns whole columns — never a fractional width", () => {

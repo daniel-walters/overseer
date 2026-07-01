@@ -190,7 +190,7 @@ describe("App", () => {
 
 describe("App dispatch", () => {
   function di(id: string): DispatchIssue {
-    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, reviewVerdict: undefined, slice: undefined, reviewFindings: undefined, body: "" };
+    return { id, title: id, path: `/root/auth/${id}`, status: "ready-for-agent", blockedBy: [], repo: "/r", worktree: undefined, branch: undefined, deviation: undefined, reviewVerdict: undefined, slice: undefined, reviewFindings: undefined, reviewTolerated: undefined, body: "" };
   }
 
   /** A frontier with one spawn candidate and one skipped Issue. */
@@ -466,6 +466,7 @@ describe("App review", () => {
       reviewVerdict: undefined,
       slice: undefined,
       reviewFindings: undefined,
+      reviewTolerated: undefined,
       body: "",
       ...overrides,
     };
@@ -1091,6 +1092,7 @@ describe("App re-dispatch (R on an orphan)", () => {
         reviewVerdict: undefined,
         slice: undefined,
         reviewFindings: undefined,
+        reviewTolerated: undefined,
         body: "",
       },
     };
@@ -1289,6 +1291,7 @@ describe("App kill (K on a live card)", () => {
         reviewVerdict: undefined,
         slice: undefined,
         reviewFindings: undefined,
+        reviewTolerated: undefined,
         body: "",
       },
     };
