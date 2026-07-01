@@ -287,15 +287,13 @@ function runBoard(): void {
   });
   const mirror = {
     reconcile: (b: Board): void => {
-      // Defer off the synchronous rebuild+reconcile tick so the board render never
-      // waits on acli; the reconciler swallows its own failures, so a rejected
-      // microtask can't surface — but guard anyway to honour "never throws out".
-      queueMicrotask(() => {
-        try {
-          mirrorReconciler.reconcile(b);
-        } catch {
-          // Fire-and-forget: a mirror failure is never allowed to reach the board.
-        }
+      // Fire-and-forget: every JiraSeam call is async (acli via execFile, never
+      // execFileSync), so this call already returns before any subprocess I/O
+      // happens — the board render never waits on acli. The reconciler swallows
+      // its own per-PRD failures, so a rejected promise can't surface — but
+      // guard anyway to honour "never throws out".
+      void mirrorReconciler.reconcile(b).catch(() => {
+        // Fire-and-forget: a mirror failure is never allowed to reach the board.
       });
     },
   };
