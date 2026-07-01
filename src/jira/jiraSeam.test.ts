@@ -60,4 +60,14 @@ describe("parseCreatedKey", () => {
     expect(parseCreatedKey("")).toBeUndefined();
     expect(parseCreatedKey(JSON.stringify({ id: "123" }))).toBeUndefined();
   });
+
+  it("never scans a parsed-but-shapeless JSON payload for a stray key-shaped substring", () => {
+    // An error payload that happens to mention an unrelated ticket must not be
+    // mistaken for the created epic's key — it parses as JSON, so its shape is
+    // trusted (no `key` field ⇒ undefined), never the raw-text regex fallback.
+    const errorJson = JSON.stringify({
+      errorMessages: ["Related to DS-42, cannot create: permission denied"],
+    });
+    expect(parseCreatedKey(errorJson)).toBeUndefined();
+  });
 });

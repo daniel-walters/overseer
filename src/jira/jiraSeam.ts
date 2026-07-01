@@ -115,22 +115,30 @@ export function parseWorkItemStatus(json: string): string | undefined {
 
 /**
  * Recover the created epic's key from `acli jira workitem create --json` output.
- * Tolerant of the plausible shapes: a JSON object with a `key`, a single-element
- * array of such objects, and — belt-and-braces — a plain success line, from which
- * a `PROJ-123` key pattern is scanned. `undefined` when no key is found, so a
- * malformed create is a logged no-op rather than a bogus backref written to disk.
+ * Tolerant of the plausible shapes: a JSON object with a `key`, or a
+ * single-element array of such objects. `undefined` when no key is found there,
+ * so a malformed create is a logged no-op rather than a bogus backref written to
+ * disk.
+ *
+ * The regex fallback (scanning for a `PROJ-123`-shaped substring) applies **only**
+ * when the output isn't JSON at all — a plain human-readable success line.
+ * Once the output parses as JSON, its shape is trusted and nothing else: scanning
+ * a *parsed* payload's raw text for a stray key-shaped substring would just as
+ * happily match a key mentioned in an unrelated error message (e.g. "related to
+ * DS-42, permission denied") and hand back that wrong key as if it were the
+ * epic just created, silently mirroring the PRD to someone else's ticket.
  */
 export function parseCreatedKey(output: string): string | undefined {
   const parsed = tryParse(output);
-  if (Array.isArray(parsed)) {
-    const key = firstKey(parsed);
-    if (key !== undefined) return key;
-  } else if (parsed !== null && typeof parsed === "object") {
-    const key = (parsed as { key?: unknown }).key;
-    if (typeof key === "string" && key.trim() !== "") return key;
+  if (parsed !== undefined) {
+    if (Array.isArray(parsed)) return firstKey(parsed);
+    if (parsed !== null && typeof parsed === "object") {
+      const key = (parsed as { key?: unknown }).key;
+      return typeof key === "string" && key.trim() !== "" ? key : undefined;
+    }
+    return undefined;
   }
-  // Fallback: scan any output (JSON we couldn't key off, or a human line) for a
-  // JIRA key pattern (uppercase project prefix + number).
+  // Not parseable as JSON: a plain success line. Scan it for a JIRA key.
   return output.match(/[A-Z][A-Z0-9]+-\d+/)?.[0];
 }
 
