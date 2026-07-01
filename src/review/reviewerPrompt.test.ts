@@ -38,6 +38,11 @@ function buildWithReview(review: ReviewConfig): string {
   return buildReviewerPrompt({ issue, ...context, review });
 }
 
+/** A ReviewConfig with the default knobs but a bespoke tolerance policy. */
+function withTolerance(tolerance: ReviewConfig["tolerance"]): ReviewConfig {
+  return { ...DEFAULT_REVIEW_CONFIG, tolerance };
+}
+
 describe("buildReviewerPrompt", () => {
   it("embeds the full Issue body verbatim", () => {
     expect(build()).toContain(issue.body);
@@ -91,13 +96,21 @@ describe("buildReviewerPrompt", () => {
   it("does not name the cap as a loop bound", () => {
     // The cap / non-convergence escalation lives in the Reactor; a non-default
     // cap must not leak into the prompt as a pass bound at all.
-    const prompt = buildWithReview({ cap: 5, effort: "medium" });
+    const prompt = buildWithReview({
+      cap: 5,
+      effort: "medium",
+      tolerance: DEFAULT_REVIEW_CONFIG.tolerance,
+    });
     expect(prompt).not.toMatch(/\bcap\b|\bpasses\b|\bconverge/i);
     expect(prompt).not.toContain("5");
   });
 
   it("uses the configured effort, not a hardcoded medium", () => {
-    const prompt = buildWithReview({ cap: 3, effort: "high" });
+    const prompt = buildWithReview({
+      cap: 3,
+      effort: "high",
+      tolerance: DEFAULT_REVIEW_CONFIG.tolerance,
+    });
     expect(prompt.toLowerCase()).toContain("high");
     expect(prompt).toContain("HIGH effort");
     expect(prompt).not.toContain("MEDIUM effort");
@@ -110,8 +123,8 @@ describe("buildReviewerPrompt", () => {
     expect(prompt).toContain("review_verdict: clean");
   });
 
-  it("defines the clean exit as a pass that reports zero findings", () => {
-    expect(build().toLowerCase()).toMatch(/zero findings|no findings/);
+  it("defines the clean exit as a pass with no blocking findings", () => {
+    expect(build().toLowerCase()).toMatch(/no blocking findings|zero blocking findings/);
   });
 
   it("CLEAN exit: never merges and never writes a terminal status itself", () => {
@@ -199,5 +212,78 @@ describe("buildReviewerPrompt", () => {
 
   it("is deterministic: identical inputs produce identical output", () => {
     expect(build()).toBe(build());
+  });
+
+  // Tolerance (ADR 0027): the resolved policy is embedded, findings are classified
+  // on two axes, and the two exits hinge on *blocking* findings.
+
+  it("embeds the resolved default tolerance table (style/docs low, rest none)", () => {
+    const prompt = build();
+    expect(prompt).toContain("style: low");
+    expect(prompt).toContain("docs: low");
+    expect(prompt).toContain("correctness: none");
+    expect(prompt).toContain("security: none");
+    expect(prompt).toContain("architecture: none");
+    expect(prompt).toContain("test: none");
+  });
+
+  it("embeds a configured tolerance table, not a hardcoded default", () => {
+    const prompt = buildWithReview(
+      withTolerance({
+        correctness: "none",
+        security: "high",
+        architecture: "medium",
+        style: "low",
+        test: "none",
+        docs: "low",
+      }),
+    );
+    expect(prompt).toContain("security: high");
+    expect(prompt).toContain("architecture: medium");
+  });
+
+  it("instructs two-axis classification of each finding (Category + Severity)", () => {
+    const prompt = build();
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("classif");
+    expect(prompt).toContain("Category");
+    expect(prompt).toContain("Severity");
+  });
+
+  it("CLEAN exit hinges on zero BLOCKING findings, not zero findings", () => {
+    const prompt = build();
+    expect(prompt).toContain("review_verdict: clean");
+    // The clean exit is now defined around blocking findings.
+    expect(prompt.toLowerCase()).toMatch(/no blocking findings|zero blocking findings/);
+  });
+
+  it("CLEAN exit: writes review_tolerated when tolerable findings remain", () => {
+    expect(build()).toContain("review_tolerated");
+  });
+
+  it("FINDINGS exit: fixes the BLOCKING findings", () => {
+    const prompt = build().toLowerCase();
+    // The findings exit is anchored on fixing blocking findings.
+    const fixIdx = prompt.indexOf("fix");
+    expect(fixIdx).toBeGreaterThanOrEqual(0);
+    expect(prompt).toContain("blocking");
+  });
+
+  it("FINDINGS exit: discloses the tolerated set in review_findings for the next pass", () => {
+    const prompt = build();
+    expect(prompt).toContain("review_findings");
+    // The disclosure is framed as independent re-judgment, never deference.
+    const lower = prompt.toLowerCase();
+    expect(lower).toContain("re-judge");
+    expect(lower).toContain("toler");
+  });
+
+  it("with prior findings: asks the next pass to re-judge any disclosed tolerated set independently", () => {
+    const prompt = build({
+      reviewFindings:
+        'Fixed null-deref in parser. Tolerated style:low — "long line in formatter"',
+    });
+    expect(prompt).toContain("Confirm the previous pass");
+    expect(prompt.toLowerCase()).toContain("independent");
   });
 });

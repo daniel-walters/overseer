@@ -8,11 +8,12 @@ import {
   type DoctorReport,
 } from "./doctor.js";
 import { ConfigError, type Config } from "../config.js";
+import { DEFAULT_REVIEW_CONFIG } from "../review/reviewConfig.js";
 
 /** A config every field of which is present, so `loadConfig` "succeeds". */
 const A_CONFIG = {
   root: "/work/prds",
-  review: { cap: 3, effort: "medium" },
+  review: { cap: 3, effort: "medium", tolerance: DEFAULT_REVIEW_CONFIG.tolerance },
   implementor: { model: null, effort: null },
   reviewer: { model: null, effort: null },
 } as Config;

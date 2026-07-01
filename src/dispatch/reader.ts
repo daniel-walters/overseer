@@ -55,11 +55,12 @@ export interface DispatchIssue {
   readonly deviation: string | undefined;
   /**
    * The pass agent's review verdict (ADR 0019), the one bit Overseer cannot
-   * derive: `clean` when a review pass found zero findings and wrote it to the
-   * frontmatter, leaving `status: in-review` for Overseer to merge and finish.
-   * A blank value reads as absent (`undefined`) — only a real verdict moves the
-   * Issue onto the resolve frontier. Everything else (`deviation`, `conflict`,
-   * `non-convergence`) Overseer already has from elsewhere.
+   * derive: `clean` when a review pass found no *blocking* findings (ADR 0027 —
+   * tolerable findings may remain, disclosed via `review_tolerated`) and wrote
+   * it to the frontmatter, leaving `status: in-review` for Overseer to merge and
+   * finish. A blank value reads as absent (`undefined`) — only a real verdict
+   * moves the Issue onto the resolve frontier. Everything else (`deviation`,
+   * `conflict`, `non-convergence`) Overseer already has from elsewhere.
    */
   readonly reviewVerdict: string | undefined;
   /**
