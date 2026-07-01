@@ -74,8 +74,9 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
    ```
 
    Frontmatter for a PRD opted into JIRA — the `jira` block carries `board` and
-   `target`, plus an optional `project` override. These field spellings are the
-   exact ones Overseer's parser reads, so do not rename them:
+   `target`, plus an optional `project` override. `board` and `project` are read
+   by today's opt-in parser; `target` is the locked field name the upcoming
+   sprint/backlog placement work will read. Do not rename any of these fields:
 
    <!-- jira-block-example -->
    ```yaml

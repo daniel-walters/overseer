@@ -7,11 +7,12 @@ import { safeMatter, parseJiraOptIn } from "../issueFile.js";
 /**
  * The shipped `overseer-to-prd` skill authors the `jira` opt-in block into a new
  * `prd.md` (JIRA Mirror). These tests defend the seam between *authoring* (the
- * skill's prose) and *reading* (slice 001's `parseJiraOptIn`): the canonical
- * block the skill tells the agent to emit is run through the real parser, so any
- * drift in field spellings (`board` / `project` / `target`, or the config's
- * `default_board`) fails here instead of silently producing a `jira` block the
- * mirror can't act on.
+ * skill's prose) and *reading*: `board` and `project` are run through the real
+ * parser (slice 001's `parseJiraOptIn`), so drift in those spellings fails here
+ * instead of silently producing a `jira` block the mirror can't act on. `target`
+ * has no parser yet — sprint/backlog placement is a later slice — so its test
+ * only pins the field's spelling and legal values in the authored YAML, and the
+ * config key test only pins `default_board`'s spelling in the skill's prose.
  */
 const skillMd = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -74,8 +75,9 @@ describe("overseer-to-prd jira block", () => {
     const example = readJiraBlockExample();
     const { data } = safeMatter(example);
 
-    // The schema slice 001 parses carries `target: sprint|backlog`; the skill
-    // must emit it under that spelling with a legal value.
+    // `target: sprint|backlog` has no parser yet (deferred to the sprint/backlog
+    // placement slice); the skill must still emit it under this locked spelling
+    // with a legal value so that slice can read it verbatim once it lands.
     const jira = data.jira as Record<string, unknown>;
     expect(["sprint", "backlog"]).toContain(jira.target);
   });
