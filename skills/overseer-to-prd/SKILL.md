@@ -29,9 +29,40 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
 
 3. **Choose the PRD folder name.** A kebab-case slug derived from the feature (e.g. `auth-system`). This becomes the PRD's **identity** — it is the directory name and cannot easily change later. Propose it and confirm with the user before writing.
 
-4. **Write the PRD file** to `<root>/<slug>/prd.md`.
+4. **Offer JIRA mirroring (opt-in, off by default).** Ask the user whether this
+   PRD should be mirrored into JIRA so stakeholders can watch it as an epic with
+   its Issues nested underneath. Mirroring is **off by default** — a PRD nobody
+   opts in gets **no `jira` block** and never touches JIRA. Opting in is the only
+   gesture that turns it on, and the block stays hand-editable afterwards (adding
+   it later backfills; removing it stops updates).
 
-   Frontmatter is **`title` only** — a human-readable display title. Write **no `status` field**: a PRD has no stored status. Overseer derives its board column at read time from its Issues — `done` only when there is ≥1 Issue and all are `done`; `in-progress` when any Issue is `in-progress` or later; otherwise `backlog`. So a PRD with no Issues yet reads as `backlog` automatically.
+   **Only if the user opts in**, ask exactly two follow-up questions and carry the
+   answers into the `jira` block you write below:
+
+   - **Which board?** — the JIRA board this PRD mirrors to. **Default it to the
+     config's `default_board`** (read from the `[jira]` table in
+     `~/.config/overseer/config.toml`); if the user accepts the default and it is
+     set, you may omit `board` and let the mirror fall back to config. Write an
+     explicit `board` when the user names a board other than the default (or no
+     `default_board` is configured).
+   - **Sprint or backlog?** — whether this PRD's Issues drop into the board's
+     active sprint (`target: sprint`) or wait in the backlog (`target: backlog`).
+
+   Add a `project` field **only** when the user supplies an explicit project key
+   (the rare filter-board-spanning-projects case); normally the project is derived
+   from the board, so leave it out.
+
+5. **Write the PRD file** to `<root>/<slug>/prd.md`.
+
+   Frontmatter always carries **`title`** — a human-readable display title — and,
+   **only when the user opted into JIRA in step 4**, a **`jira` block** (schema
+   below). Write **no `status` field**: a PRD has no stored status. Overseer
+   derives its board column at read time from its Issues — `done` only when there
+   is ≥1 Issue and all are `done`; `in-progress` when any Issue is `in-progress`
+   or later; otherwise `backlog`. So a PRD with no Issues yet reads as `backlog`
+   automatically.
+
+   Frontmatter for a PRD **not** opted into JIRA — `title` only, no `jira` block:
 
    ```markdown
    ---
@@ -42,13 +73,31 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
    ...
    ```
 
+   Frontmatter for a PRD opted into JIRA — the `jira` block carries `board` and
+   `target`, plus an optional `project` override. These field spellings are the
+   exact ones Overseer's parser reads, so do not rename them:
+
+   <!-- jira-block-example -->
+   ```yaml
+   ---
+   title: Auth System
+   jira:
+     board: "42"
+     target: sprint
+   ---
+   ```
+
+   The block's *presence* is the opt-in — an empty `jira:` (no fields) still opts
+   in and defers the board entirely to `default_board`. `target` is `sprint` or
+   `backlog`. Add `project: PROJ` beneath `target` only in the override case.
+
    Put the PRD template below in the body, beneath the frontmatter.
 
    Write `prd.md` **first** — before any git work below. The Overseer root is not a
    git repo, so `prd.md` is committed nowhere; writing it first means a git failure in
-   step 5 can never cost the PRD you just wrote.
+   the doc-commit step can never cost the PRD you just wrote.
 
-5. **Commit the grill's docs onto the PRD feature branch.** The `/overseer-grill-with-docs`
+6. **Commit the grill's docs onto the PRD feature branch.** The `/overseer-grill-with-docs`
    step that usually precedes this one writes domain-doc edits (`CONTEXT.md` /
    `CONTEXT-MAP.md` and `docs/adr/`) into each code repo's working tree but leaves them
    **uncommitted** — and on whatever branch was checked out during the grill, usually
@@ -77,12 +126,12 @@ Expand a leading `~` to the home directory. If the file is missing or has no `ro
    Do not modify the dispatch-time git setup — it remains the idempotent safety net and
    now usually finds the branch this step already created.
 
-6. **Report each repo's outcome explicitly** — for every working dir, say whether the
+7. **Report each repo's outcome explicitly** — for every working dir, say whether the
    script **committed** (and onto which branch), found **nothing to commit**, or
    **failed** (with the reason it printed). A git failure must be loud here, not a silent
    stranding you discover at dispatch.
 
-7. Tell the user the PRD was written and its path.
+8. Tell the user the PRD was written and its path.
 
 Do not create any Issue files here — that's `/overseer-to-issues`.
 
