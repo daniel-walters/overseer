@@ -247,7 +247,8 @@ finding remains — tolerable findings never decide the exit:
 function renderTolerance(tolerance: Tolerance): string {
   return REVIEW_CATEGORIES.map((category) => {
     const level = tolerance[category];
-    const annotation = level === "none" ? "none (always blocks)" : level;
+    const annotation =
+      level === "none" ? "none (always blocks)" : `${level} (tolerates at or below ${level})`;
     return `- ${category}: ${annotation}`;
   }).join("\n");
 }

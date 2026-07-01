@@ -5,9 +5,9 @@ import { parse } from "smol-toml";
 import { errorMessage } from "./errorMessage.js";
 import {
   DEFAULT_REVIEW_CONFIG,
+  isToleranceLevel,
   REVIEW_CATEGORIES,
   REVIEW_EFFORTS,
-  SEVERITIES,
   type ReviewCategory,
   type ReviewConfig,
   type ReviewEffort,
@@ -168,11 +168,6 @@ function parseTolerance(raw: unknown): Tolerance {
     // Absent or out-of-set: keep this Category's default (never throw).
   }
   return resolved;
-}
-
-/** A tolerance threshold is one of {@link SEVERITIES} or the literal `none`. */
-function isToleranceLevel(value: string): value is ToleranceLevel {
-  return value === "none" || (SEVERITIES as readonly string[]).includes(value);
 }
 
 /** A review cap must be a positive integer; absent falls back to the default. */

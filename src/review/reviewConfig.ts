@@ -22,11 +22,15 @@ export type ReviewEffort = (typeof REVIEW_EFFORTS)[number];
  * the `/code-review` effort vocabulary. It grades *how much* a Finding matters
  * within its Category; on its own it does not decide whether a Finding blocks a
  * merge. The config validator rejects anything outside this set.
+ *
+ * Intentionally the same values as {@link REVIEW_EFFORTS} — Severity mirrors the
+ * `/code-review` effort vocabulary by design (CONTEXT.md). Sharing the reference
+ * keeps them in sync: a future extension to one automatically extends the other.
  */
-export const SEVERITIES = ["low", "medium", "high"] as const;
+export const SEVERITIES = REVIEW_EFFORTS;
 
-/** A Finding Severity — one of {@link SEVERITIES}. */
-export type Severity = (typeof SEVERITIES)[number];
+/** A Finding Severity — one of {@link SEVERITIES}. Identical to {@link ReviewEffort} by design. */
+export type Severity = ReviewEffort;
 
 /**
  * The kind axis of a Finding (CONTEXT.md → Category): a non-overlapping taxonomy
@@ -60,6 +64,11 @@ export type ToleranceLevel = Severity | "none";
  * map is total — every {@link REVIEW_CATEGORIES} member is present after resolution.
  */
 export type Tolerance = Readonly<Record<ReviewCategory, ToleranceLevel>>;
+
+/** Returns true iff `value` is a valid {@link ToleranceLevel} (`none` or a {@link Severity}). */
+export function isToleranceLevel(value: string): value is ToleranceLevel {
+  return value === "none" || (SEVERITIES as readonly string[]).includes(value);
+}
 
 /** The resolved review knobs: a pass cap, an effort level, and a tolerance policy, all always present. */
 export interface ReviewConfig {
