@@ -43,8 +43,13 @@ import type { Board } from "../model.js";
  * placement, a JQL-seeded diff cache, and a paced write queue extend it later.
  */
 export interface MirrorReconciler {
-  /** Reconcile every opted-in PRD on the board toward JIRA; returns what it did. */
-  reconcile(board: Board): MirrorDelta;
+  /**
+   * Reconcile every opted-in PRD on the board toward JIRA; resolves to what it
+   * did. Async because every {@link JiraSeam} call is a real subprocess
+   * round-trip — awaiting between PRDs keeps the render loop and keyboard input
+   * live for the whole pass (ADR 0028: "the board never blocks on it").
+   */
+  reconcile(board: Board): Promise<MirrorDelta>;
 }
 
 /** What one reconcile pass changed in JIRA — the assertable delta set. */
@@ -106,7 +111,7 @@ export function createMirrorReconciler(
   const log = deps.log ?? (() => {});
 
   return {
-    reconcile(board: Board): MirrorDelta {
+    async reconcile(board: Board): Promise<MirrorDelta> {
       const created: CreatedEpic[] = [];
       const transitioned: EpicTransition[] = [];
 
@@ -128,9 +133,27 @@ export function createMirrorReconciler(
               );
               continue;
             }
-            const project = optIn.project ?? deps.seam.resolveProject(boardId);
-            key = deps.seam.createEpic({ project, summary: prd.title });
-            deps.writeEpic(prdDir, key);
+            const project =
+              optIn.project ?? (await deps.seam.resolveProject(boardId));
+            key = await deps.seam.createEpic({ project, summary: prd.title });
+
+            // The epic now exists in JIRA; write the backref so the next pass
+            // treats it as update-or-noop instead of creating a second epic
+            // (ADR 0029). If the write itself fails (disk full, permission,
+            // lock), the epic is orphaned — present in JIRA with no backref —
+            // and every future pass will re-create it, since there is no other
+            // durable state the mirror is allowed to keep (ADR 0028: no
+            // backend). Log that specific, higher-stakes failure distinctly
+            // (not folded into the generic per-PRD no-op below) so an operator
+            // can see the duplicate-epic risk and add the backref by hand.
+            try {
+              deps.writeEpic(prdDir, key);
+            } catch (err) {
+              log(
+                `PRD ${prd.id}: created epic ${key} in JIRA but failed to write its jira_epic backref — the next reconcile will create a duplicate epic unless the backref is added by hand: ${errorMessage(err)}`,
+              );
+              continue;
+            }
             created.push({ prd: prd.id, key });
           }
 
@@ -138,10 +161,10 @@ export function createMirrorReconciler(
           // Idempotent — no transition when already at target; an illegal/absent
           // one is caught below as a logged no-op (graceful degradation).
           const target = epicTargetStatus(prd.lane, statusNames);
-          const current = deps.seam.currentStatus(key);
+          const current = await deps.seam.currentStatus(key);
           if (current !== undefined && !statusEquals(current, target)) {
             try {
-              deps.seam.transition(key, target);
+              await deps.seam.transition(key, target);
               transitioned.push({ key, to: target });
             } catch (err) {
               log(

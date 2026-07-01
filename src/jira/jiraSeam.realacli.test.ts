@@ -39,15 +39,15 @@ function acliAuthed(): boolean {
 const enabled = testBoard !== undefined && acliAuthed();
 
 describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
-  it("resolves a board's project, then creates → transitions → reads an epic", () => {
+  it("resolves a board's project, then creates → transitions → reads an epic", async () => {
     const board = testBoard!;
 
     // Board → project location.
-    const project = realJiraSeam.resolveProject(board);
+    const project = await realJiraSeam.resolveProject(board);
     expect(project).toMatch(/^[A-Z][A-Z0-9]+$/);
 
     // Create an epic in that project.
-    const key = realJiraSeam.createEpic({
+    const key = await realJiraSeam.createEpic({
       project,
       summary: `Overseer mirror smoke test ${new Date().toISOString()}`,
       description: "Created by the gated realJiraSeam integration test.",
@@ -55,11 +55,11 @@ describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
     expect(key).toMatch(/^[A-Z][A-Z0-9]+-\d+/);
 
     // Read its current status back.
-    const status = realJiraSeam.currentStatus(key);
+    const status = await realJiraSeam.currentStatus(key);
     expect(typeof status).toBe("string");
 
     // Drive it to In Progress and confirm the read reflects the move.
-    realJiraSeam.transition(key, "In Progress");
-    expect(realJiraSeam.currentStatus(key)).toBe("In Progress");
+    await realJiraSeam.transition(key, "In Progress");
+    expect(await realJiraSeam.currentStatus(key)).toBe("In Progress");
   }, 60000);
 });

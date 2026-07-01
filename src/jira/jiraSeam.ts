@@ -1,4 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 
 /**
  * The single injectable I/O port for the JIRA mirror (ADR 0028), acli-backed —
@@ -13,41 +16,48 @@ import { execFileSync } from "node:child_process";
  * foundation slice exposes only the epic-tracer operations; child-issue creation,
  * JQL cache seeding, and sprint placement extend the interface in later slices.
  *
- * Failure contract: every method **throws** on failure (a missing/unauthed acli,
- * a non-existent board, an illegal transition, a network error). The reconciler
+ * Failure contract: every method **throws** (rejects) on failure (a missing/unauthed
+ * acli, a non-existent board, an illegal transition, a network error). The reconciler
  * wraps each PRD's reconcile in a try/catch, so a throw becomes a *logged no-op*
  * that never takes down the board (ADR 0028) — the seam stays honest about
  * failure and the reconciler owns the degradation.
+ *
+ * Every method is **async**: acli is a real subprocess round-trip (up to
+ * {@link ACLI_TIMEOUT_MS}), and the mirror runs fire-and-forget off the render
+ * loop (ADR 0028) — a synchronous shell-out would freeze Ink's render/input
+ * handling for the call's whole duration. Awaiting here yields to the event loop
+ * between every acli call, so the board keeps rendering and taking input while
+ * the mirror talks to JIRA.
  */
 export interface JiraSeam {
   /**
    * Resolve the destination project *key* from a board id — the board→project
    * location lookup (ADR 0028), so a PRD need only name its `board` in the common
-   * case. Returns the board's first associated project's key. Throws if the board
-   * has no project or acli fails.
+   * case. Resolves to the board's first associated project's key. Rejects if the
+   * board has no project or acli fails.
    */
-  resolveProject(board: string): string;
+  resolveProject(board: string): Promise<string>;
   /**
-   * Create a JIRA **epic** for a PRD and return its new key (e.g. `DS-100`). The
-   * epic is the PRD's mirrored feature-level rollup; its status is driven
-   * separately via {@link transition}. Throws on any acli failure.
+   * Create a JIRA **epic** for a PRD and resolve to its new key (e.g. `DS-100`).
+   * The epic is the PRD's mirrored feature-level rollup; its status is driven
+   * separately via {@link transition}. Rejects on any acli failure.
    */
-  createEpic(input: CreateEpicInput): string;
+  createEpic(input: CreateEpicInput): Promise<string>;
   /**
    * The named status the given issue currently sits in (e.g. `"In Progress"`), or
    * `undefined` when it can't be read. The reconciler compares this against the
    * lane's target status to decide whether a self-healing transition is needed —
    * so an unreadable status degrades to *no transition* rather than a wrong one.
    */
-  currentStatus(key: string): string | undefined;
+  currentStatus(key: string): Promise<string | undefined>;
   /**
    * Drive the issue to the named target status via acli (which resolves the legal
-   * transition for the name). **Throws** when the status is unreachable or absent
+   * transition for the name). **Rejects** when the status is unreachable or absent
    * from the workflow — the reconciler catches that as a logged no-op, the
    * graceful degradation the mirror promises. Idempotence (not re-firing when
    * already at the target) is the reconciler's job, via {@link currentStatus}.
    */
-  transition(key: string, toStatus: string): void;
+  transition(key: string, toStatus: string): Promise<void>;
 }
 
 /** The fields the mirror supplies when creating an epic. */
@@ -157,8 +167,8 @@ function tryParse(text: string): unknown {
  * never taken down (ADR 0028).
  */
 export const realJiraSeam: JiraSeam = {
-  resolveProject(board: string): string {
-    const out = runAcli([
+  async resolveProject(board: string): Promise<string> {
+    const out = await runAcli([
       "jira",
       "board",
       "list-projects",
@@ -173,7 +183,7 @@ export const realJiraSeam: JiraSeam = {
     return project;
   },
 
-  createEpic(input: CreateEpicInput): string {
+  async createEpic(input: CreateEpicInput): Promise<string> {
     const args = [
       "jira",
       "workitem",
@@ -189,7 +199,7 @@ export const realJiraSeam: JiraSeam = {
     if (input.description !== undefined && input.description.trim() !== "") {
       args.push("--description", input.description);
     }
-    const key = parseCreatedKey(runAcli(args));
+    const key = parseCreatedKey(await runAcli(args));
     if (key === undefined) {
       throw new Error(
         `could not read the created epic key from acli (project ${input.project})`,
@@ -198,17 +208,17 @@ export const realJiraSeam: JiraSeam = {
     return key;
   },
 
-  currentStatus(key: string): string | undefined {
+  async currentStatus(key: string): Promise<string | undefined> {
     return parseWorkItemStatus(
-      runAcli(["jira", "workitem", "view", key, "--fields", "status", "--json"]),
+      await runAcli(["jira", "workitem", "view", key, "--fields", "status", "--json"]),
     );
   },
 
-  transition(key: string, toStatus: string): void {
+  async transition(key: string, toStatus: string): Promise<void> {
     // acli resolves the legal transition for the named status and confirms with
     // `--yes`; an unreachable/absent status makes acli exit non-zero → throw →
     // the reconciler logs a no-op.
-    runAcli([
+    await runAcli([
       "jira",
       "workitem",
       "transition",
@@ -221,12 +231,18 @@ export const realJiraSeam: JiraSeam = {
   },
 };
 
-/** Run one `acli` invocation, returning stdout; throws on any non-zero/timeout/overflow. */
-function runAcli(args: readonly string[]): string {
-  return execFileSync("acli", args as string[], {
+/**
+ * Run one `acli` invocation, resolving to stdout; rejects on any
+ * non-zero/timeout/overflow. Uses the async `execFile` (never `execFileSync`) so
+ * the mirror's subprocess round-trip never blocks Node's event loop — the render
+ * loop and keyboard input stay live for the whole call (ADR 0028: "the board
+ * never blocks on it").
+ */
+async function runAcli(args: readonly string[]): Promise<string> {
+  const { stdout } = await execFileAsync("acli", args as string[], {
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "inherit"],
     timeout: ACLI_TIMEOUT_MS,
     maxBuffer: ACLI_MAX_BUFFER,
   });
+  return stdout;
 }
