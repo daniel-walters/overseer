@@ -23,7 +23,7 @@ describe("createSpawnEdge", () => {
   });
 
   describe("spawn", () => {
-    it("invokes claude --bg --permission-mode auto -p <prompt> with cwd=repo", () => {
+    it("invokes claude --bg --permission-mode auto <prompt> with cwd=repo", () => {
       const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
       const { spawn } = createSpawnEdge({ exec, logPath });
 
@@ -32,7 +32,7 @@ describe("createSpawnEdge", () => {
       expect(exec).toHaveBeenCalledTimes(1);
       expect(exec).toHaveBeenCalledWith(
         "claude",
-        ["--bg", "--permission-mode", "auto", "-p", "do the thing"],
+        ["--bg", "--permission-mode", "auto", "do the thing"],
         { cwd: "/repos/api" },
       );
     });
@@ -64,7 +64,7 @@ describe("createSpawnEdge", () => {
       );
     });
 
-    it("adds --model and --effort before -p when an agent runtime is given", () => {
+    it("adds --model and --effort before the positional prompt when an agent runtime is given", () => {
       const exec = vi.fn<ExecSeam>(() => "backgrounded · h1");
       const { spawn } = createSpawnEdge({ exec, logPath });
 
@@ -80,7 +80,6 @@ describe("createSpawnEdge", () => {
           "opus",
           "--effort",
           "high",
-          "-p",
           "do the thing",
         ],
         { cwd: "/repos/api" },
@@ -95,7 +94,7 @@ describe("createSpawnEdge", () => {
 
       expect(exec).toHaveBeenCalledWith(
         "claude",
-        ["--bg", "--permission-mode", "auto", "--model", "sonnet", "-p", "prompt"],
+        ["--bg", "--permission-mode", "auto", "--model", "sonnet", "prompt"],
         { cwd: "/repos/api" },
       );
     });
@@ -108,7 +107,7 @@ describe("createSpawnEdge", () => {
 
       expect(exec).toHaveBeenCalledWith(
         "claude",
-        ["--bg", "--permission-mode", "auto", "--effort", "medium", "-p", "prompt"],
+        ["--bg", "--permission-mode", "auto", "--effort", "medium", "prompt"],
         { cwd: "/repos/api" },
       );
     });
@@ -121,7 +120,7 @@ describe("createSpawnEdge", () => {
 
       expect(exec).toHaveBeenCalledWith(
         "claude",
-        ["--bg", "--permission-mode", "auto", "-p", "prompt"],
+        ["--bg", "--permission-mode", "auto", "prompt"],
         { cwd: "/repos/api" },
       );
     });

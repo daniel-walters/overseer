@@ -41,7 +41,7 @@ export interface SpawnEdge {
    * Launch an agent in `repo` with `prompt`, returning the agent handle parsed
    * from `claude --bg`'s launch stdout (or `undefined` if the launch line carried
    * none). Throws if the launch itself fails. The optional {@link AgentConfig}
-   * adds `--model` / `--effort` to the launch — both edges call this one seam,
+   * adds `--model` / `--effort` before the positional prompt — both edges call this one seam,
    * each supplying its own runtime (implementor vs reviewer), so model/effort can
    * differ per edge from a single shared spawn. Omitted ⇒ inherit the launcher's
    * model and effort (the pre-knob behaviour).
@@ -65,8 +65,12 @@ export function defaultLogPath(): string {
 
 /**
  * Build the spawn edge from its seams. `spawn` runs
- * `claude --bg --permission-mode auto [--model M] [--effort E] -p <prompt>` with
- * `cwd = repo`, so the agent works autonomously in the background in its target
+ * `claude --bg --permission-mode auto [--model M] [--effort E] <prompt>` with
+ * the prompt as the positional argument — the current `claude` CLI rejects
+ * `--bg` combined with `-p`/`--print` (a `--print` job never starts the
+ * interactive session `claude agents` attaches to, so it would be unattachable),
+ * and `--bg` is itself the headless launch. `cwd = repo`, so the agent works
+ * autonomously in the background in its target
  * repo, and returns the handle parsed from the launch stdout so the caller can
  * record it against the Issue (ADR 0008). The `--model`/`--effort` flags are
  * present only when the caller passes an {@link AgentConfig} with those knobs set
@@ -84,7 +88,6 @@ export function createSpawnEdge(deps: SpawnEdgeDeps): SpawnEdge {
           "--permission-mode",
           "auto",
           ...agentFlags(agent),
-          "-p",
           prompt,
         ],
         { cwd: repo },
