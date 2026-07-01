@@ -15,6 +15,10 @@ import {
   type AgentConfig,
   type AgentEffort,
 } from "./agentConfig.js";
+import {
+  DEFAULT_EPIC_STATUS_NAMES,
+  type EpicStatusNames,
+} from "./jira/statusMapping.js";
 
 /** The resolved configuration: one board, one root, the review-loop + agent knobs. */
 export interface Config {
@@ -41,7 +45,33 @@ export interface Config {
    * distinct from `review.effort`, which tunes the `/code-review` skill itself.
    */
   readonly reviewer: AgentConfig;
+  /**
+   * The JIRA mirror's connection + status knobs, from `[jira]` (ADR 0028). Always
+   * present: absent `[jira]` config resolves to {@link DEFAULT_JIRA_CONFIG} (no
+   * default board, conventional status names), so the mirror stays *off by
+   * default* — it activates per-PRD via the authored `jira` block, never by the
+   * config's presence (ADR 0029). acli owns auth, so this table stores no
+   * credential — only the default board and any status-name overrides.
+   */
+  readonly jira: JiraConfig;
 }
+
+/**
+ * The resolved `[jira]` config. `defaultBoard` is the board a `jira`-opted PRD
+ * mirrors to when its block names none (the common case); it is optional because
+ * a PRD may name its own `board`, and a board is only *needed* once a PRD opts in.
+ * `statusNames` is always whole — the {@link EpicStatusNames} defaults filled in
+ * for any name the `[jira.status]` table did not override.
+ */
+export interface JiraConfig {
+  readonly defaultBoard?: string;
+  readonly statusNames: EpicStatusNames;
+}
+
+/** The mirror's resolved defaults: no board configured, conventional status names. */
+export const DEFAULT_JIRA_CONFIG: JiraConfig = {
+  statusNames: DEFAULT_EPIC_STATUS_NAMES,
+};
 
 /** Options for {@link loadConfig}; the defaults point at the real environment. */
 export interface LoadConfigOptions {
@@ -113,7 +143,102 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
     review: parseReview(parsed.review, configPath),
     implementor: parseAgent(parsed.implementor, "implementor", configPath),
     reviewer: parseAgent(parsed.reviewer, "reviewer", configPath),
+    jira: parseJira(parsed.jira, configPath),
   };
+}
+
+/**
+ * Parse the optional `[jira]` table into a complete {@link JiraConfig}, filling
+ * absent knobs from {@link DEFAULT_JIRA_CONFIG} so the result is always whole. An
+ * absent table is the mirror-off default (no board, conventional status names); a
+ * present-but-malformed value is a user-fixable {@link ConfigError}, matching the
+ * rest of the module. acli owns auth, so nothing credential-like is read here.
+ */
+function parseJira(raw: unknown, configPath: string): JiraConfig {
+  if (raw === undefined) return DEFAULT_JIRA_CONFIG;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(
+      `Config at ${configPath} has a "[jira]" that is not a table.`,
+    );
+  }
+  const table = raw as Record<string, unknown>;
+  return {
+    defaultBoard: parseDefaultBoard(table.default_board, configPath),
+    statusNames: parseStatusNames(table.status, configPath),
+  };
+}
+
+/**
+ * A `default_board` is a board id. Absent ⇒ `undefined` (a PRD must then name its
+ * own `board`). A number is coerced to its string form (board ids are numeric, so
+ * `default_board = 42` and `default_board = "42"` mean the same board); any other
+ * type is a user-fixable {@link ConfigError}.
+ */
+function parseDefaultBoard(
+  raw: unknown,
+  configPath: string,
+): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new ConfigError(
+      `Config at ${configPath} has an invalid "jira.default_board": expected a board id string, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw.trim();
+}
+
+/**
+ * Parse the optional `[jira.status]` override table into a complete
+ * {@link EpicStatusNames}, filling each absent name from
+ * {@link DEFAULT_EPIC_STATUS_NAMES}. The lane-named keys (`backlog`,
+ * `in-progress`, `done`) map onto the camelCased status fields; a present name
+ * must be a non-blank string or it is a user-fixable {@link ConfigError}.
+ */
+function parseStatusNames(raw: unknown, configPath: string): EpicStatusNames {
+  if (raw === undefined) return DEFAULT_EPIC_STATUS_NAMES;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(
+      `Config at ${configPath} has a "[jira.status]" that is not a table.`,
+    );
+  }
+  const table = raw as Record<string, unknown>;
+  return {
+    backlog: parseStatusName(
+      table.backlog,
+      "backlog",
+      DEFAULT_EPIC_STATUS_NAMES.backlog,
+      configPath,
+    ),
+    inProgress: parseStatusName(
+      table["in-progress"],
+      "in-progress",
+      DEFAULT_EPIC_STATUS_NAMES.inProgress,
+      configPath,
+    ),
+    done: parseStatusName(
+      table.done,
+      "done",
+      DEFAULT_EPIC_STATUS_NAMES.done,
+      configPath,
+    ),
+  };
+}
+
+/** A single status-name override: absent ⇒ the default; present ⇒ a non-blank string. */
+function parseStatusName(
+  raw: unknown,
+  key: string,
+  fallback: string,
+  configPath: string,
+): string {
+  if (raw === undefined) return fallback;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new ConfigError(
+      `Config at ${configPath} has an invalid "jira.status.${key}": expected a non-empty status name, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw.trim();
 }
 
 /**

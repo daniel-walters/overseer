@@ -40,6 +40,21 @@ export const FIELD = {
    * ADR 0024). Never written by the board.
    */
   slice: "slice",
+  /**
+   * The authored `jira` block on `prd.md` — the JIRA-mirror opt-in (ADR 0028): its
+   * *presence* opts the PRD into mirroring, its fields (`board`, optional `project`
+   * override) steer where. Absent ⇒ the PRD is invisible to the mirror. Parsed via
+   * {@link parseJiraOptIn}; never written by the mirror (a human authors it).
+   */
+  jira: "jira",
+  /**
+   * The mirror-written epic backref on `prd.md` (ADR 0029): the JIRA key of the
+   * epic this PRD is mirrored to. Its presence makes create idempotent —
+   * update-or-noop, never a second epic. Written via {@link writeJiraEpic}, read
+   * back with {@link readPresentString}. The one bookkeeping key the mirror writes
+   * to `prd.md`; it touches no Issue content or status.
+   */
+  jiraEpic: "jira_epic",
 } as const;
 
 /** The untyped frontmatter bag gray-matter parses out of a file. */
@@ -183,6 +198,74 @@ export function writeHumanReview(
       [FIELD.humanReviewReason]: reason,
       [FIELD.humanReviewNote]: note,
     }),
+  );
+}
+
+/**
+ * The JIRA-mirror opt-in a `prd.md` carries in its authored `jira` block (ADR
+ * 0028). The *presence* of the block is the opt-in; both fields are optional:
+ * `board` defaults to the config's `default_board`, and `project` is the rare
+ * override for a filter board spanning projects (normally the project is derived
+ * from the board). An empty block ({@link parseJiraOptIn} returns `{}`) is a valid
+ * opt-in that defers the board entirely to config.
+ */
+export interface JiraOptIn {
+  readonly board?: string;
+  readonly project?: string;
+}
+
+/**
+ * Parse the authored `jira` block into a {@link JiraOptIn}, or `undefined` when
+ * the file carries no `jira` key at all — the opt-out that makes a PRD invisible
+ * to the mirror. The block's *presence* is the opt-in (ADR 0028), so a
+ * present-but-empty block (`jira:` with no fields, which YAML reads as `null`)
+ * returns `{}`: opted in, deferring the board to config.
+ *
+ * `board` is coerced from a number (board ids are numeric, so `board: 42` and
+ * `board: "42"` mean the same board); blank `board`/`project` values collapse to
+ * absent ({@link hasValue} semantics), so a stray empty string never becomes a
+ * bogus board id or project key. Own-property check (not a bare `in`) so a `jira`
+ * that names an `Object.prototype` member can't be mistaken for an opt-in.
+ */
+export function parseJiraOptIn(data: Frontmatter): JiraOptIn | undefined {
+  if (!Object.hasOwn(data, FIELD.jira)) return undefined;
+  const block = data[FIELD.jira];
+  if (typeof block !== "object" || block === null || Array.isArray(block)) {
+    // Present key, but not a table (empty `jira:` → null, or a scalar): the
+    // presence still opts in; there are simply no fields to read.
+    return {};
+  }
+  const table = block as Frontmatter;
+  const board = coerceBoardId(table.board);
+  const project = readPresentString(table, "project");
+  return {
+    ...(board !== undefined ? { board } : {}),
+    ...(project !== undefined ? { project } : {}),
+  };
+}
+
+/** A board id may be authored as a number or string; coerce to a non-blank string. */
+function coerceBoardId(raw: unknown): string | undefined {
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  return typeof raw === "string" && hasValue(raw) ? raw.trim() : undefined;
+}
+
+/**
+ * Write the mirror-owned `jira_epic` backref onto `prd.md` in a single write,
+ * recording the JIRA key of the epic the PRD is mirrored to (ADR 0029). Like
+ * {@link writeHumanReview} it goes through the `gray-matter` write path — adding
+ * (or overwriting) exactly this one bookkeeping key while round-tripping every
+ * other frontmatter key (the authored `jira` opt-in block, `title`) and the
+ * markdown body untouched. It touches no Issue content or `status`: this is the
+ * mirror's sole, write-once-per-PRD reach into the canonical files (ADR 0028's
+ * one exception). A present backref is what makes create idempotent, so writing
+ * the same key twice is a harmless overwrite, never a second key.
+ */
+export function writeJiraEpic(path: string, epicKey: string): void {
+  const { data, content } = matter(readFileSync(path, "utf8"));
+  writeFileSync(
+    path,
+    matter.stringify(content, { ...data, [FIELD.jiraEpic]: epicKey }),
   );
 }
 

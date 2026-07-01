@@ -10,6 +10,8 @@ import {
   safeMatter,
   writeStatus,
   writeHumanReview,
+  parseJiraOptIn,
+  writeJiraEpic,
 } from "./issueFile.js";
 
 describe("safeMatter", () => {
@@ -246,5 +248,107 @@ Body.
     const after = readFileSync(path, "utf8");
     expect(after).toContain("status: human-review");
     expect(after).toContain("swapped the parser library");
+  });
+});
+
+describe("parseJiraOptIn", () => {
+  it("returns undefined when the file carries no jira block (not opted in)", () => {
+    const { data } = safeMatter("---\ntitle: Private\n---\n\nBody.\n");
+    expect(parseJiraOptIn(data)).toBeUndefined();
+  });
+
+  it("reads board and project from a full jira block", () => {
+    const { data } = safeMatter(
+      '---\ntitle: X\njira:\n  board: "42"\n  project: "PROJ"\n---\n',
+    );
+    expect(parseJiraOptIn(data)).toEqual({ board: "42", project: "PROJ" });
+  });
+
+  it("reads a board-only block, leaving project undefined", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42" });
+  });
+
+  it("treats a present-but-empty jira block as opt-in with no fields", () => {
+    // The block's *presence* is the opt-in; an empty one defers board to config.
+    const { data } = safeMatter("---\ntitle: X\njira:\n---\n");
+    expect(parseJiraOptIn(data)).toEqual({});
+  });
+
+  it("coerces a numeric board id to a string", () => {
+    const { data } = safeMatter("---\njira:\n  board: 42\n---\n");
+    expect(parseJiraOptIn(data)).toEqual({ board: "42" });
+  });
+
+  it("drops blank board/project values to undefined", () => {
+    const { data } = safeMatter('---\njira:\n  board: ""\n  project: "  "\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({});
+  });
+});
+
+describe("writeJiraEpic", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "overseer-jira-epic-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function file(name: string, contents: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  it("writes the jira_epic backref, preserving the jira block and body", () => {
+    const path = file(
+      "prd.md",
+      `---
+title: Auth
+jira:
+  board: "42"
+---
+
+The plan.
+`,
+    );
+
+    writeJiraEpic(path, "PROJ-100");
+
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("jira_epic: PROJ-100");
+    expect(after).toContain("title: Auth");
+    // The opt-in block survives the write-back.
+    expect(after).toContain("board:");
+    expect(after).toContain("The plan.");
+    // Reading it back yields the key we wrote.
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraEpic)).toBe(
+      "PROJ-100",
+    );
+  });
+
+  it("overwrites an existing jira_epic value rather than adding a second", () => {
+    const path = file(
+      "prd.md",
+      `---
+title: Auth
+jira_epic: PROJ-1
+---
+
+Body.
+`,
+    );
+
+    writeJiraEpic(path, "PROJ-2");
+
+    const after = readFileSync(path, "utf8");
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraEpic)).toBe(
+      "PROJ-2",
+    );
+    // Exactly one jira_epic key.
+    expect(after.match(/jira_epic/g)).toHaveLength(1);
   });
 });
