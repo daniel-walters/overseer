@@ -15,6 +15,7 @@ import { createDetailReader } from "./ui/detailReader.js";
 import { createAgentOutputReader, realLogs } from "./ui/agentOutputReader.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
+import { createAuditor } from "./audit/auditor.js";
 import { createRollback } from "./dispatch/rollback.js";
 import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
@@ -64,12 +65,14 @@ function runBoard(): void {
   let review: ReviewConfig;
   let implementorAgent: AgentConfig;
   let reviewerAgent: AgentConfig;
+  let auditorAgent: AgentConfig;
   try {
     const config = loadConfig();
     root = config.root;
     review = config.review;
     implementorAgent = config.implementor;
     reviewerAgent = config.reviewer;
+    auditorAgent = config.auditor;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -189,6 +192,18 @@ function runBoard(): void {
     failedSet,
     review,
   });
+  // The manual audit crank (`c`, PRD: Auditor Edge, ADR 0026): it reuses the very
+  // same `claude --bg` spawn edge, failure log, and shared failed-set the Reactor's
+  // audit pass uses, flipping ready-for-audit → in-audit and launching the auditor
+  // in the Issue's repo — so a hand-driven `c` and an auto-spawned auditor behave
+  // identically. It carries no review-pass count: the audit edge is a single pass.
+  const auditor = createAuditor(root, {
+    spawn,
+    agent: auditorAgent,
+    logFailure,
+    recordHandle,
+    failedSet,
+  });
   // Orphan recovery (ADR 0009): `R` on an orphaned card rolls its active status
   // back onto its frontier through the same status seam the launch-failure
   // rollback uses. It spawns nothing — the normal spawn edge (the Reactor below
@@ -267,6 +282,7 @@ function runBoard(): void {
     review,
     implementor: implementorAgent,
     reviewer: reviewerAgent,
+    auditor: auditorAgent,
   });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
@@ -285,6 +301,7 @@ function runBoard(): void {
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}
+      auditor={auditor}
       rollback={rollback}
       killer={killer}
       openPr={openPr}

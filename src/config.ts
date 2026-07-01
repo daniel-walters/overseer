@@ -17,6 +17,7 @@ import {
 import {
   AGENT_EFFORTS,
   DEFAULT_AGENT_CONFIG,
+  DEFAULT_AUDITOR_CONFIG,
   type AgentConfig,
   type AgentEffort,
 } from "./agentConfig.js";
@@ -46,6 +47,14 @@ export interface Config {
    * distinct from `review.effort`, which tunes the `/code-review` skill itself.
    */
   readonly reviewer: AgentConfig;
+  /**
+   * The auditor agent's runtime (model + effort), from `[auditor]`. Always
+   * present, but with a deliberately different default from the other two edges:
+   * absent config resolves to {@link DEFAULT_AUDITOR_CONFIG} (**model `opus`**,
+   * effort inherited), so an unconfigured board still gates plan-conformance with
+   * a capable model (ADR 0026). A present `[auditor]` table overrides either knob.
+   */
+  readonly auditor: AgentConfig;
 }
 
 /** Options for {@link loadConfig}; the defaults point at the real environment. */
@@ -116,8 +125,27 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   return {
     root,
     review: parseReview(parsed.review, configPath),
-    implementor: parseAgent(parsed.implementor, "implementor", configPath),
-    reviewer: parseAgent(parsed.reviewer, "reviewer", configPath),
+    implementor: parseAgent(
+      parsed.implementor,
+      "implementor",
+      configPath,
+      DEFAULT_AGENT_CONFIG,
+    ),
+    reviewer: parseAgent(
+      parsed.reviewer,
+      "reviewer",
+      configPath,
+      DEFAULT_AGENT_CONFIG,
+    ),
+    // The auditor edge alone defaults its model to `opus` (ADR 0026); `effort`
+    // still inherits. Threading the default through `parseAgent` keeps one parser
+    // for all three edges — only the fallback differs.
+    auditor: parseAgent(
+      parsed.auditor,
+      "auditor",
+      configPath,
+      DEFAULT_AUDITOR_CONFIG,
+    ),
   };
 }
 
@@ -196,19 +224,24 @@ function parseEffort(raw: unknown, configPath: string): ReviewEffort {
 }
 
 /**
- * Parse an optional agent-runtime table (`[implementor]` or `[reviewer]`) into a
- * complete {@link AgentConfig}, filling each absent knob from
- * {@link DEFAULT_AGENT_CONFIG} (`null` ⇒ inherit, pass no flag). An absent table
- * (or absent field) is the pre-knob behaviour; a present-but-malformed value is a
- * user-fixable {@link ConfigError}, matching the rest of the module's style.
- * `table` names which table for error messages (`implementor` / `reviewer`).
+ * Parse an optional agent-runtime table (`[implementor]`, `[reviewer]`, or
+ * `[auditor]`) into a complete {@link AgentConfig}, filling each absent knob from
+ * `defaults` (where `null` ⇒ inherit, pass no flag). An absent table (or absent
+ * field) takes the `defaults`; a present-but-malformed value is a user-fixable
+ * {@link ConfigError}, matching the rest of the module's style. `table` names
+ * which table for error messages (`implementor` / `reviewer` / `auditor`).
+ *
+ * `defaults` is threaded in rather than hardcoded so the auditor edge can default
+ * its model to `opus` while the other two inherit (ADR 0026) — one parser, two
+ * fallbacks. An explicit value in the table always overrides the default.
  */
 function parseAgent(
   raw: unknown,
   table: string,
   configPath: string,
+  defaults: AgentConfig,
 ): AgentConfig {
-  if (raw === undefined) return DEFAULT_AGENT_CONFIG;
+  if (raw === undefined) return defaults;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new ConfigError(
       `Config at ${configPath} has a "[${table}]" that is not a table.`,
@@ -216,18 +249,19 @@ function parseAgent(
   }
   const fields = raw as Record<string, unknown>;
   return {
-    model: parseModel(fields.model, table, configPath),
-    effort: parseAgentEffort(fields.effort, table, configPath),
+    model: parseModel(fields.model, table, configPath, defaults.model),
+    effort: parseAgentEffort(fields.effort, table, configPath, defaults.effort),
   };
 }
 
-/** A model must be a non-empty string if present; absent ⇒ `null` (inherit). */
+/** A model must be a non-empty string if present; absent ⇒ the table's default. */
 function parseModel(
   raw: unknown,
   table: string,
   configPath: string,
+  fallback: string | null,
 ): string | null {
-  if (raw === undefined) return DEFAULT_AGENT_CONFIG.model;
+  if (raw === undefined) return fallback;
   if (typeof raw !== "string" || raw.trim() === "") {
     throw new ConfigError(
       `Config at ${configPath} has an invalid "${table}.model": expected a non-empty string (e.g. "opus", "sonnet"), got ${JSON.stringify(raw)}.`,
@@ -236,13 +270,14 @@ function parseModel(
   return raw.trim();
 }
 
-/** An agent effort must be one of {@link AGENT_EFFORTS}; absent ⇒ `null` (inherit). */
+/** An agent effort must be one of {@link AGENT_EFFORTS}; absent ⇒ the table's default. */
 function parseAgentEffort(
   raw: unknown,
   table: string,
   configPath: string,
+  fallback: AgentEffort | null,
 ): AgentEffort | null {
-  if (raw === undefined) return DEFAULT_AGENT_CONFIG.effort;
+  if (raw === undefined) return fallback;
   if (
     typeof raw !== "string" ||
     !(AGENT_EFFORTS as readonly string[]).includes(raw)

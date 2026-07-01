@@ -941,7 +941,7 @@ describe("createReactor activity", () => {
 });
 
 /**
- * The third, non-spawn reconcile edge (ADR 0019): after the two spawn frontiers,
+ * The fourth, non-spawn reconcile edge (ADR 0019): after the three spawn frontiers,
  * the Reactor sweeps `in-review` Issues carrying `review_verdict: clean` and
  * resolves each — merging the worktree branch into the feature branch and writing
  * `done` — synchronously, under the same re-entrancy guard, gated on the verdict
@@ -987,7 +987,7 @@ describe("createReactor — resolve edge", () => {
     expect(readFileSync(join(root, "alpha", "001-rev.md"), "utf8")).toContain(
       "status: done",
     );
-    // Resolving is not a spawn — "exactly two spawn edges" holds.
+    // Resolving is not a spawn — "exactly three spawn edges" holds.
     expect(deps.spawns).toEqual([]);
   });
 
@@ -1204,5 +1204,219 @@ describe("createReactor — resolve edge", () => {
     expect(readFileSync(join(root, "alpha", "003-resolve.md"), "utf8")).toContain(
       "status: done",
     );
+  });
+});
+
+describe("createReactor — audit edge", () => {
+  let root: string;
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "overseer-reactor-audit-"));
+  });
+
+  afterEach(() => {
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  // A ready-for-audit Issue, as the implementor leaves it: repo to launch the
+  // auditor in, plus the recorded worktree the auditor checks out to compare the
+  // diff against the plan.
+  const auditable = (repo = "/repos/alpha"): string =>
+    fm({
+      status: "ready-for-audit",
+      repo,
+      worktree: "/wt/issue",
+      branch: "issue-branch",
+    });
+
+  it("flips and spawns an auditor for a ready-for-audit Issue with no keypress", () => {
+    writePrd(root, "alpha", { "001-audit.md": auditable() });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    // An auditor spawned in the Issue's repo, and the file flipped to in-audit.
+    expect(deps.spawns).toHaveLength(1);
+    expect(deps.spawns[0]?.repo).toBe("/repos/alpha");
+    expect(readFileSync(join(root, "alpha", "001-audit.md"), "utf8")).toContain(
+      "status: in-audit",
+    );
+  });
+
+  it("spawns auditors for exactly the eligible Issues across PRDs", () => {
+    writePrd(root, "alpha", {
+      // eligible
+      "001-aud.md": auditable("/repos/alpha"),
+      // already in-audit ⇒ off the frontier
+      "002-mid.md": fm({ status: "in-audit", repo: "/repos/alpha" }),
+    });
+    writePrd(root, "beta", {
+      // eligible
+      "001-aud.md": auditable("/repos/beta"),
+      // ready-for-audit but no repo ⇒ excluded by the sweep
+      "002-norepo.md": fm({ status: "ready-for-audit", worktree: "/wt/x" }),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.spawns.map((s) => s.repo).sort()).toEqual([
+      "/repos/alpha",
+      "/repos/beta",
+    ]);
+    expect(readFileSync(join(root, "beta", "002-norepo.md"), "utf8")).toContain(
+      "status: ready-for-audit",
+    );
+  });
+
+  it("builds an auditor prompt carrying the worktree to audit", () => {
+    writePrd(root, "alpha", { "001-aud.md": auditable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    const prompt = deps.spawns[0]?.prompt ?? "";
+    expect(prompt).toContain("/wt/issue"); // recorded worktree
+    expect(prompt).toContain("/repos/alpha"); // repo the audit runs in
+    expect(prompt).toContain("auditor"); // auditor brief, not implementor/reviewer
+  });
+
+  it("launches the auditor at the configured auditor runtime", () => {
+    writePrd(root, "alpha", { "001-aud.md": auditable("/repos/alpha") });
+
+    const launches: { prompt: string; agent: unknown }[] = [];
+    const deps = recordingDeps({
+      spawn: (_repo, prompt, agent) => {
+        launches.push({ prompt, agent });
+        return "h";
+      },
+      auditor: { model: "opus", effort: "high" },
+    });
+    createReactor(root, deps).reconcile();
+
+    expect(launches[0]?.agent).toEqual({ model: "opus", effort: "high" });
+  });
+
+  it("runs the audit pass between the implementor and reviewer frontiers", () => {
+    // All three edges in one reconcile: an implementor (ready-for-agent), an
+    // auditor (ready-for-audit), and a reviewer (ready-for-review) each spawn,
+    // each flipping to its active status.
+    writePrd(root, "alpha", {
+      "001-impl.md": fm({ status: "ready-for-agent", repo: "/repos/alpha" }),
+      "002-aud.md": auditable("/repos/alpha"),
+      "003-rev.md": fm({
+        status: "ready-for-review",
+        repo: "/repos/alpha",
+        worktree: "/wt/x",
+        branch: "b",
+      }),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.spawns).toHaveLength(3);
+    expect(readFileSync(join(root, "alpha", "001-impl.md"), "utf8")).toContain(
+      "status: in-progress",
+    );
+    expect(readFileSync(join(root, "alpha", "002-aud.md"), "utf8")).toContain(
+      "status: in-audit",
+    );
+    expect(readFileSync(join(root, "alpha", "003-rev.md"), "utf8")).toContain(
+      "status: in-review",
+    );
+  });
+
+  it("does not re-check blockers for the audit edge (the implementor was already gated)", () => {
+    // A ready-for-audit Issue whose blocker is not done still audits: blockers
+    // gate only the implementor frontier, exactly as review does not re-check them.
+    writePrd(root, "alpha", {
+      "001-base.md": fm({ status: "in-progress", repo: "/repos/alpha" }),
+      "002-aud.md": fm({
+        status: "ready-for-audit",
+        repo: "/repos/alpha",
+        worktree: "/wt/issue",
+        branch: "issue-branch",
+        blocked_by: "[001-base.md]",
+      }),
+    });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(readFileSync(join(root, "alpha", "002-aud.md"), "utf8")).toContain(
+      "status: in-audit",
+    );
+  });
+
+  it("does not double-spawn an auditor across overlapping passes (flip is the lock)", () => {
+    writePrd(root, "alpha", { "001-aud.md": auditable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    const reactor = createReactor(root, deps);
+
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+
+    // A later pass sees it already in-audit ⇒ off the frontier ⇒ no re-spawn.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(1);
+  });
+
+  it("rolls a failed auditor spawn back to ready-for-audit and logs it under the audit edge", () => {
+    writePrd(root, "alpha", { "001-aud.md": auditable("/repos/alpha") });
+
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    createReactor(root, deps).reconcile();
+
+    expect(readFileSync(join(root, "alpha", "001-aud.md"), "utf8")).toContain(
+      "status: ready-for-audit",
+    );
+    expect(deps.failures).toEqual([
+      {
+        issueId: "001-aud.md",
+        repo: "/repos/alpha",
+        error: "claude: command not found",
+        edge: "audit",
+      },
+    ]);
+  });
+
+  it("does not re-spawn an auditor whose spawn just failed, on the next reconcile", () => {
+    writePrd(root, "alpha", { "001-aud.md": auditable("/repos/alpha") });
+
+    const deps = recordingDeps({
+      spawn: () => {
+        throw new Error("claude: command not found");
+      },
+    });
+    const reactor = createReactor(root, deps);
+    const file = join(root, "alpha", "001-aud.md");
+
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+    expect(readFileSync(file, "utf8")).toContain("status: ready-for-audit");
+
+    // Still ready-for-audit on disk, but the audit-edge failed-set suppresses it.
+    reactor.reconcile();
+    expect(deps.spawns).toHaveLength(0);
+    expect(deps.failures).toHaveLength(1);
+  });
+
+  it("records the launched auditor's handle against the Issue", () => {
+    writePrd(root, "alpha", { "001-aud.md": auditable("/repos/alpha") });
+
+    const deps = recordingDeps();
+    createReactor(root, deps).reconcile();
+
+    expect(deps.recorded).toHaveLength(1);
+    expect(deps.recorded[0]?.issueKey).toBe(join(root, "alpha", "001-aud.md"));
+    // No review pass on the audit edge.
+    expect(deps.recorded[0]?.reviewPass).toBeUndefined();
   });
 });

@@ -7,6 +7,7 @@ import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchResult } from "../dispatch/dispatch.js";
 import type { DispatchIssue } from "../dispatch/reader.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
+import type { AuditPreview as AuditPreviewData } from "../audit/auditReader.js";
 import type {
   RedispatchPreview as RedispatchPreviewData,
   RollbackOutcome,
@@ -598,6 +599,155 @@ describe("App review", () => {
     stdin.write(ENTER);
     await tick();
     stdin.write("r");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+});
+
+describe("App audit (c on a ready-for-audit Issue)", () => {
+  function di(id: string, overrides: Partial<DispatchIssue> = {}): DispatchIssue {
+    return {
+      id,
+      title: id,
+      path: `/root/auth/${id}`,
+      status: "ready-for-audit",
+      blockedBy: [],
+      repo: "/repos/backend",
+      worktree: "/wt/blue-cat-fox",
+      branch: "blue-cat-fox",
+      deviation: undefined,
+      reviewVerdict: undefined,
+      slice: undefined,
+      reviewFindings: undefined,
+      body: "",
+      ...overrides,
+    };
+  }
+
+  const prdContext = { prdTitle: "AuthPRD", prdBody: "auth" };
+
+  // `c` is eligible only on a `ready-for-audit` Issue (ADR 0026), so the
+  // audit-flow tests select one: a single PRD with its first Issue in the
+  // `audit` lane (no liveness = waiting). A single PRD keeps it the
+  // default-selected card. The auditor's deeper eligibility (the skip-reason
+  // path) is exercised through the `spyAuditor` response.
+  const auditBoard: Board = {
+    prds: [
+      {
+        id: "auth",
+        title: "AuthPRD",
+        lane: "in-progress",
+        issues: [{ id: "010-login", title: "Login", lane: "audit" }],
+      },
+    ],
+  };
+
+  function auditable(id: string): AuditPreviewData {
+    return { issue: di(id), eligibility: { auditable: true }, ...prdContext };
+  }
+
+  function ineligible(id: string, reason: string): AuditPreviewData {
+    return {
+      issue: di(id, { status: "in-audit" }),
+      eligibility: { auditable: false, reason },
+      ...prdContext,
+    };
+  }
+
+  function spyAuditor(
+    readAudit: (prdId: string, issueId: string) => AuditPreviewData | undefined = (
+      _p,
+      id,
+    ) => auditable(id),
+  ) {
+    return {
+      readAudit: vi.fn(readAudit),
+      audit: vi.fn<(p: AuditPreviewData) => void>(),
+    };
+  }
+
+  it("opens an audit preview on c at the Issue level for the selected Issue", async () => {
+    const auditor = spyAuditor();
+    const { stdin, lastFrame } = render(<App board={auditBoard} auditor={auditor} />);
+
+    stdin.write(ENTER); // zoom into AuthPRD's Issues
+    await tick();
+    stdin.write("c");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("Audit 010-login");
+    expect(frame).toContain("/wt/blue-cat-fox");
+    expect(auditor.readAudit).toHaveBeenCalledWith("auth", "010-login");
+  });
+
+  it("does nothing on c at the board level (audit is Issue-level only)", async () => {
+    const auditor = spyAuditor();
+    const { stdin, lastFrame } = render(<App board={board} auditor={auditor} />);
+
+    stdin.write("c");
+    await tick();
+
+    expect(auditor.readAudit).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+
+  it("shows a skip reason and spawns nothing for an ineligible Issue", async () => {
+    const auditor = spyAuditor((_p, id) => ineligible(id, "status is \"in-audit\", not ready-for-audit"));
+    const { stdin, lastFrame } = render(<App board={auditBoard} auditor={auditor} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("c");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("in-audit");
+
+    // Confirming an ineligible preview spawns nothing.
+    stdin.write(ENTER);
+    await tick();
+    expect(auditor.audit).not.toHaveBeenCalled();
+  });
+
+  it("runs the audit on Enter for an eligible Issue, then closes the modal", async () => {
+    const auditor = spyAuditor();
+    const { stdin, lastFrame } = render(<App board={auditBoard} auditor={auditor} />);
+
+    stdin.write(ENTER); // zoom in
+    await tick();
+    stdin.write("c"); // open audit preview
+    await tick();
+    stdin.write(ENTER); // confirm
+    await tick();
+
+    expect(auditor.audit).toHaveBeenCalledTimes(1);
+    expect(auditor.audit).toHaveBeenCalledWith(auditable("010-login"));
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+
+  it("cancels the audit on Esc without spawning", async () => {
+    const auditor = spyAuditor();
+    const { stdin, lastFrame } = render(<App board={auditBoard} auditor={auditor} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("c");
+    await tick();
+    stdin.write(ESC);
+    await tick();
+
+    expect(auditor.audit).not.toHaveBeenCalled();
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");
+  });
+
+  it("does nothing on c when no auditor is wired", async () => {
+    const { stdin, lastFrame } = render(<App board={board} />);
+
+    stdin.write(ENTER);
+    await tick();
+    stdin.write("c");
     await tick();
 
     expect(stripAnsi(lastFrame() ?? "")).not.toContain("/wt/blue-cat-fox");

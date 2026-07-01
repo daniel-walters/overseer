@@ -95,6 +95,7 @@ describe("readDispatchView", () => {
       "002-payment-intent.md",
       "003-checkout-button.md",
       "004-receipt-email.md",
+      "005-shipping-label.md",
     ]);
   });
 

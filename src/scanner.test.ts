@@ -658,12 +658,13 @@ describe("scanBoard review-pass overlay", () => {
 describe("scanBoard suppressed overlay", () => {
   /**
    * A throwaway root with one Issue in each lane that matters to the suppressed
-   * overlay: the three suppressible lanes it applies to (ready-for-agent →
-   * implementor edge, ready-for-review → reviewer edge, in-review → resolve edge —
-   * ADR 0019), the `ready-for-human` card that shares the `ready` lane but is *not*
-   * a spawn target, and the three lanes a lingering failed-set entry must stay
-   * inert on (in-progress, done, backlog). The suppressed lookup is keyed by the
-   * Issue's absolute path and the edge the lane implies.
+   * overlay: the four suppressible lanes it applies to (ready-for-agent →
+   * implementor edge, audit → audit edge — ADR 0026, ready-for-review → reviewer
+   * edge, in-review → resolve edge — ADR 0019), the `ready-for-human` card that
+   * shares the `ready` lane but is *not* a spawn target, and the three lanes a
+   * lingering failed-set entry must stay inert on (in-progress, done, backlog). The
+   * suppressed lookup is keyed by the Issue's absolute path and the edge the lane
+   * implies.
    */
   function suppressedRoot(): { root: string; pathOf: (file: string) => string } {
     const root = mkdtempSync(join(tmpdir(), "overseer-suppressed-"));
@@ -677,6 +678,7 @@ describe("scanBoard suppressed overlay", () => {
     writeFileSync(join(dir, "005-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
     writeFileSync(join(dir, "006-shipped.md"), "---\nstatus: done\n---\nbody\n");
     writeFileSync(join(dir, "007-parked.md"), "---\nstatus: backlog\n---\nbody\n");
+    writeFileSync(join(dir, "008-toaudit.md"), "---\nstatus: ready-for-audit\n---\nbody\n");
     return { root, pathOf: (file) => join(dir, file) };
   }
 
@@ -704,6 +706,43 @@ describe("scanBoard suppressed overlay", () => {
     );
 
     expect(issueById(featureIssues(board), "002-toreview.md").suppressed).toBe(true);
+  });
+
+  it("stamps suppressed on a ready-for-audit card the lookup reports suppressed", () => {
+    // A failed auditor launch (ADR 0026) rolls the Issue back to ready-for-audit
+    // and records `(path, audit)` in the failed-set; the marker must render on the
+    // `audit` lane, the second of the three spawn edges.
+    const { root, pathOf } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("008-toaudit.md") && edge === "audit",
+    );
+
+    expect(issueById(featureIssues(board), "008-toaudit.md").suppressed).toBe(true);
+  });
+
+  it("derives the edge from the lane: ready-for-audit asks the audit edge", () => {
+    // The audit lane asks `audit`, not a different spawn edge: a lookup that
+    // suppresses only the audit edge for its path marks it, and one that suppresses
+    // only the reviewer edge for that same path does not — one failing edge can't
+    // mask another for the same Issue.
+    const { root, pathOf } = suppressedRoot();
+    const onAudit = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("008-toaudit.md") && edge === "audit",
+    );
+    expect(issueById(featureIssues(onAudit), "008-toaudit.md").suppressed).toBe(true);
+
+    const onReviewer = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("008-toaudit.md") && edge === "reviewer",
+    );
+    expect(
+      issueById(featureIssues(onReviewer), "008-toaudit.md").suppressed,
+    ).toBeUndefined();
   });
 
   it("derives the edge from the lane: ready-for-agent asks the implementor edge", () => {
@@ -798,11 +837,11 @@ describe("scanBoard suppressed overlay", () => {
   });
 
   it("lane-gates: a lingering entry on a non-suppressible lane never marks the card", () => {
-    // The lookup claims every (path, edge) is suppressed; only the three
-    // suppressible lanes (ready-for-agent, ready-for-review, in-review) may carry
-    // the marker. An in-progress / done / backlog card with a matching stale entry
-    // stays blank — lane-gating is what makes the append-only set's stale entries
-    // inert.
+    // The lookup claims every (path, edge) is suppressed; only the four
+    // suppressible lanes (ready-for-agent, audit, ready-for-review, in-review) may
+    // carry the marker. An in-progress / done / backlog card with a matching stale
+    // entry stays blank — lane-gating is what makes the append-only set's stale
+    // entries inert.
     const { root } = suppressedRoot();
     const board = scanBoard(root, undefined, () => true);
     const issues = featureIssues(board);
@@ -851,6 +890,10 @@ describe("scanBoard suppressed overlay", () => {
     // ready-for-agent: suppressed only, never liveness (no agent owns it).
     expect(issueById(issues, "001-queued.md").suppressed).toBe(true);
     expect(issueById(issues, "001-queued.md").liveness).toBeUndefined();
+    // ready-for-audit: the waiting audit card is suppressed only — liveness gates on
+    // the active in-audit status, never the awaiting one that folds into the lane.
+    expect(issueById(issues, "008-toaudit.md").suppressed).toBe(true);
+    expect(issueById(issues, "008-toaudit.md").liveness).toBeUndefined();
     // in-review: the deliberate overlap — both fields present on the model.
     expect(issueById(issues, "005-reviewing.md").suppressed).toBe(true);
     expect(issueById(issues, "005-reviewing.md").liveness).toBe("live");
