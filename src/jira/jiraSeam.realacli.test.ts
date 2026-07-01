@@ -61,5 +61,19 @@ describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
     // Drive it to In Progress and confirm the read reflects the move.
     await realJiraSeam.transition(key, "In Progress");
     expect(await realJiraSeam.currentStatus(key)).toBe("In Progress");
+
+    // Create a child nested under the epic (native `parent`) and read it back —
+    // the child round-trip the reconciler drives per Issue.
+    const child = await realJiraSeam.createChildIssue({
+      project,
+      parent: key,
+      summary: `Overseer child smoke test ${new Date().toISOString()}`,
+      description: "Created by the gated realJiraSeam integration test.",
+    });
+    expect(child).toMatch(/^[A-Z][A-Z0-9]+-\d+/);
+
+    // Drive the child through a transition and confirm the read reflects it.
+    await realJiraSeam.transition(child, "In Progress");
+    expect(await realJiraSeam.currentStatus(child)).toBe("In Progress");
   }, 60000);
 });

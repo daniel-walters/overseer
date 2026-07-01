@@ -44,6 +44,16 @@ export interface JiraSeam {
    */
   createEpic(input: CreateEpicInput): Promise<string>;
   /**
+   * Create a JIRA **child issue** nested under a PRD's epic via JIRA Cloud's native
+   * `parent` field (ADR 0028, user story 26) and resolve to its new key. The
+   * reconciler creates one per Issue of an opted-in PRD (create-on-first-appearance,
+   * incl. backlog), only ever *after* the epic exists (epic-before-child ordering) —
+   * so a child is never parented to a not-yet-created epic. Its status is driven
+   * separately via {@link transition}, reusing the same generic ops as the epic.
+   * Rejects on any acli failure.
+   */
+  createChildIssue(input: CreateChildInput): Promise<string>;
+  /**
    * The named status the given issue currently sits in (e.g. `"In Progress"`), or
    * `undefined` when it can't be read. The reconciler compares this against the
    * lane's target status to decide whether a self-healing transition is needed —
@@ -69,6 +79,27 @@ export interface CreateEpicInput {
   /**
    * The epic description in plain text — the human-readable plan. Optional; a PRD
    * with no body prose creates a summary-only epic.
+   */
+  readonly description?: string;
+}
+
+/** The fields the mirror supplies when creating a child issue under an epic. */
+export interface CreateChildInput {
+  /**
+   * The destination project key — the epic's project, so the child lands beside it.
+   * The reconciler derives it from the epic key's prefix (a JIRA key is
+   * `PROJECT-NUMBER`), so a child under an already-linked epic needs no extra
+   * board→project lookup.
+   */
+  readonly project: string;
+  /** The parent epic's key (native `parent` field) — the epic-before-child link. */
+  readonly parent: string;
+  /** The child summary — the Issue's `title`. */
+  readonly summary: string;
+  /**
+   * The child description in plain text — the Issue **body prose with frontmatter
+   * stripped**, so no machine state leaks into the human-readable ticket. Optional;
+   * a body-less Issue creates a summary-only child.
    */
   readonly description?: string;
 }
@@ -211,6 +242,35 @@ export const realJiraSeam: JiraSeam = {
     if (key === undefined) {
       throw new Error(
         `could not read the created epic key from acli (project ${input.project})`,
+      );
+    }
+    return key;
+  },
+
+  async createChildIssue(input: CreateChildInput): Promise<string> {
+    // A standard `Task` parented to the epic via the native `parent` field (JIRA
+    // Cloud — user story 26). Same create shape as an epic, plus `--parent`.
+    const args = [
+      "jira",
+      "workitem",
+      "create",
+      "--type",
+      "Task",
+      "--project",
+      input.project,
+      "--parent",
+      input.parent,
+      "--summary",
+      input.summary,
+      "--json",
+    ];
+    if (input.description !== undefined && input.description.trim() !== "") {
+      args.push("--description", input.description);
+    }
+    const key = parseCreatedKey(await runAcli(args));
+    if (key === undefined) {
+      throw new Error(
+        `could not read the created child key from acli (parent ${input.parent})`,
       );
     }
     return key;

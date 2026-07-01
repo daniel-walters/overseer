@@ -12,6 +12,7 @@ import {
   writeHumanReview,
   parseJiraOptIn,
   writeJiraEpic,
+  writeJiraKey,
 } from "./issueFile.js";
 
 describe("safeMatter", () => {
@@ -350,5 +351,70 @@ Body.
     );
     // Exactly one jira_epic key.
     expect(after.match(/jira_epic/g)).toHaveLength(1);
+  });
+});
+
+describe("writeJiraKey", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "overseer-jira-key-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function file(name: string, contents: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  it("writes the jira_key backref onto an Issue, preserving status, other keys, and body", () => {
+    const path = file(
+      "001-auth.md",
+      `---
+title: Login form
+status: in-progress
+blocked_by:
+  - 000-schema.md
+---
+
+The human-readable plan prose.
+`,
+    );
+
+    writeJiraKey(path, "DS-101");
+
+    const after = readFileSync(path, "utf8");
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraKey)).toBe(
+      "DS-101",
+    );
+    // The Issue's own content is untouched — the backref is the mirror's only reach.
+    expect(after).toContain("status: in-progress");
+    expect(after).toContain("title: Login form");
+    expect(after).toContain("000-schema.md");
+    expect(after).toContain("The human-readable plan prose.");
+  });
+
+  it("overwrites an existing jira_key value rather than adding a second", () => {
+    const path = file(
+      "001-auth.md",
+      `---
+title: Login form
+status: done
+jira_key: DS-1
+---
+
+Body.
+`,
+    );
+
+    writeJiraKey(path, "DS-2");
+
+    const after = readFileSync(path, "utf8");
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraKey)).toBe("DS-2");
+    expect(after.match(/jira_key/g)).toHaveLength(1);
   });
 });

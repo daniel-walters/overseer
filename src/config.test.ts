@@ -243,6 +243,7 @@ describe("loadConfig", () => {
       expect(config.jira.statusNames).toEqual({
         backlog: "To Do",
         inProgress: "In Progress",
+        inReview: "In Review",
         done: "Done",
       });
     });
@@ -259,7 +260,7 @@ describe("loadConfig", () => {
       expect(loadConfig({ configPath, home }).jira.defaultBoard).toBe("42");
     });
 
-    it("overrides individual epic status names from [jira.status], keeping defaults for the rest", () => {
+    it("overrides individual status names from [jira.status], keeping defaults for the rest", () => {
       writeWithRoot('[jira.status]\ndone = "Shipped"\n');
 
       const config = loadConfig({ configPath, home });
@@ -267,6 +268,7 @@ describe("loadConfig", () => {
       expect(config.jira.statusNames).toEqual({
         backlog: "To Do",
         inProgress: "In Progress",
+        inReview: "In Review",
         done: "Shipped",
       });
     });
@@ -276,6 +278,14 @@ describe("loadConfig", () => {
 
       expect(loadConfig({ configPath, home }).jira.statusNames.inProgress).toBe(
         "Doing",
+      );
+    });
+
+    it("overrides the in-review name via the hyphenated [jira.status] key", () => {
+      writeWithRoot('[jira.status]\n"in-review" = "Reviewing"\n');
+
+      expect(loadConfig({ configPath, home }).jira.statusNames.inReview).toBe(
+        "Reviewing",
       );
     });
 
