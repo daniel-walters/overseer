@@ -194,7 +194,11 @@ async function reconcileOnce(
       // one is caught below as a logged no-op (graceful degradation).
       const target = epicTargetStatus(prd.lane, statusNames);
       const current = await deps.seam.currentStatus(key);
-      if (current !== undefined && !statusEquals(current, target)) {
+      if (current === undefined) {
+        log(
+          `epic ${key}: current status could not be read — skipping self-heal (no-op).`,
+        );
+      } else if (!statusEquals(current, target)) {
         try {
           await deps.seam.transition(key, target);
           transitioned.push({ key, to: target });
