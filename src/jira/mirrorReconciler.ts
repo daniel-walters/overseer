@@ -1,0 +1,236 @@
+import { join, dirname } from "node:path";
+import { homedir } from "node:os";
+import { errorMessage } from "../errorMessage.js";
+import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
+import {
+  parseJiraOptIn,
+  readPresentString,
+  safeMatter,
+  writeJiraEpic,
+  FIELD,
+  type JiraOptIn,
+} from "../issueFile.js";
+import {
+  DEFAULT_EPIC_STATUS_NAMES,
+  epicTargetStatus,
+  statusEquals,
+  type EpicStatusNames,
+} from "./statusMapping.js";
+import { realJiraSeam, type JiraSeam } from "./jiraSeam.js";
+import type { Board } from "../model.js";
+
+/**
+ * The reconciler spine of the JIRA mirror (ADR 0028) — the in-process sibling of
+ * the Linked-PR overlay (ADR 0013), driven on the existing scan loop. For each
+ * opted-in PRD on the board it ensures the PRD's **epic** exists in JIRA (create
+ * once, write the {@link FIELD.jiraEpic} backref) and self-heals the epic's status
+ * toward the PRD's derived lane. The board is the sole source of truth; on any
+ * status mismatch the board wins and the mirror drives the epic back (ADR 0028).
+ *
+ * **Fire-and-forget.** The board never blocks on it and it never throws out: every
+ * PRD's reconcile is wrapped so a {@link JiraSeam}/acli failure — a missing board,
+ * an illegal transition, a network error — is a *logged no-op* (ADR 0028), never a
+ * crash and never a board marker. It returns a {@link MirrorDelta} of the actions
+ * it took purely so the behaviour is assertable through the seam boundary.
+ *
+ * **Idempotent across restarts.** Identity is the frontmatter backref (ADR 0029):
+ * a PRD that already carries `jira_epic` is update-or-noop, never a second epic —
+ * so losing all in-memory state (a restart, a fresh machine) can never duplicate
+ * an epic. Writing the backref fires a watcher re-scan → another reconcile, which
+ * the present backref + already-at-target status collapse to a zero-JIRA no-op.
+ *
+ * This foundation slice covers the **epic** half only; child issues, sprint
+ * placement, a JQL-seeded diff cache, and a paced write queue extend it later.
+ */
+export interface MirrorReconciler {
+  /** Reconcile every opted-in PRD on the board toward JIRA; returns what it did. */
+  reconcile(board: Board): MirrorDelta;
+}
+
+/** What one reconcile pass changed in JIRA — the assertable delta set. */
+export interface MirrorDelta {
+  /** Epics created this pass (in board order). */
+  readonly created: readonly CreatedEpic[];
+  /** Epic status transitions executed this pass (in board order). */
+  readonly transitioned: readonly EpicTransition[];
+}
+
+/** One epic created this pass: the PRD it mirrors and the new JIRA key. */
+export interface CreatedEpic {
+  readonly prd: string;
+  readonly key: string;
+}
+
+/** One epic status self-heal: the epic key and the target status it moved to. */
+export interface EpicTransition {
+  readonly key: string;
+  readonly to: string;
+}
+
+/**
+ * The mirror-relevant state read off a PRD's `prd.md`: its opt-in block (absent ⇒
+ * the PRD is invisible to the mirror) and its epic backref (absent ⇒ no epic yet).
+ */
+export interface MirrorFileState {
+  readonly optIn?: JiraOptIn;
+  readonly epicKey?: string;
+}
+
+/** The injectable collaborators, defaulted to the real acli/file wiring in {@link realMirrorDeps}. */
+export interface MirrorReconcilerDeps {
+  /** The scanned root; a PRD's directory is `join(root, prd.id)`. */
+  readonly root: string;
+  /** The JIRA I/O port (acli in production, a fake in tests). */
+  readonly seam: JiraSeam;
+  /** Epic status-name targets; defaults to the conventional {@link DEFAULT_EPIC_STATUS_NAMES}. */
+  readonly statusNames?: EpicStatusNames;
+  /** The config's `default_board`, used when a PRD's opt-in names no board. */
+  readonly defaultBoard?: string;
+  /** Read a PRD's opt-in + epic backref from its `prd.md`. */
+  readonly readMirror: (prdDir: string) => MirrorFileState;
+  /** Write the epic backref onto a PRD's `prd.md`. */
+  readonly writeEpic: (prdDir: string, key: string) => void;
+  /** Where a no-op/failure is logged (the mirror never surfaces to the board). */
+  readonly log?: (message: string) => void;
+}
+
+/**
+ * Build a {@link MirrorReconciler} over the given collaborators. Pure orchestration
+ * given the seam and file readers/writers — no acli, no filesystem — so it is
+ * unit-tested against a fake seam (asserting the delta set and calls made).
+ */
+export function createMirrorReconciler(
+  deps: MirrorReconcilerDeps,
+): MirrorReconciler {
+  const statusNames = deps.statusNames ?? DEFAULT_EPIC_STATUS_NAMES;
+  const log = deps.log ?? (() => {});
+
+  return {
+    reconcile(board: Board): MirrorDelta {
+      const created: CreatedEpic[] = [];
+      const transitioned: EpicTransition[] = [];
+
+      for (const prd of board.prds) {
+        const prdDir = join(deps.root, prd.id);
+        try {
+          const { optIn, epicKey } = deps.readMirror(prdDir);
+          // No `jira` block ⇒ the PRD is invisible to the mirror (ADR 0028).
+          if (optIn === undefined) continue;
+
+          // Ensure the epic exists: a present backref is update-or-noop (never a
+          // second epic — ADR 0029); an absent one creates then writes the backref.
+          let key = epicKey;
+          if (key === undefined) {
+            const boardId = optIn.board ?? deps.defaultBoard;
+            if (boardId === undefined) {
+              log(
+                `PRD ${prd.id}: jira opt-in names no board and no default_board is configured — skipping (no-op).`,
+              );
+              continue;
+            }
+            const project = optIn.project ?? deps.seam.resolveProject(boardId);
+            key = deps.seam.createEpic({ project, summary: prd.title });
+            deps.writeEpic(prdDir, key);
+            created.push({ prd: prd.id, key });
+          }
+
+          // Self-heal: drive the legal transition toward the lane's target status.
+          // Idempotent — no transition when already at target; an illegal/absent
+          // one is caught below as a logged no-op (graceful degradation).
+          const target = epicTargetStatus(prd.lane, statusNames);
+          const current = deps.seam.currentStatus(key);
+          if (current !== undefined && !statusEquals(current, target)) {
+            try {
+              deps.seam.transition(key, target);
+              transitioned.push({ key, to: target });
+            } catch (err) {
+              log(
+                `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+              );
+            }
+          }
+        } catch (err) {
+          // Any seam/file failure for one PRD is a logged no-op; the board is never
+          // taken down and the remaining PRDs still reconcile (ADR 0028).
+          log(`PRD ${prd.id}: mirror reconcile failed (no-op): ${errorMessage(err)}`);
+        }
+      }
+
+      return { created, transitioned };
+    },
+  };
+}
+
+/**
+ * The production file reader: parse a PRD's `prd.md` for its opt-in block and epic
+ * backref via the shared `issueFile` contract. A missing/unreadable `prd.md`
+ * (the PRD vanished mid-scan) reads as *not opted in*, so the reconciler skips it
+ * rather than throwing — the same "a folder that vanished is just gone" contract
+ * the scanner follows.
+ */
+export function readMirrorFile(prdDir: string): MirrorFileState {
+  let raw: string;
+  try {
+    raw = readFileSync(join(prdDir, "prd.md"), "utf8");
+  } catch {
+    return {};
+  }
+  const { data } = safeMatter(raw);
+  return {
+    optIn: parseJiraOptIn(data),
+    epicKey: readPresentString(data, FIELD.jiraEpic),
+  };
+}
+
+/** The production backref writer: write `jira_epic` onto the PRD's `prd.md`. */
+export function writeMirrorEpic(prdDir: string, key: string): void {
+  writeJiraEpic(join(prdDir, "prd.md"), key);
+}
+
+/**
+ * The mirror's durable no-op/failure log, beside the dispatch log (ADR 0028: mirror
+ * failures are log-only, never a board marker or status-line notice). Kept off the
+ * board so a `⊘`/`⚠` operational signal never leaks to a JIRA stakeholder either.
+ */
+export function defaultMirrorLogPath(): string {
+  return join(homedir(), ".local", "state", "overseer", "mirror.log");
+}
+
+/**
+ * Append one mirror log line, best-effort. Never throws — a no-op the mirror
+ * cannot even log is still a no-op, and this runs off the render loop where an
+ * escaping error would be uncaught. Writing to a file (not stderr) keeps the Ink
+ * alternate-screen board uncorrupted.
+ */
+export function appendMirrorLog(logPath: string, message: string): void {
+  try {
+    mkdirSync(dirname(logPath), { recursive: true });
+    appendFileSync(logPath, `${new Date().toISOString()}\t${message}\n`);
+  } catch {
+    // Best-effort logging: nothing more to do if even the log write fails.
+  }
+}
+
+/**
+ * Build the production {@link MirrorReconciler} wired to the real acli seam, the
+ * real `prd.md` reader/writer, and the durable mirror log — the one the CLI hands
+ * to the scan loop. A thin convenience over {@link createMirrorReconciler} so the
+ * wiring site need not name the default collaborators.
+ */
+export function realMirrorReconciler(opts: {
+  readonly root: string;
+  readonly defaultBoard?: string;
+  readonly statusNames?: EpicStatusNames;
+  readonly logPath?: string;
+}): MirrorReconciler {
+  const logPath = opts.logPath ?? defaultMirrorLogPath();
+  return createMirrorReconciler({
+    root: opts.root,
+    seam: realJiraSeam,
+    defaultBoard: opts.defaultBoard,
+    statusNames: opts.statusNames,
+    readMirror: readMirrorFile,
+    writeEpic: writeMirrorEpic,
+    log: (message) => appendMirrorLog(logPath, message),
+  });
+}

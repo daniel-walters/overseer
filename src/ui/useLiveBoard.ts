@@ -2,6 +2,16 @@ import { useCallback, useEffect, useState } from "react";
 import type { Board } from "../model.js";
 import type { Reactor } from "../reactor/reactor.js";
 
+/**
+ * The board's view of the JIRA mirror: a fire-and-forget reconcile fed the
+ * freshly-scanned board after each rebuild. Narrowed to just this method (and a
+ * `void` return) so the UI layer stays free of the mirror's internals — the CLI
+ * wires the real reconciler behind it, scheduled off the render path.
+ */
+export interface BoardMirror {
+  reconcile(board: Board): void;
+}
+
 export interface UseLiveBoardOptions {
   /** The configured root being watched. */
   readonly root: string;
@@ -17,6 +27,15 @@ export interface UseLiveBoardOptions {
    * board-only tests; when absent the loop is a plain re-scan.
    */
   readonly reactor?: Reactor;
+  /**
+   * The JIRA mirror, reconciled fire-and-forget after each board rebuild — the
+   * in-process sibling of the Linked-PR overlay (ADR 0028 / 0013). It is handed
+   * the freshly-scanned board and pushes each opted-in PRD's epic to JIRA off the
+   * render path; the board never blocks on it and it never throws out (the wiring
+   * schedules it asynchronously and it swallows its own failures as logged
+   * no-ops). Absent in board-only tests and whenever no mirror is wired.
+   */
+  readonly mirror?: BoardMirror;
   /**
    * Called right after each post-rebuild reconcile, so the caller can re-read the
    * Reactor's activity and refresh the status-line signal (Issue: surface reactor
@@ -63,6 +82,7 @@ export function useLiveBoard({
   scan,
   watch,
   reactor,
+  mirror,
   onReconciled,
 }: UseLiveBoardOptions): UseLiveBoard {
   const [board, setBoard] = useState(initialBoard);
@@ -76,10 +96,16 @@ export function useLiveBoard({
   // just updated the Reactor's in-memory tally; notify the caller so it can
   // publish the fresh activity signal in the same tick.
   const refresh = useCallback(() => {
-    setBoard(scan(root));
+    const next = scan(root);
+    setBoard(next);
     reactor?.reconcile();
+    // Fire-and-forget the JIRA mirror on the same rebuilt board (ADR 0028): it
+    // pushes each opted-in PRD's epic off the render path and never blocks the
+    // board or throws out. Passed the just-scanned board so it reconciles against
+    // exactly what the user sees, not a re-read.
+    mirror?.reconcile(next);
     onReconciled?.();
-  }, [root, scan, reactor, onReconciled]);
+  }, [root, scan, reactor, mirror, onReconciled]);
 
   useEffect(() => {
     const teardown = watch(root, refresh);
