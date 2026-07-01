@@ -39,6 +39,16 @@ import type { Board } from "../model.js";
  * an epic. Writing the backref fires a watcher re-scan → another reconcile, which
  * the present backref + already-at-target status collapse to a zero-JIRA no-op.
  *
+ * **Re-entrancy guard.** The backref that makes create idempotent is only written
+ * *after* `createEpic` resolves, and each acli round-trip can run for seconds —
+ * far longer than the watcher's {@link import("../watcher.js").DEBOUNCE_MS}. An
+ * unrelated file change can fire a second `reconcile()` while a first pass is
+ * still awaiting a PRD's create, and that second pass would read the same
+ * not-yet-backreffed `prd.md` and create a second epic. `reconcile()` follows the
+ * same guard {@link import("../reactor/reactor.js").createReactor} uses: a call
+ * that arrives while one is already in flight is a clean no-op, same as it would
+ * be if the file watcher simply hadn't coalesced the two events.
+ *
  * This foundation slice covers the **epic** half only; child issues, sprint
  * placement, a JQL-seeded diff cache, and a paced write queue extend it later.
  */
@@ -109,79 +119,99 @@ export function createMirrorReconciler(
 ): MirrorReconciler {
   const statusNames = deps.statusNames ?? DEFAULT_EPIC_STATUS_NAMES;
   const log = deps.log ?? (() => {});
+  /** True while a reconcile is in flight; the re-entrancy guard reads it. */
+  let reconciling = false;
 
   return {
     async reconcile(board: Board): Promise<MirrorDelta> {
-      const created: CreatedEpic[] = [];
-      const transitioned: EpicTransition[] = [];
-
-      for (const prd of board.prds) {
-        const prdDir = join(deps.root, prd.id);
-        try {
-          const { optIn, epicKey } = deps.readMirror(prdDir);
-          // No `jira` block ⇒ the PRD is invisible to the mirror (ADR 0028).
-          if (optIn === undefined) continue;
-
-          // Ensure the epic exists: a present backref is update-or-noop (never a
-          // second epic — ADR 0029); an absent one creates then writes the backref.
-          let key = epicKey;
-          if (key === undefined) {
-            const boardId = optIn.board ?? deps.defaultBoard;
-            if (boardId === undefined) {
-              log(
-                `PRD ${prd.id}: jira opt-in names no board and no default_board is configured — skipping (no-op).`,
-              );
-              continue;
-            }
-            const project =
-              optIn.project ?? (await deps.seam.resolveProject(boardId));
-            key = await deps.seam.createEpic({ project, summary: prd.title });
-
-            // The epic now exists in JIRA; write the backref so the next pass
-            // treats it as update-or-noop instead of creating a second epic
-            // (ADR 0029). If the write itself fails (disk full, permission,
-            // lock), the epic is orphaned — present in JIRA with no backref —
-            // and every future pass will re-create it, since there is no other
-            // durable state the mirror is allowed to keep (ADR 0028: no
-            // backend). Log that specific, higher-stakes failure distinctly
-            // (not folded into the generic per-PRD no-op below) so an operator
-            // can see the duplicate-epic risk and add the backref by hand.
-            try {
-              deps.writeEpic(prdDir, key);
-            } catch (err) {
-              log(
-                `PRD ${prd.id}: created epic ${key} in JIRA but failed to write its jira_epic backref — the next reconcile will create a duplicate epic unless the backref is added by hand: ${errorMessage(err)}`,
-              );
-              continue;
-            }
-            created.push({ prd: prd.id, key });
-          }
-
-          // Self-heal: drive the legal transition toward the lane's target status.
-          // Idempotent — no transition when already at target; an illegal/absent
-          // one is caught below as a logged no-op (graceful degradation).
-          const target = epicTargetStatus(prd.lane, statusNames);
-          const current = await deps.seam.currentStatus(key);
-          if (current !== undefined && !statusEquals(current, target)) {
-            try {
-              await deps.seam.transition(key, target);
-              transitioned.push({ key, to: target });
-            } catch (err) {
-              log(
-                `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
-              );
-            }
-          }
-        } catch (err) {
-          // Any seam/file failure for one PRD is a logged no-op; the board is never
-          // taken down and the remaining PRDs still reconcile (ADR 0028).
-          log(`PRD ${prd.id}: mirror reconcile failed (no-op): ${errorMessage(err)}`);
-        }
+      // A pass already in flight owns this tick's writes; a second call arriving
+      // before it settles (see the class doc's re-entrancy note) is a no-op rather
+      // than racing it onto the same not-yet-backreffed PRDs.
+      if (reconciling) return { created: [], transitioned: [] };
+      reconciling = true;
+      try {
+        return await reconcileOnce(board, deps, statusNames, log);
+      } finally {
+        reconciling = false;
       }
-
-      return { created, transitioned };
     },
   };
+}
+
+async function reconcileOnce(
+  board: Board,
+  deps: MirrorReconcilerDeps,
+  statusNames: EpicStatusNames,
+  log: (message: string) => void,
+): Promise<MirrorDelta> {
+  const created: CreatedEpic[] = [];
+  const transitioned: EpicTransition[] = [];
+
+  for (const prd of board.prds) {
+    const prdDir = join(deps.root, prd.id);
+    try {
+      const { optIn, epicKey } = deps.readMirror(prdDir);
+      // No `jira` block ⇒ the PRD is invisible to the mirror (ADR 0028).
+      if (optIn === undefined) continue;
+
+      // Ensure the epic exists: a present backref is update-or-noop (never a
+      // second epic — ADR 0029); an absent one creates then writes the backref.
+      let key = epicKey;
+      if (key === undefined) {
+        const boardId = optIn.board ?? deps.defaultBoard;
+        if (boardId === undefined) {
+          log(
+            `PRD ${prd.id}: jira opt-in names no board and no default_board is configured — skipping (no-op).`,
+          );
+          continue;
+        }
+        const project =
+          optIn.project ?? (await deps.seam.resolveProject(boardId));
+        key = await deps.seam.createEpic({ project, summary: prd.title });
+
+        // The epic now exists in JIRA; write the backref so the next pass
+        // treats it as update-or-noop instead of creating a second epic
+        // (ADR 0029). If the write itself fails (disk full, permission,
+        // lock), the epic is orphaned — present in JIRA with no backref —
+        // and every future pass will re-create it, since there is no other
+        // durable state the mirror is allowed to keep (ADR 0028: no
+        // backend). Log that specific, higher-stakes failure distinctly
+        // (not folded into the generic per-PRD no-op below) so an operator
+        // can see the duplicate-epic risk and add the backref by hand.
+        try {
+          deps.writeEpic(prdDir, key);
+        } catch (err) {
+          log(
+            `PRD ${prd.id}: created epic ${key} in JIRA but failed to write its jira_epic backref — the next reconcile will create a duplicate epic unless the backref is added by hand: ${errorMessage(err)}`,
+          );
+          continue;
+        }
+        created.push({ prd: prd.id, key });
+      }
+
+      // Self-heal: drive the legal transition toward the lane's target status.
+      // Idempotent — no transition when already at target; an illegal/absent
+      // one is caught below as a logged no-op (graceful degradation).
+      const target = epicTargetStatus(prd.lane, statusNames);
+      const current = await deps.seam.currentStatus(key);
+      if (current !== undefined && !statusEquals(current, target)) {
+        try {
+          await deps.seam.transition(key, target);
+          transitioned.push({ key, to: target });
+        } catch (err) {
+          log(
+            `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+          );
+        }
+      }
+    } catch (err) {
+      // Any seam/file failure for one PRD is a logged no-op; the board is never
+      // taken down and the remaining PRDs still reconcile (ADR 0028).
+      log(`PRD ${prd.id}: mirror reconcile failed (no-op): ${errorMessage(err)}`);
+    }
+  }
+
+  return { created, transitioned };
 }
 
 /**
