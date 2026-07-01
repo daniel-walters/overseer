@@ -228,6 +228,38 @@ describe("mirrorReconciler — epic create", () => {
   });
 });
 
+describe("mirrorReconciler — re-entrancy", () => {
+  it("no-ops a reconcile that arrives while one is already in flight, so it can't create a duplicate epic", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    // Block resolveProject until the second call is already in-flight, so the
+    // first pass's createEpic hasn't run (and the backref hasn't been written)
+    // by the time the second reconcile() call is made — the race the guard closes.
+    let releaseFirstCall: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      releaseFirstCall = resolve;
+    });
+    const originalResolveProject = seam.resolveProject.bind(seam);
+    seam.resolveProject = async (board: string) => {
+      await gate;
+      return originalResolveProject(board);
+    };
+    const { reconciler, set, epicKeyOf } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }) });
+
+    const first = reconciler.reconcile(board(prd("auth", "backlog", "Auth")));
+    const second = reconciler.reconcile(board(prd("auth", "backlog", "Auth")));
+    releaseFirstCall();
+    const [firstDelta, secondDelta] = await Promise.all([first, second]);
+
+    // Only the in-flight pass creates the epic; the overlapping call is a no-op.
+    expect(seam.created).toEqual([{ project: "DS", summary: "Auth" }]);
+    expect(firstDelta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
+    expect(secondDelta).toEqual({ created: [], transitioned: [] });
+    expect(epicKeyOf("auth")).toBe("DS-1");
+  });
+});
+
 describe("mirrorReconciler — epic status self-heal", () => {
   it("transitions a freshly-created epic to match a PRD already in progress", async () => {
     const seam = new FakeJiraSeam();
