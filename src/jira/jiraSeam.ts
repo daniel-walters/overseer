@@ -12,9 +12,10 @@ const execFileAsync = promisify(execFile);
  * today, a REST token later — ADR 0028) can change behind a stable interface.
  *
  * acli owns authentication (an OAuth/API-token session the user configures once),
- * so this seam handles **no credential** — Overseer never sees one. This
- * foundation slice exposes only the epic-tracer operations; child-issue creation,
- * JQL cache seeding, and sprint placement extend the interface in later slices.
+ * so this seam handles **no credential** — Overseer never sees one. It exposes
+ * epic/child creation, the JQL {@link JiraSeam.searchStatuses} that seeds the
+ * reconciler's diff-gate cache, and status transitions; sprint placement extends
+ * the interface in a later slice.
  *
  * Failure contract: every method **throws** (rejects) on failure (a missing/unauthed
  * acli, a non-existent board, an illegal transition, a network error). The reconciler
@@ -54,18 +55,27 @@ export interface JiraSeam {
    */
   createChildIssue(input: CreateChildInput): Promise<string>;
   /**
-   * The named status the given issue currently sits in (e.g. `"In Progress"`), or
-   * `undefined` when it can't be read. The reconciler compares this against the
-   * lane's target status to decide whether a self-healing transition is needed —
-   * so an unreadable status degrades to *no transition* rather than a wrong one.
+   * Fetch the current named status of each given issue key in **one** JQL search —
+   * the batched, board-open seed of the reconciler's last-known-bucket cache (ADR
+   * 0028). The reconciler collects every mirrored PRD's epic + child backref, seeds
+   * the cache from this single call, then diffs each scan against the cache **in
+   * memory** — so a steady-state scan that crosses no bucket makes zero JIRA calls.
+   *
+   * Resolves to one {@link JiraStatus} per *found* key (a key JIRA no longer knows —
+   * deleted, or index-lagged — is simply omitted; a found key whose status can't be
+   * parsed carries an `undefined` status). An empty `keys` list resolves to `[]`
+   * without shelling out. Rejects only on an acli/search failure, which the
+   * reconciler absorbs as a logged no-op that leaves the cache empty (it degrades to
+   * driving transitions rather than crashing).
    */
-  currentStatus(key: string): Promise<string | undefined>;
+  searchStatuses(keys: readonly string[]): Promise<readonly JiraStatus[]>;
   /**
    * Drive the issue to the named target status via acli (which resolves the legal
    * transition for the name). **Rejects** when the status is unreachable or absent
    * from the workflow — the reconciler catches that as a logged no-op, the
    * graceful degradation the mirror promises. Idempotence (not re-firing when
-   * already at the target) is the reconciler's job, via {@link currentStatus}.
+   * already at the target) is the reconciler's job, via its diff against the
+   * last-known-bucket cache that {@link searchStatuses} seeds.
    */
   transition(key: string, toStatus: string): Promise<void>;
 }
@@ -81,6 +91,14 @@ export interface CreateEpicInput {
    * with no body prose creates a summary-only epic.
    */
   readonly description?: string;
+}
+
+/** One work item's key and its current named JIRA status, from {@link JiraSeam.searchStatuses}. */
+export interface JiraStatus {
+  /** The work item's JIRA key (e.g. `DS-50`). */
+  readonly key: string;
+  /** Its current named status (e.g. `"In Progress"`), or `undefined` when unreadable. */
+  readonly status: string | undefined;
 }
 
 /** The fields the mirror supplies when creating a child issue under an epic. */
@@ -132,16 +150,30 @@ export function parseBoardProject(json: string): string | undefined {
 }
 
 /**
- * Parse the status *name* out of `acli jira workitem view --fields status --json`
- * output: the name lives at `fields.status.name`. Returns `undefined` for missing
- * or unparseable output, so an unreadable status becomes *no transition* upstream.
+ * Parse `acli jira workitem search --fields key,status --json` output into one
+ * {@link JiraStatus} per row — the batched cache seed. The status name lives at
+ * `fields.status.name` (the same path a single-item view uses). A row with no
+ * string `key` is skipped (it names no item to cache); a keyed row whose status is
+ * missing/blank keeps the key with an `undefined` status (the item exists, its
+ * status is just unknown). Unparseable or non-array output yields `[]`, so a
+ * search hiccup seeds an empty cache rather than throwing.
  */
-export function parseWorkItemStatus(json: string): string | undefined {
+export function parseSearchStatuses(json: string): JiraStatus[] {
   const parsed = tryParse(json);
-  const fields = (parsed as { fields?: { status?: { name?: unknown } } })
-    ?.fields;
-  const name = fields?.status?.name;
-  return typeof name === "string" && name.trim() !== "" ? name : undefined;
+  if (!Array.isArray(parsed)) return [];
+  const rows: JiraStatus[] = [];
+  for (const item of parsed) {
+    if (item === null || typeof item !== "object") continue;
+    const key = (item as { key?: unknown }).key;
+    if (typeof key !== "string" || key.trim() === "") continue;
+    const name = (item as { fields?: { status?: { name?: unknown } } }).fields
+      ?.status?.name;
+    rows.push({
+      key,
+      status: typeof name === "string" && name.trim() !== "" ? name : undefined,
+    });
+  }
+  return rows;
 }
 
 /**
@@ -276,9 +308,27 @@ export const realJiraSeam: JiraSeam = {
     return key;
   },
 
-  async currentStatus(key: string): Promise<string | undefined> {
-    return parseWorkItemStatus(
-      await runAcli(["jira", "workitem", "view", key, "--fields", "status", "--json"]),
+  async searchStatuses(keys: readonly string[]): Promise<readonly JiraStatus[]> {
+    // No keys ⇒ nothing to seed: skip the shell-out entirely (a fresh board with
+    // no backrefs yet makes no acli call at open).
+    if (keys.length === 0) return [];
+    // One JQL clause fetches every mirrored key's status in a single round-trip —
+    // `key in (DS-9, DS-50, …)` — the batched seed that lets every later scan diff
+    // in memory. `--limit` is sized to the key count so a large PRD isn't truncated.
+    const jql = `key in (${keys.join(", ")})`;
+    return parseSearchStatuses(
+      await runAcli([
+        "jira",
+        "workitem",
+        "search",
+        "--jql",
+        jql,
+        "--fields",
+        "key,status",
+        "--limit",
+        String(keys.length),
+        "--json",
+      ]),
     );
   },
 

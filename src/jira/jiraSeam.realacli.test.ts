@@ -57,68 +57,36 @@ function acliAuthed(): boolean {
  */
 const createdKeys: string[] = [];
 
-/** One work item's key + current status name, parsed from `workitem search --json`. */
-interface FoundItem {
-  readonly key: string;
-  readonly status: string | undefined;
-}
-
-/** Parse the `workitem search --json` array into {@link FoundItem}s (tolerant of shape). */
-function parseSearchResults(json: string): FoundItem[] {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(json);
-  } catch {
-    return [];
-  }
-  if (!Array.isArray(parsed)) return [];
-  const items: FoundItem[] = [];
-  for (const item of parsed) {
-    if (item === null || typeof item !== "object") continue;
-    const key = (item as { key?: unknown }).key;
-    if (typeof key !== "string") continue;
-    const name = (item as { fields?: { status?: { name?: unknown } } }).fields
-      ?.status?.name;
-    items.push({ key, status: typeof name === "string" ? name : undefined });
-  }
-  return items;
-}
-
-/** JQL-search for a single key and return the matched item, or undefined if not found yet. */
-function searchByKey(key: string): FoundItem | undefined {
-  const out = acli(
-    "jira",
-    "workitem",
-    "search",
-    "--jql",
-    `key = ${key}`,
-    "--fields",
-    "key,status",
-    "--limit",
-    "1",
-    "--json",
-  );
-  return parseSearchResults(out).find((i) => i.key === key);
+/**
+ * JQL-search for a single key **through the seam under test** and return the
+ * matched item, or undefined if not found yet. This drives the very
+ * {@link realJiraSeam.searchStatuses} the reconciler uses to seed its cache, so the
+ * round-trip validates the production seam method end-to-end (not a private
+ * re-implementation of search).
+ */
+async function searchByKey(key: string) {
+  const found = await realJiraSeam.searchStatuses([key]);
+  return found.find((i) => i.key === key);
 }
 
 /**
  * Poll `fn` until it returns a defined value or the deadline passes. JIRA's search
  * index is eventually consistent, so a just-created/just-transitioned item can lag
  * the write by a second or two — long enough that `acli jira workitem search` on a
- * `key = <key>` JQL clause for a not-yet-indexed key exits non-zero ("issue does
+ * `key in (<key>)` JQL clause for a not-yet-indexed key exits non-zero ("issue does
  * not exist"), not just returns an empty result. `fn` (which shells out via
- * `searchByKey`) is called inside the loop's own try/catch, not the caller's, so
- * that lag is a retry, not an aborted test.
+ * {@link searchByKey}) is awaited inside the loop's own try/catch, not the
+ * caller's, so that lag is a retry, not an aborted test.
  */
 async function poll<T>(
-  fn: () => T | undefined,
+  fn: () => Promise<T | undefined>,
   { timeoutMs = 20000, intervalMs = 2000 } = {},
 ): Promise<T | undefined> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     let value: T | undefined;
     try {
-      value = fn();
+      value = await fn();
     } catch {
       value = undefined;
     }
@@ -165,8 +133,8 @@ describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
 
     // Round-trip: find the epic via a real JQL search and confirm the search
     // reflects both its identity and the transition we just drove.
-    const found = await poll(() => {
-      const item = searchByKey(key);
+    const found = await poll(async () => {
+      const item = await searchByKey(key);
       return item?.status === "In Progress" ? item : undefined;
     });
     expect(found?.key).toBe(key);
@@ -187,8 +155,8 @@ describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
     // Drive the child to In Progress and confirm a real JQL search reflects both
     // its identity and the transition — same search path as the epic above.
     await realJiraSeam.transition(child, "In Progress");
-    const foundChild = await poll(() => {
-      const item = searchByKey(child);
+    const foundChild = await poll(async () => {
+      const item = await searchByKey(child);
       return item?.status === "In Progress" ? item : undefined;
     });
     expect(foundChild?.key).toBe(child);

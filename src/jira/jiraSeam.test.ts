@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseBoardProject,
-  parseWorkItemStatus,
+  parseSearchStatuses,
   parseCreatedKey,
 } from "./jiraSeam.js";
 
@@ -26,19 +26,33 @@ describe("parseBoardProject", () => {
   });
 });
 
-describe("parseWorkItemStatus", () => {
-  it("reads the status name from `workitem view --fields status --json`", () => {
-    // The real acli shape: the status name lives at fields.status.name.
-    const json = JSON.stringify({
-      key: "DS-156",
-      fields: { status: { id: "3", name: "In Progress" } },
-    });
-    expect(parseWorkItemStatus(json)).toBe("In Progress");
+describe("parseSearchStatuses", () => {
+  it("reads each work item's key + status name from `workitem search --json`", () => {
+    // The real acli shape: an array of items, each with a key and a
+    // fields.status.name — the batched seed of the reconcile cache.
+    const json = JSON.stringify([
+      { key: "DS-9", fields: { status: { id: "3", name: "In Progress" } } },
+      { key: "DS-50", fields: { status: { id: "1", name: "To Do" } } },
+    ]);
+    expect(parseSearchStatuses(json)).toEqual([
+      { key: "DS-9", status: "In Progress" },
+      { key: "DS-50", status: "To Do" },
+    ]);
   });
 
-  it("returns undefined when the status name is missing or output is bad", () => {
-    expect(parseWorkItemStatus(JSON.stringify({ fields: {} }))).toBeUndefined();
-    expect(parseWorkItemStatus("nope")).toBeUndefined();
+  it("keeps a keyed item whose status is unreadable, with an undefined status", () => {
+    // A row with no parseable status still names a real, present key — the cache
+    // records that the item exists (status unknown) rather than dropping it.
+    const json = JSON.stringify([{ key: "DS-9", fields: {} }]);
+    expect(parseSearchStatuses(json)).toEqual([
+      { key: "DS-9", status: undefined },
+    ]);
+  });
+
+  it("skips keyless rows and returns [] for unparseable or shapeless output", () => {
+    expect(parseSearchStatuses(JSON.stringify([{ fields: {} }]))).toEqual([]);
+    expect(parseSearchStatuses("not json")).toEqual([]);
+    expect(parseSearchStatuses(JSON.stringify({ total: 0 }))).toEqual([]);
   });
 });
 
