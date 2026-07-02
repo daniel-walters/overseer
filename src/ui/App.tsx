@@ -7,11 +7,16 @@ import { ReviewPreview } from "./ReviewPreview.js";
 import { AuditPreview } from "./AuditPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { DetailModal, DETAIL_MODAL_CHROME_ROWS, DETAIL_MODAL_CHROME_COLS } from "./DetailModal.js";
-import { AgentOutputModal, AGENT_OUTPUT_MODAL_CHROME_ROWS } from "./AgentOutputModal.js";
+import {
+  AgentOutputModal,
+  AGENT_OUTPUT_MODAL_CHROME_ROWS,
+  AGENT_OUTPUT_MODAL_CHROME_COLS,
+} from "./AgentOutputModal.js";
 import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
 import type { AgentOutput } from "./agentOutputReader.js";
+import { renderTerminal as defaultRenderTerminal, type TerminalRenderer } from "./renderTerminal.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
@@ -309,7 +314,18 @@ type ActiveModal =
   | { readonly kind: "mark-done"; readonly preview: MarkDonePreviewData }
   | { readonly kind: "approve"; readonly preview: ApprovePreviewData }
   | { readonly kind: "detail"; readonly detail: CardDetail }
-  | { readonly kind: "agent-output"; readonly output: AgentOutput };
+  | {
+      readonly kind: "agent-output";
+      readonly output: AgentOutput;
+      /**
+       * The agent output already resolved to screen lines: the App runs the raw
+       * `claude logs` bytes through the terminal emulator (ADR 0030) on the async
+       * `o`-open path — a flush that must be awaited, so it can't live in the
+       * synchronous render — and freezes the result here. The modal renders these
+       * verbatim, exactly as the detail modal renders its pre-rendered `lines`.
+       */
+      readonly lines: readonly string[];
+    };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -359,6 +375,13 @@ interface AppProps {
   detailReader?: DetailReader;
   /** Wired in production; absent in tests that don't exercise the agent-output modal. */
   agentOutputReader?: AgentOutputReader;
+  /**
+   * The bytes→screen transform the `o`-open path runs the raw `claude logs` output
+   * through (ADR 0030), sized to the modal's inner width and available rows. Defaults
+   * to the real `@xterm/headless`-backed {@link renderTerminal}; injected as a fake in
+   * App tests so the async open path is covered without a real emulator flush.
+   */
+  renderTerminal?: TerminalRenderer;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
   /** Wired in production; absent in tests that don't exercise `go to PR`. */
@@ -399,7 +422,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, auditor, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
+export function App({ board, dispatcher, reviewer, auditor, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, renderTerminal = defaultRenderTerminal, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -522,13 +545,14 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
   // The agent-output modal's region height and its current scroll window — the
   // raw-output twin of the detail block above, sharing the same `detailScroll`
   // offset and `scrollDetail` primitive so its keypress clamp and the modal's window
-  // can't disagree. The output is raw scrollback windowed line-by-line, never
-  // markdown-rendered or hard-wrapped (a wrap would mangle the agent's own layout),
-  // so the lines come straight off the output split on `\n` — the same split the
-  // modal renders from. Only meaningful while an agent-output modal is open.
+  // can't disagree. The lines are the emulator-resolved screen the `o`-open path
+  // already computed and froze on the modal (ADR 0030) — the render is synchronous,
+  // so it reads the frozen result rather than re-running the (async) emulator flush.
+  // The grid was sized to this same width/height, so what the modal windows matches
+  // what the emulator drew. Only meaningful while an agent-output modal is open.
   const agentOutputRows = Math.max(1, rows - AGENT_OUTPUT_MODAL_CHROME_ROWS);
-  const agentOutputLines =
-    modal?.kind === "agent-output" ? modal.output.output.replace(/\n+$/, "").split("\n") : [];
+  const agentOutputCols = Math.max(1, columns - AGENT_OUTPUT_MODAL_CHROME_COLS);
+  const agentOutputLines = modal?.kind === "agent-output" ? modal.lines : [];
   const agentOutputMaxOffset = scrollDetail(
     agentOutputLines,
     detailScroll,
@@ -764,8 +788,20 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
       ) {
         const output = agentOutputReader.readAgentOutput(selectedPrd.id, selectedIssue.id);
         if (output) {
-          setDetailScroll(0); // always open at the top, never a stale position
-          setModal({ kind: "agent-output", output });
+          // The reader hands back the raw `claude logs` bytes verbatim; the readable
+          // screen is reconstructed by emulating them against a grid sized to the
+          // modal (ADR 0030). `@xterm/headless` flushes on a callback, so this is the
+          // one modal open that must await before it can populate state — hence the
+          // async `.then`. The board keeps rendering meanwhile; the modal appears
+          // once the (bounded, short) flush resolves. `columns`/`rows` are read here
+          // from the current window size, the same dimensions the render sizes the
+          // scroll window to, so the emulated grid and the windowed view agree.
+          void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
+            (lines) => {
+              setDetailScroll(0); // always open at the top, never a stale position
+              setModal({ kind: "agent-output", output, lines: [...lines] });
+            },
+          );
         } else {
           // The card read `live` but readAgentOutput found no recorded handle (the
           // verdict/sidecar race, or the Issue vanished). Without this notice the
@@ -1086,10 +1122,11 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     );
   }
   if (modal?.kind === "agent-output") {
-    // The raw-output view — a full-screen takeover like the detail modal, rendered
+    // The agent-output view — a full-screen takeover like the detail modal, rendered
     // from the frozen capture (read once on open) so a re-scan that removes the card
     // cannot blank it mid-read. Shares the detail modal's scroll offset + primitive,
-    // not its markdown render: agent output is raw scrollback, shown as-is (ADR 0023).
+    // not its markdown render: agent output is the emulator-resolved screen (ADR 0030),
+    // frozen on the modal by the async `o`-open path.
     return (
       <AgentOutputModal
         output={modal.output}

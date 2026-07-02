@@ -1637,6 +1637,57 @@ describe("App agent output (o on a live card)", () => {
     await tick();
     expect(stripAnsi(lastFrame() ?? "")).toContain("o Read"); // now the hint shows
   });
+
+  it("runs the raw logs bytes through the injected renderer and shows its resolved lines", async () => {
+    // The reader stays raw (returns `claude logs` bytes verbatim); the App feeds
+    // those bytes through the terminal-emulator seam (ADR 0030) and renders the
+    // *resolved* lines. Injecting a fake renderer proves the wiring: the raw redraw
+    // stream is not shown, the emulator's screen is.
+    const raw = "Progress: 10%\rProgress: 100%\n";
+    const reader = spyOutputReader({ title: "OAuth", output: raw });
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(async () => ["Progress: 100%"]);
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+
+    // The renderer received the raw bytes verbatim, sized to a positive grid.
+    expect(fakeRender).toHaveBeenCalledTimes(1);
+    const [bytes, cols, rows] = fakeRender.mock.calls[0]!;
+    expect(bytes).toBe(raw);
+    expect(cols).toBeGreaterThan(0);
+    expect(rows).toBeGreaterThan(0);
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("to close"); // the modal opened
+    expect(frame).toContain("Progress: 100%"); // the resolved screen line
+    expect(frame).not.toContain("Progress: 10%\r"); // not the raw redraw stream
+  });
+
+  it("shows the (no output yet) placeholder when the renderer resolves to no real content", async () => {
+    // Empty / whitespace-only bytes resolve to no real content, so the placeholder
+    // branch — keyed off the resolved lines — still fires (a just-spawned agent).
+    const reader = spyOutputReader({ title: "OAuth", output: "   \n\n" });
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(async () => []);
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("to close"); // the modal still opened
+    expect(frame).toContain("(no output yet)"); // ...onto the placeholder
+  });
 });
 
 describe("App go to PR (g on a done PRD)", () => {
