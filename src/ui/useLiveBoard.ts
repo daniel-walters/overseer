@@ -96,14 +96,36 @@ export function useLiveBoard({
   // just updated the Reactor's in-memory tally; notify the caller so it can
   // publish the fresh activity signal in the same tick.
   const refresh = useCallback(() => {
-    const next = scan(root);
-    setBoard(next);
-    reactor?.reconcile();
-    // Fire-and-forget the JIRA mirror on the same rebuilt board (ADR 0028): it
-    // pushes each opted-in PRD's epic off the render path and never blocks the
-    // board or throws out. Passed the just-scanned board so it reconciles against
-    // exactly what the user sees, not a re-read.
-    mirror?.reconcile(next);
+    // Rebuild from disk first so the board reflects any external change (an
+    // agent or human editing files) the watcher just reported.
+    const scanned = scan(root);
+    setBoard(scanned);
+
+    // A reconcile that flips a status (e.g. ready-for-review → in-review on the
+    // review-spawn edge) writes that status to disk. Left there, the flip only
+    // reaches the screen if its own write round-trips as a fresh chokidar event
+    // — and FSEvents can coalesce or drop that single event under a burst,
+    // freezing the card in its pre-flip column with no liveness overlay. So
+    // re-scan right after the reconcile, within this same tick, and render the
+    // post-flip disk state. reconcile() is synchronous and holds its own
+    // re-entrancy guard (overlapping passes are a clean no-op), so the second
+    // scan reads settled post-flip state; the liveness probe inside the scan is
+    // memoised per scan and only forks `claude agents --json` when an
+    // active-lane card exists, so this costs at most one bounded subprocess when
+    // something actually flipped into an active lane. Board-only configs have no
+    // Reactor and so nothing that can flip a status — one scan renders the board.
+    let rendered = scanned;
+    if (reactor) {
+      reactor.reconcile();
+      rendered = scan(root);
+      setBoard(rendered);
+    }
+
+    // Fire-and-forget the JIRA mirror on the board the user now sees (ADR 0028):
+    // it pushes each opted-in PRD's epic off the render path and never blocks the
+    // board or throws out. Handed the rendered board so it reconciles against
+    // exactly what is on screen (post-flip when a Reactor is wired), not a re-read.
+    mirror?.reconcile(rendered);
     onReconciled?.();
   }, [root, scan, reactor, mirror, onReconciled]);
 
