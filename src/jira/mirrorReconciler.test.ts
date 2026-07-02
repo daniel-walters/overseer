@@ -379,6 +379,25 @@ describe("mirrorReconciler — epic status self-heal", () => {
     expect(logs.join("\n")).toMatch(/no-op/i);
   });
 
+  it("still reconciles a PRD's children when the epic's own self-heal read fails", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "To Do"); // epic already at target
+    seam.failCurrentStatusFor = "DS-9"; // the epic's own status read fails
+    const { reconciler, set, setIssue, logs } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The epic's self-heal read failure is its own logged no-op — it must not
+    // escape to the outer per-PRD catch and silently drop the child that
+    // reconciles independently just below it.
+    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(logs.join("\n")).toMatch(/epic DS-9.*could not be read/i);
+  });
+
   it("terminates the backref write-back self-scan as a zero-JIRA no-op", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");

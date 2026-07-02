@@ -245,21 +245,35 @@ async function reconcileOnce(
       // Self-heal: drive the legal transition toward the lane's target status.
       // Idempotent — no transition when already at target; an illegal/absent
       // one is caught below as a logged no-op (graceful degradation).
+      //
+      // Isolated in its own try/catch (not the outer per-PRD one): a transient
+      // `currentStatus` read failure here must not escape to the outer catch,
+      // which would abort this PRD's whole pass and — now that the child loop
+      // sits below — silently skip child creation/self-heal for every Issue of
+      // this PRD too, contradicting "each Issue reconciles independently"
+      // (mirrors the identical isolation `reconcileChild` applies to its own
+      // self-heal read, one level down).
       const target = epicTargetStatus(prd.lane, statusNames);
-      const current = await deps.seam.currentStatus(key);
-      if (current === undefined) {
-        log(
-          `epic ${key}: current status could not be read — skipping self-heal (no-op).`,
-        );
-      } else if (!statusEquals(current, target)) {
-        try {
-          await deps.seam.transition(key, target);
-          transitioned.push({ key, to: target });
-        } catch (err) {
+      try {
+        const current = await deps.seam.currentStatus(key);
+        if (current === undefined) {
           log(
-            `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+            `epic ${key}: current status could not be read — skipping self-heal (no-op).`,
           );
+        } else if (!statusEquals(current, target)) {
+          try {
+            await deps.seam.transition(key, target);
+            transitioned.push({ key, to: target });
+          } catch (err) {
+            log(
+              `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+            );
+          }
         }
+      } catch (err) {
+        log(
+          `epic ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
+        );
       }
 
       // The epic is now durably recorded (backref written or already present), so
