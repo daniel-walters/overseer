@@ -38,11 +38,24 @@ import type { Board, Issue } from "../model.js";
  * crash and never a board marker. It returns a {@link MirrorDelta} of the actions
  * it took purely so the behaviour is assertable through the seam boundary.
  *
+ * **Diff-gated (ADR 0028).** On board-open the first {@link MirrorReconciler.reconcile}
+ * seeds an in-memory last-known-bucket cache from **one** JQL fetch
+ * ({@link JiraSeam.searchStatuses}) of every mirrored key. Thereafter each scan
+ * computes each epic/child's target bucket and diffs it against the cache purely
+ * in memory — no network read — emitting only the deltas (transitions) and
+ * advancing the cache on each success. Scan frequency is thereby decoupled from
+ * write frequency: a busy dispatch wave that scans many times yields only the
+ * handful of writes where a bucket actually crossed, and a scan that crosses no
+ * bucket makes zero JIRA calls at all. A human-dragged JIRA card is corrected on
+ * the next board-open, when the reseed captures its drifted status and the diff
+ * against the board's target drives it back (board wins).
+ *
  * **Idempotent across restarts.** Identity is the frontmatter backref (ADR 0029):
  * a PRD that already carries `jira_epic` is update-or-noop, never a second epic —
  * so losing all in-memory state (a restart, a fresh machine) can never duplicate
  * an epic. Writing the backref fires a watcher re-scan → another reconcile, which
- * the present backref + already-at-target status collapse to a zero-JIRA no-op.
+ * the present backref + the cache (advanced to target on the create) collapse to a
+ * zero-JIRA no-op.
  *
  * **Re-entrancy guard.** The backref that makes create idempotent is only written
  * *after* `createEpic` resolves, and each acli round-trip can run for seconds —
@@ -54,8 +67,8 @@ import type { Board, Issue } from "../model.js";
  * that arrives while one is already in flight is a clean no-op, same as it would
  * be if the file watcher simply hadn't coalesced the two events.
  *
- * This foundation slice covers the **epic** half only; child issues, sprint
- * placement, a JQL-seeded diff cache, and a paced write queue extend it later.
+ * A paced write queue for bulk first-sync fan-out extends this later; the epic +
+ * child mirror, child sprint placement, and the diff-gated cache are in place.
  */
 export interface MirrorReconciler {
   /**
@@ -189,6 +202,17 @@ export function createMirrorReconciler(
   const log = deps.log ?? (() => {});
   /** True while a reconcile is in flight; the re-entrancy guard reads it. */
   let reconciling = false;
+  /**
+   * The last-known-bucket cache (ADR 0028): JIRA key → the named status the mirror
+   * last knew that issue to be in. Seeded once from a single JQL fetch on board-open
+   * (the first {@link reconcile}), then maintained purely in memory — updated on
+   * every successful transition and every create. Each scan diffs the board's
+   * target against this cache with no network read, so a scan that crosses no
+   * bucket makes zero JIRA calls.
+   */
+  const cache = new Map<string, string>();
+  /** False until the open-time JQL seed has run (once, on the first reconcile). */
+  let seeded = false;
 
   return {
     async reconcile(board: Board): Promise<MirrorDelta> {
@@ -198,7 +222,20 @@ export function createMirrorReconciler(
       if (reconciling) return emptyDelta();
       reconciling = true;
       try {
-        return await reconcileOnce(board, deps, statusNames, log);
+        // Board-open seed (ADR 0028): one JQL fetch of every already-mirrored key,
+        // inside the guard so it runs exactly once and never races a second pass.
+        // A fresh board with no backrefs collects no keys → no acli call at all.
+        // Only latch `seeded` on a *successful* seed (including the trivial
+        // zero-keys case): a transient acli/network failure must retry on the
+        // next reconcile rather than permanently stranding the cache empty for
+        // the rest of the process's life — an empty cache makes every linked
+        // key's diff-gate a permanent cache-miss, so `driveToTarget` would
+        // otherwise re-attempt a live transition on every single future scan
+        // forever, exactly the JIRA-call volume the seed exists to eliminate.
+        if (!seeded) {
+          seeded = await seedCache(board, deps, cache, log);
+        }
+        return await reconcileOnce(board, deps, statusNames, cache, log);
       } finally {
         reconciling = false;
       }
@@ -206,10 +243,63 @@ export function createMirrorReconciler(
   };
 }
 
+/**
+ * Seed the last-known-bucket cache from **one** JQL search over every mirrored key
+ * on the board (ADR 0028): the epic backref of each opted-in PRD plus each of its
+ * Issues' child backrefs. A PRD with no `jira` block contributes nothing (it is
+ * invisible to the mirror), and a board with no backrefs yet collects no keys — so
+ * {@link JiraSeam.searchStatuses} short-circuits without shelling out. The seed is
+ * the mirror's *only* JIRA read; every later scan diffs against this cache in
+ * memory.
+ *
+ * Returns whether the seed may be considered done: `true` when there was nothing
+ * to seed, or the search succeeded (whether or not every key came back with a
+ * readable status); `false` on a search failure, so the caller does **not** latch
+ * `seeded` — a transient acli/network error retries on the very next reconcile
+ * instead of permanently stranding the cache empty (which would otherwise turn
+ * every linked key into a forever cache-miss, and `driveToTarget` would re-attempt
+ * a live transition on every future scan for the rest of the process's life,
+ * defeating the diff-gate's whole point). Each retry is logged as a no-op in the
+ * meantime, so the failure is still visible without taking down the board.
+ */
+async function seedCache(
+  board: Board,
+  deps: MirrorReconcilerDeps,
+  cache: Map<string, string>,
+  log: (message: string) => void,
+): Promise<boolean> {
+  const keys: string[] = [];
+  for (const prd of board.prds) {
+    const prdDir = join(deps.root, prd.id);
+    const { optIn, epicKey } = deps.readMirror(prdDir);
+    if (optIn === undefined) continue;
+    if (epicKey !== undefined) keys.push(epicKey);
+    for (const issue of prd.issues) {
+      const { childKey } = deps.readIssueMirror(join(prdDir, issue.id));
+      if (childKey !== undefined) keys.push(childKey);
+    }
+  }
+  if (keys.length === 0) return true;
+  try {
+    for (const { key, status } of await deps.seam.searchStatuses(keys)) {
+      // Only a readable status seeds the cache; a found-but-unreadable one stays
+      // absent, so the diff treats it as unknown and heals toward the board's truth.
+      if (status !== undefined) cache.set(key, status);
+    }
+    return true;
+  } catch (err) {
+    log(
+      `mirror cache seed failed — reconciling with an empty cache (no-op), will retry on the next scan: ${errorMessage(err)}`,
+    );
+    return false;
+  }
+}
+
 async function reconcileOnce(
   board: Board,
   deps: MirrorReconcilerDeps,
   statusNames: IssueStatusNames,
+  cache: Map<string, string>,
   log: (message: string) => void,
 ): Promise<MirrorDelta> {
   const created: CreatedEpic[] = [];
@@ -271,41 +361,22 @@ async function reconcileOnce(
           );
           continue;
         }
+        // A fresh epic lands in JIRA's initial column (the "To Do"/backlog bucket);
+        // record that as its last-known status so the diff below only transitions
+        // when the lane's target differs — and so the backref write-back's self-scan
+        // finds it already cached and does nothing (a zero-JIRA no-op, ADR 0029).
+        cache.set(key, statusNames.backlog);
         created.push({ prd: prd.id, key });
       }
 
-      // Self-heal: drive the legal transition toward the lane's target status.
-      // Idempotent — no transition when already at target; an illegal/absent
-      // one is caught below as a logged no-op (graceful degradation).
-      //
-      // Isolated in its own try/catch (not the outer per-PRD one): a transient
-      // `currentStatus` read failure here must not escape to the outer catch,
-      // which would abort this PRD's whole pass and — now that the child loop
-      // sits below — silently skip child creation/self-heal for every Issue of
-      // this PRD too, contradicting "each Issue reconciles independently"
-      // (mirrors the identical isolation `reconcileChild` applies to its own
-      // self-heal read, one level down).
+      // Self-heal, diff-gated (ADR 0028): drive the legal transition toward the
+      // lane's target status only when the in-memory cache says the epic isn't
+      // already there — no network read. Idempotent (a cache hit at target is a
+      // no-op); an illegal/absent transition is a logged no-op (graceful
+      // degradation), never a crash or a `human-review`.
       const target = epicTargetStatus(prd.lane, statusNames);
-      try {
-        const current = await deps.seam.currentStatus(key);
-        if (current === undefined) {
-          log(
-            `epic ${key}: current status could not be read — skipping self-heal (no-op).`,
-          );
-        } else if (!statusEquals(current, target)) {
-          try {
-            await deps.seam.transition(key, target);
-            transitioned.push({ key, to: target });
-          } catch (err) {
-            log(
-              `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
-            );
-          }
-        }
-      } catch (err) {
-        log(
-          `epic ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
-        );
+      if (await driveToTarget(key, target, cache, deps, log, `epic ${key}`)) {
+        transitioned.push({ key, to: target });
       }
 
       // The epic is now durably recorded (backref written or already present), so
@@ -332,6 +403,7 @@ async function reconcileOnce(
           resolveActiveSprint,
           deps,
           statusNames,
+          cache,
           log,
         );
         if (outcome.created) childrenCreated.push(outcome.created);
@@ -403,16 +475,19 @@ function createSprintResolver(
 /**
  * Reconcile one Issue's mirrored child under its PRD's already-existing epic:
  * create-on-first-appearance (incl. a backlog Issue), write the `jira_key`
- * backref, then self-heal the child's status toward the Issue's authored status
- * (mapped to a JIRA bucket by {@link issueTargetStatus}). Mirrors the epic half's
- * shape one level down — idempotent create keyed on the backref (ADR 0029, so a
- * rename/renumber neither orphans nor duplicates), and every JIRA failure a logged
- * no-op (ADR 0028).
+ * backref, place a freshly-created child into the active sprint when the PRD is
+ * `target: sprint`, then self-heal the child's status toward the Issue's authored
+ * status (mapped to a JIRA bucket by {@link issueTargetStatus}). Mirrors the epic
+ * half's shape one level down — idempotent create keyed on the backref (ADR 0029,
+ * so a rename/renumber neither orphans nor duplicates), diff-gated self-heal
+ * against the shared cache (ADR 0028, no network read), and every JIRA failure a
+ * logged no-op (ADR 0028).
  *
  * Wrapped in its own try/catch so one Issue's failure is isolated: the remaining
  * Issues of the PRD (and the other PRDs) still reconcile. Returns what it changed
- * (a create and/or a transition, or nothing) so the caller appends to the delta in
- * board/Issue order — no shared mutable accumulator threaded through.
+ * (a create, a transition, and/or a sprint placement, or nothing) so the caller
+ * appends to the delta in board/Issue order — no shared mutable accumulator
+ * threaded through.
  */
 async function reconcileChild(
   prdId: string,
@@ -423,6 +498,7 @@ async function reconcileChild(
   resolveActiveSprint: () => Promise<string | undefined>,
   deps: MirrorReconcilerDeps,
   statusNames: IssueStatusNames,
+  cache: Map<string, string>,
   log: (message: string) => void,
 ): Promise<ChildOutcome> {
   const issuePath = join(prdDir, issue.id);
@@ -457,6 +533,10 @@ async function reconcileChild(
         );
         return {};
       }
+      // Record the fresh child's initial "To Do"/backlog landing status so the
+      // diff-gate below only transitions when the authored status differs, and so
+      // the backref write-back's self-scan finds it already cached (ADR 0029).
+      cache.set(key, statusNames.backlog);
       created = { issue: issue.id, key };
 
       // Placement is set **once at create** and never re-evaluated (the team owns
@@ -499,31 +579,12 @@ async function reconcileChild(
       );
       return { created, placed };
     }
-    // A read failure here (e.g. a transient acli/network error) must not erase
-    // an already-recorded `created` — the child genuinely exists in JIRA and its
-    // backref is durably written, so that create belongs in the delta regardless
-    // of whether this pass's self-heal read succeeds (mirrors the epic path's
-    // create-before-self-heal-read ordering in `reconcileOnce`).
-    try {
-      const current = await deps.seam.currentStatus(key);
-      if (current === undefined) {
-        log(
-          `child ${key}: current status could not be read — skipping self-heal (no-op).`,
-        );
-      } else if (!statusEquals(current, target)) {
-        try {
-          await deps.seam.transition(key, target);
-          return { created, transitioned: { key, to: target }, placed };
-        } catch (err) {
-          log(
-            `child ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
-          );
-        }
-      }
-    } catch (err) {
-      log(
-        `child ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
-      );
+    // Diff-gated self-heal against the in-memory cache — no network read. A create
+    // this pass has already cached the child's landing status, so an unchanged
+    // child is a pure no-op; the transition (and its cache update) only fires when
+    // the authored status crosses a bucket the cache doesn't already reflect.
+    if (await driveToTarget(key, target, cache, deps, log, `child ${key}`)) {
+      return { created, transitioned: { key, to: target }, placed };
     }
     return { created, placed };
   } catch (err) {
@@ -531,6 +592,43 @@ async function reconcileChild(
       `Issue ${prdId}/${issue.id}: mirror reconcile failed (no-op): ${errorMessage(err)}`,
     );
     return {};
+  }
+}
+
+/**
+ * The diff-gate + self-heal for one issue (epic or child): transition `key` to
+ * `target` **only** when the in-memory `cache` says it isn't already there (ADR
+ * 0028). No network read — the cache is the sole source of the issue's last-known
+ * status, seeded once on board-open and updated on every successful write.
+ *
+ * Returns `true` iff a transition was executed (the caller records the delta). A
+ * cache hit at target is a silent no-op returning `false`; an illegal/absent
+ * transition is a *logged* no-op returning `false` — never a throw, never a
+ * `human-review` (the low-noise failure contract). On success the cache is advanced
+ * to `target`, so the very next scan diff-gates the same board state to nothing.
+ *
+ * `label` is the log prefix (`"epic DS-9"` / `"child DS-50"`), the one detail that
+ * differs between the two callers.
+ */
+async function driveToTarget(
+  key: string,
+  target: string,
+  cache: Map<string, string>,
+  deps: MirrorReconcilerDeps,
+  log: (message: string) => void,
+  label: string,
+): Promise<boolean> {
+  const lastKnown = cache.get(key);
+  if (lastKnown !== undefined && statusEquals(lastKnown, target)) return false;
+  try {
+    await deps.seam.transition(key, target);
+    cache.set(key, target);
+    return true;
+  } catch (err) {
+    log(
+      `${label}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+    );
+    return false;
   }
 }
 

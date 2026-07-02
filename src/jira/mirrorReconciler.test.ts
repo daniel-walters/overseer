@@ -9,6 +9,7 @@ import type {
   CreateChildInput,
   CreateEpicInput,
   JiraSeam,
+  JiraStatus,
 } from "./jiraSeam.js";
 import type { JiraOptIn } from "../issueFile.js";
 import type { Board, Issue, Lane, PRD } from "../model.js";
@@ -34,8 +35,8 @@ class FakeJiraSeam implements JiraSeam {
   failCreate = false;
   /** When set, `createChildIssue` throws — a child-create failure isolated from the epic. */
   failChildCreate = false;
-  /** When set, `currentStatus` throws for this key — a simulated transient read failure. */
-  failCurrentStatusFor: string | undefined = undefined;
+  /** When set, `searchStatuses` throws — a simulated open-time cache-seed failure. */
+  failSearch = false;
   /** board id → its live active sprint id, seeding {@link resolveActiveSprint}. */
   readonly activeSprintByBoard = new Map<string, string>();
   /** When set, `resolveActiveSprint` throws — a simulated acli/agile failure. */
@@ -81,12 +82,16 @@ class FakeJiraSeam implements JiraSeam {
     return key;
   }
 
-  async currentStatus(key: string): Promise<string | undefined> {
-    this.calls.push(`currentStatus:${key}`);
-    if (key === this.failCurrentStatusFor) {
-      throw new Error("acli read failed");
-    }
-    return this.statusByKey.get(key);
+  async searchStatuses(keys: readonly string[]): Promise<readonly JiraStatus[]> {
+    // Record the exact key set the seed asked for, so "one batched search" and
+    // "no search when there are no linked keys" are both assertable via `calls`.
+    this.calls.push(`search:${[...keys].join(",")}`);
+    if (this.failSearch) throw new Error("acli search failed");
+    // Only keys JIRA actually knows come back (a linked key JIRA lost is omitted),
+    // mirroring the real seam's JQL-search seed.
+    return keys
+      .filter((k) => this.statusByKey.has(k))
+      .map((k) => ({ key: k, status: this.statusByKey.get(k) }));
   }
 
   async transition(key: string, toStatus: string): Promise<void> {
@@ -400,10 +405,10 @@ describe("mirrorReconciler — epic status self-heal", () => {
     expect(logs.join("\n")).toMatch(/no-op/i);
   });
 
-  it("still reconciles a PRD's children when the epic's own self-heal read fails", async () => {
+  it("still reconciles a PRD's children when the open-time cache seed fails", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "To Do"); // epic already at target
-    seam.failCurrentStatusFor = "DS-9"; // the epic's own status read fails
+    seam.statusByKey.set("DS-9", "To Do"); // linked epic
+    seam.failSearch = true; // the batched cache seed throws
     const { reconciler, set, setIssue, logs } = harness(seam);
     set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
     setIssue("auth", "001.md", { status: "backlog" });
@@ -412,11 +417,49 @@ describe("mirrorReconciler — epic status self-heal", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The epic's self-heal read failure is its own logged no-op — it must not
-    // escape to the outer per-PRD catch and silently drop the child that
-    // reconciles independently just below it.
+    // A seed failure is its own logged no-op that leaves the cache empty — it must
+    // not take down the pass or drop the child that reconciles just below it. The
+    // child is still created under the linked epic (create is cache-independent).
     expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
-    expect(logs.join("\n")).toMatch(/epic DS-9.*could not be read/i);
+    expect(logs.join("\n")).toMatch(/cache seed failed/i);
+  });
+
+  it("retries the open-time cache seed on the next scan after a transient failure, rather than stranding the cache empty forever", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "In Progress"); // linked epic, already at target
+    seam.failSearch = true; // scan 1: the batched cache seed throws
+    const { reconciler, set } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    const b = board(prd("auth", "in-progress", "Auth"));
+
+    // Scan 1: the seed fails, so the epic (a cache-miss) is diff-gate-bypassed and
+    // a real transition is attempted — same as the seed never having run.
+    const first = await reconciler.reconcile(b);
+    expect(seam.calls.filter((c) => c.startsWith("search:"))).toEqual([
+      "search:DS-9",
+    ]);
+    expect(first.transitioned).toEqual([]); // "In Progress" is legal but already current
+
+    // The transient failure clears; scan 2 must retry the seed (not skip it, since
+    // `seeded` was never latched on the failed attempt) and, once it succeeds,
+    // populate the cache so scan 3 diff-gates to zero further JIRA calls at all.
+    seam.failSearch = false;
+    await reconciler.reconcile(b);
+    expect(seam.calls.filter((c) => c.startsWith("search:"))).toEqual([
+      "search:DS-9",
+      "search:DS-9",
+    ]);
+
+    const callsBeforeThird = seam.calls.length;
+    const third = await reconciler.reconcile(b);
+    expect(third).toEqual({
+      created: [],
+      transitioned: [],
+      childrenCreated: [],
+      childrenTransitioned: [],
+      placed: [],
+    });
+    expect(seam.calls.slice(callsBeforeThird)).toEqual([]);
   });
 
   it("terminates the backref write-back self-scan as a zero-JIRA no-op", async () => {
@@ -437,12 +480,9 @@ describe("mirrorReconciler — epic status self-heal", () => {
 
     expect(second.created).toEqual([]);
     expect(second.transitioned).toEqual([]);
-    // The only calls the second pass may add are reads (currentStatus), never
-    // a create or a transition.
-    expect(seam.calls.slice(callsAfterFirst).filter((c) => c.startsWith("createEpic")))
-      .toEqual([]);
-    expect(seam.calls.slice(callsAfterFirst).filter((c) => c.startsWith("transition")))
-      .toEqual([]);
+    // Diff-gated against the cache the first pass populated on create: the second
+    // pass makes ZERO further JIRA calls at all — no re-seed, no read, no write.
+    expect(seam.calls.slice(callsAfterFirst)).toEqual([]);
   });
 });
 
@@ -628,26 +668,29 @@ describe("mirrorReconciler — child create", () => {
     expect(logs.join("\n")).toMatch(/duplicate child/i);
   });
 
-  it("keeps a child's create in the delta even when the post-create status read fails", async () => {
+  it("keeps a freshly-created child's create in the delta even when its self-heal transition is unavailable", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "To Do"); // epic already at target
+    seam.statusByKey.set("DS-9", "In Progress"); // epic already at target
     seam.projectByBoard.set("34", "DS");
-    const { reconciler, set, childKeyOf } = harness(seam);
+    // "In Review" is NOT a legal transition ⇒ the child's self-heal throws.
+    const { reconciler, set, setIssue, childKeyOf, logs } = harness(seam);
     set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
-    // createChildIssue always mints the next DS-10x key; tell the fake to fail
-    // the very next currentStatus read (the freshly-created child's).
-    seam.failCurrentStatusFor = "DS-101";
+    setIssue("auth", "001.md", { status: "in-review" }); // fresh child, review-ish
 
     const delta = await reconciler.reconcile(
-      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+      board(
+        prd("auth", "in-progress", "Auth", [issue("001.md", "in-review", "One")]),
+      ),
     );
 
-    // The child was genuinely created and its backref durably written; a
-    // transient read failure during self-heal must not erase that from the
-    // delta (mirrors the epic path's create-before-self-heal-read ordering).
+    // The child was genuinely created and its backref durably written; a failed
+    // self-heal transition (the illegal "In Review") must not erase that from the
+    // delta — the create precedes and is independent of the transition attempt.
     expect(seam.childrenCreated).toHaveLength(1);
     expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(delta.childrenTransitioned).toEqual([]);
     expect(childKeyOf("auth", "001.md")).toBe("DS-101");
+    expect(logs.join("\n")).toMatch(/no-op/i);
   });
 });
 
@@ -920,6 +963,33 @@ describe("mirrorReconciler — child status self-heal", () => {
     expect(logs.join("\n")).toMatch(/status could not be read/i);
   });
 
+  it("never crosses an Overseer overlay to JIRA — an out-of-vocabulary status is a logged no-op, never a transition", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "In Progress"); // linked epic
+    seam.statusByKey.set("DS-50", "In Progress"); // linked child
+    // Every workflow status is available, so a transition would succeed *if* one
+    // were ever attempted — proving the no-op is the mapping's choice, not a failure.
+    for (const s of ["To Do", "In Progress", "In Review", "Done"]) {
+      seam.legalStatuses.add(s);
+    }
+    const { reconciler, set, setIssue, logs } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    // An operational signal the board might carry (an orphan/bad-status overlay is
+    // never one of the ten authored statuses) maps to no JIRA bucket.
+    setIssue("auth", "001.md", { status: "orphaned", childKey: "DS-50" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "in-progress", "Auth", [issue("001.md", "in-progress")])),
+    );
+
+    // No bucket, so no transition of any kind is even attempted — the overlay is
+    // never reflected into JIRA, only logged.
+    expect(delta.childrenTransitioned).toEqual([]);
+    expect(seam.calls.some((c) => c.startsWith("transition:DS-50"))).toBe(false);
+    expect(seam.statusByKey.get("DS-50")).toBe("In Progress"); // untouched
+    expect(logs.join("\n")).toMatch(/maps to no JIRA bucket/i);
+  });
+
   it("terminates the child backref write-back self-scan as a zero-JIRA no-op", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
@@ -940,11 +1010,83 @@ describe("mirrorReconciler — child status self-heal", () => {
 
     expect(second.childrenCreated).toEqual([]);
     expect(second.childrenTransitioned).toEqual([]);
-    expect(
-      seam.calls.slice(callsAfterFirst).filter((c) => c.startsWith("createChild")),
-    ).toEqual([]);
-    expect(
-      seam.calls.slice(callsAfterFirst).filter((c) => c.startsWith("transition")),
-    ).toEqual([]);
+    // Both backrefs are present (no re-create) and the cache — advanced on the
+    // create — already reflects the target, so the self-scan is diff-gated to a
+    // pure no-op: zero further JIRA calls at all.
+    expect(seam.calls.slice(callsAfterFirst)).toEqual([]);
+  });
+});
+
+describe("mirrorReconciler — diff-gated sync (cache + open-time seed)", () => {
+  it("makes zero writes when no bucket crosses, and after the open-time seed zero reads", async () => {
+    const seam = new FakeJiraSeam();
+    // A fully-linked PRD whose epic and child already sit at their target status
+    // in JIRA — nothing on the board has crossed a bucket.
+    seam.statusByKey.set("DS-9", "In Progress"); // epic at target
+    seam.statusByKey.set("DS-50", "In Progress"); // child at target
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    setIssue("auth", "001.md", { status: "in-progress", childKey: "DS-50" });
+    const b = board(
+      prd("auth", "in-progress", "Auth", [issue("001.md", "in-progress")]),
+    );
+
+    // First scan (board-open): one batched search seeds the cache; no writes.
+    const first = await reconciler.reconcile(b);
+    expect(first).toEqual({
+      created: [],
+      transitioned: [],
+      childrenCreated: [],
+      childrenTransitioned: [],
+      placed: [],
+    });
+    // Exactly one JIRA call — the batched seed over both linked keys.
+    expect(seam.calls).toEqual(["search:DS-9,DS-50"]);
+
+    // Second scan: nothing crossed, and the cache is already seeded — so the diff
+    // is entirely in memory: zero further JIRA calls (no re-seed, no read, no write).
+    const second = await reconciler.reconcile(b);
+    expect(second).toEqual({
+      created: [],
+      transitioned: [],
+      childrenCreated: [],
+      childrenTransitioned: [],
+      placed: [],
+    });
+    expect(seam.calls).toEqual(["search:DS-9,DS-50"]);
+  });
+
+  it("transitions an Issue's child on the scan after the board advances it, then diff-gates the next scan to nothing", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "In Progress"); // epic already at target
+    seam.statusByKey.set("DS-50", "In Progress"); // child starts in progress
+    seam.legalStatuses.add("In Review");
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+
+    // Scan 1: the Issue is still in-progress on the board — nothing crosses.
+    setIssue("auth", "001.md", { status: "in-progress", childKey: "DS-50" });
+    const first = await reconciler.reconcile(
+      board(prd("auth", "in-progress", "Auth", [issue("001.md", "in-progress")])),
+    );
+    expect(first.childrenTransitioned).toEqual([]);
+
+    // The board advances the Issue to a review-ish status. Scan 2 sees the crossed
+    // bucket (cache says In Progress, target is now In Review) and transitions.
+    setIssue("auth", "001.md", { status: "in-review", childKey: "DS-50" });
+    const second = await reconciler.reconcile(
+      board(prd("auth", "in-progress", "Auth", [issue("001.md", "in-review")])),
+    );
+    expect(second.childrenTransitioned).toEqual([{ key: "DS-50", to: "In Review" }]);
+    expect(seam.statusByKey.get("DS-50")).toBe("In Review");
+
+    // Scan 3: the successful transition advanced the cache, so the same board
+    // state now diff-gates to a pure no-op — no second transition of the same move.
+    const callsBeforeThird = seam.calls.length;
+    const third = await reconciler.reconcile(
+      board(prd("auth", "in-progress", "Auth", [issue("001.md", "in-review")])),
+    );
+    expect(third.childrenTransitioned).toEqual([]);
+    expect(seam.calls.slice(callsBeforeThird)).toEqual([]);
   });
 });
