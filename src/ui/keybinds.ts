@@ -44,7 +44,7 @@ export interface KeyPress {
  *
  * - `move` steps the selection one square in a spatial direction (movement keys derive it).
  * - `zoom` / `back` drive the level reducer (Enter zooms in, Esc backs out).
- * - `dispatch` / `review` / `redispatch` / `kill` / `markDone` / `approve` / `openPr` / `deletePrd` open the matching preview.
+ * - `dispatch` / `review` / `audit` / `redispatch` / `kill` / `markDone` / `approve` / `openPr` / `deletePrd` open the matching preview.
  * - `goToPr` opens the selected `done` PRD's linked PR in the browser.
  * - `toggleAutoRun` flips the global auto-run brake.
  * - `viewDetail` opens the selected card's body in the detail modal.
@@ -57,6 +57,7 @@ export interface KeybindHandlers {
   readonly back: () => void;
   readonly dispatch: () => void;
   readonly review: () => void;
+  readonly audit: () => void;
   readonly redispatch: () => void;
   readonly kill: () => void;
   readonly markDone: () => void;
@@ -228,6 +229,25 @@ export const KEYBINDS: readonly Keybind[] = [
     matches: (p) => p.input === "r",
     eligible: (ctx) => ctx.issueReadyForReview,
     action: (h) => h.review(),
+  },
+  {
+    // The manual audit crank (PRD: Auditor Edge, ADR 0026): `c` spawns the
+    // auditor for the selected `ready-for-audit` Issue, running the *same*
+    // flip-before-spawn (`ready-for-audit → in-audit`) the Reactor's audit pass
+    // does — just human-triggered, so a hand-stepped pipeline (auto-run off) does
+    // not jam at the audit phase. Lowercase + bare, in the cheap per-Issue spawn
+    // family with `r`: a deliberate act on one Issue's recorded worktree. Eligible
+    // only on a waiting `ready-for-audit` card (the `issueReadyForAudit` gate, which
+    // is the audit lane minus the liveness overlay an in-audit auditor carries), so
+    // the matcher inerts and the hint hides on a running auditor and every other
+    // lane; the `?` reference lists it regardless (the eligibility exception).
+    key: "c",
+    label: "Audit a ready-for-audit Issue",
+    level: "issues",
+    hint: true,
+    matches: (p) => p.input === "c",
+    eligible: (ctx) => ctx.issueReadyForAudit,
+    action: (h) => h.audit(),
   },
   {
     key: "R",

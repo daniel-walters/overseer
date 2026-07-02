@@ -23,6 +23,7 @@ const HEADINGS = [
   "Backlog",
   "Ready",
   "In Progress",
+  "Audit",
   "Ready for Review",
   "In Review",
   "Human Review",
@@ -76,6 +77,16 @@ const prd: PRD = {
       lane: "in-review",
       liveness: "unknown",
     },
+    // Both audit-phase statuses fold into the single `audit` lane: an active
+    // `in-audit` card carries a liveness marker, a waiting `ready-for-audit` card
+    // carries none — the overlay is what tells them apart (ADR 0026).
+    {
+      id: "035-auditing",
+      title: "Auditing",
+      lane: "audit",
+      liveness: "orphaned",
+    },
+    { id: "037-awaiting-audit", title: "AwaitingAudit", lane: "audit" },
   ],
 };
 
@@ -125,6 +136,30 @@ describe("IssueBoard", () => {
 
     expect(columnOf(frame, "Reviewing")).toBe("In Review");
     expect(columnOf(frame, "unknown")).toBe("In Review");
+  });
+
+  it("folds both audit-phase statuses into a single Audit column between In Progress and Ready for Review", () => {
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
+    const flat = stripAnsi(frame);
+
+    // Exactly one standalone `Audit` heading renders (the \b excludes the card
+    // titles `Auditing` / `AwaitingAudit`) — not a column each for the two statuses…
+    expect(flat.match(/\bAudit\b/g)?.length).toBe(1);
+    // …and both the active and the waiting card land in it.
+    expect(columnOf(frame, "Auditing")).toBe("Audit");
+    expect(columnOf(frame, "AwaitingAudit")).toBe("Audit");
+  });
+
+  it("distinguishes the active in-audit card from the waiting one by the liveness overlay", () => {
+    const frame = render(<IssueBoard prd={prd} selected={{ laneIndex: 0, rowIndex: 0 }} />).lastFrame() ?? "";
+
+    // The active `in-audit` card carries a liveness marker in the Audit column…
+    expect(columnOf(frame, "orphaned")).toBe("Audit");
+    // …while the waiting `ready-for-audit` card has none — no marker line follows
+    // its title (it reads as a plain waiting card).
+    const flat = stripAnsi(frame);
+    const awaitingLine = flat.split("\n").find((l) => l.includes("AwaitingAudit")) ?? "";
+    expect(awaitingLine).not.toMatch(/live|orphaned|unknown/);
   });
 
   it("surfaces the suppressed marker on a launch-failed ready Issue's card", () => {

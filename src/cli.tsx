@@ -15,6 +15,7 @@ import { createDetailReader } from "./ui/detailReader.js";
 import { createAgentOutputReader, realLogs } from "./ui/agentOutputReader.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
+import { createAuditor } from "./audit/auditor.js";
 import { createRollback } from "./dispatch/rollback.js";
 import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
@@ -22,6 +23,7 @@ import { createFailedSet, suppressedSeam } from "./reactor/failedSet.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { realMergeSeam } from "./review/mergeSeam.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
+import { appendSpawnAudit, defaultSpawnAuditPath } from "./dispatch/spawnAudit.js";
 import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
 import {
   createLivenessProbe,
@@ -64,12 +66,14 @@ function runBoard(): void {
   let review: ReviewConfig;
   let implementorAgent: AgentConfig;
   let reviewerAgent: AgentConfig;
+  let auditorAgent: AgentConfig;
   try {
     const config = loadConfig();
     root = config.root;
     review = config.review;
     implementorAgent = config.implementor;
     reviewerAgent = config.reviewer;
+    auditorAgent = config.auditor;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -80,10 +84,29 @@ function runBoard(): void {
   // The real spawn edge: confirming a dispatch validates each repo, ensures the
   // PRD feature branch, flips Issues to in-progress (driving the live board),
   // and launches a background `claude --bg` agent per spawn candidate.
-  const { spawn, logFailure } = createSpawnEdge({
+  const { spawn: rawSpawn, logFailure } = createSpawnEdge({
     exec: realExec,
     logPath: defaultLogPath(),
   });
+  // Wrap the one shared spawn seam every launch flows through — the Reactor's
+  // auto-spawns and the manual `d`/`c`/`r` cranks all call this `spawn` — with a
+  // best-effort spawn-audit line (timestamp, pid, edge, Issue, repo, outcome). It
+  // is purely observational: it makes an over-spawn catchable (the same edge
+  // relaunching the same Issue seconds apart shows as two lines) without changing
+  // any spawn behaviour, and never throws, so the launch it wraps is unaffected.
+  const spawnAuditPath = defaultSpawnAuditPath();
+  const spawn = (repo: string, prompt: string, agent?: AgentConfig) => {
+    try {
+      const handle = rawSpawn(repo, prompt, agent);
+      appendSpawnAudit(spawnAuditPath, { repo, prompt, handle });
+      return handle;
+    } catch (error) {
+      // Record the failed launch too — a rolled-back spawn that retries is exactly
+      // the double-spawn we want to see — then re-throw so rollback still happens.
+      appendSpawnAudit(spawnAuditPath, { repo, prompt, handle: undefined, error });
+      throw error;
+    }
+  };
   // The sidecar persists each spawned agent's captured `--bg` handle as
   // `issueKey → handle` outside the watched root (ADR 0008), so a later board
   // open can join a live `claude agents --json` row back to its Issue. Shared by
@@ -189,6 +212,18 @@ function runBoard(): void {
     failedSet,
     review,
   });
+  // The manual audit crank (`c`, PRD: Auditor Edge, ADR 0026): it reuses the very
+  // same `claude --bg` spawn edge, failure log, and shared failed-set the Reactor's
+  // audit pass uses, flipping ready-for-audit → in-audit and launching the auditor
+  // in the Issue's repo — so a hand-driven `c` and an auto-spawned auditor behave
+  // identically. It carries no review-pass count: the audit edge is a single pass.
+  const auditor = createAuditor(root, {
+    spawn,
+    agent: auditorAgent,
+    logFailure,
+    recordHandle,
+    failedSet,
+  });
   // Orphan recovery (ADR 0009): `R` on an orphaned card rolls its active status
   // back onto its frontier through the same status seam the launch-failure
   // rollback uses. It spawns nothing — the normal spawn edge (the Reactor below
@@ -267,6 +302,7 @@ function runBoard(): void {
     review,
     implementor: implementorAgent,
     reviewer: reviewerAgent,
+    auditor: auditorAgent,
   });
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
@@ -285,6 +321,7 @@ function runBoard(): void {
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}
+      auditor={auditor}
       rollback={rollback}
       killer={killer}
       openPr={openPr}

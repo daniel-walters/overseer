@@ -4,6 +4,7 @@ import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
+import { AuditPreview } from "./AuditPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { DetailModal, DETAIL_MODAL_CHROME_ROWS, DETAIL_MODAL_CHROME_COLS } from "./DetailModal.js";
 import { AgentOutputModal, AGENT_OUTPUT_MODAL_CHROME_ROWS } from "./AgentOutputModal.js";
@@ -30,6 +31,7 @@ import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchResult } from "../dispatch/dispatch.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
+import type { AuditPreview as AuditPreviewData } from "../audit/auditReader.js";
 import type {
   RedispatchPreview as RedispatchPreviewData,
   RollbackOutcome,
@@ -105,6 +107,26 @@ export interface Reviewer {
     issueId: string,
   ) => ReviewPreviewData | undefined;
   readonly review: (preview: ReviewPreviewData) => void;
+}
+
+/**
+ * The audit seams the App drives at the Issue level — the manual audit crank
+ * (`c`), the audit counterpart to {@link Reviewer} (PRD: Auditor Edge, ADR 0026).
+ * A deliberate per-Issue act on one Issue's recorded worktree, just like `r`.
+ *
+ * - `readAudit` resolves the selected Issue and classifies its auditability for
+ *   the preview (`undefined` if it vanished from the watched root).
+ * - `audit` runs the audit over a previewed Issue (flip `ready-for-audit →
+ *   in-audit`, then spawn the auditor — the *same* flip-before-spawn the Reactor's
+ *   audit pass does) — a no-op for an ineligible Issue. It never reviews, merges,
+ *   or writes a terminal status.
+ */
+export interface Auditor {
+  readonly readAudit: (
+    prdId: string,
+    issueId: string,
+  ) => AuditPreviewData | undefined;
+  readonly audit: (preview: AuditPreviewData) => void;
 }
 
 /**
@@ -279,6 +301,7 @@ export interface AgentOutputReader {
 type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
   | { readonly kind: "review"; readonly preview: ReviewPreviewData }
+  | { readonly kind: "audit"; readonly preview: AuditPreviewData }
   | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData }
   | { readonly kind: "kill"; readonly preview: KillPreviewData }
   | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData }
@@ -318,6 +341,8 @@ interface AppProps {
   dispatcher?: Dispatcher;
   /** Wired in production; absent in tests that don't exercise review. */
   reviewer?: Reviewer;
+  /** Wired in production; absent in tests that don't exercise the manual audit crank. */
+  auditor?: Auditor;
   /** Wired in production; absent in tests that don't exercise orphan recovery. */
   rollback?: Rollback;
   /** Wired in production; absent in tests that don't exercise the kill switch. */
@@ -374,7 +399,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
+export function App({ board, dispatcher, reviewer, auditor, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -540,6 +565,20 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         // A vanished Issue (raced a deletion) yields no preview — open nothing.
         if (preview) {
           setModal({ kind: "review", preview });
+          dispatch({ type: "open-review" });
+        }
+      }
+    },
+    audit: () => {
+      // The manual audit crank, Issue-level only (the registry gates the level
+      // and the `ready-for-audit` eligibility). `readAudit` freezes the Issue and
+      // its PRD context on the modal; a vanished Issue (raced a deletion) yields
+      // no preview — open nothing. Confirm runs the same flip-before-spawn the
+      // Reactor's audit pass does (ADR 0026).
+      if (auditor && selectedPrd && selectedIssue) {
+        const preview = auditor.readAudit(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "audit", preview });
           dispatch({ type: "open-review" });
         }
       }
@@ -855,7 +894,7 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     bind?.action(handlers, { input, key });
   });
 
-  /** Act on the frozen modal capture: dispatch a frontier, or review an Issue. */
+  /** Act on the frozen modal capture: dispatch a frontier, review or audit an Issue. */
   function confirmModal(): void {
     if (modal?.kind === "dispatch") {
       // The spawn edge runs synchronously and each `claude --bg` cold-start takes
@@ -890,6 +929,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       // An ineligible Issue's preview is a read-only skip notice: confirm spawns
       // nothing, it just dismisses (the reviewer would no-op anyway).
       reviewer?.review(modal.preview);
+    } else if (modal?.kind === "audit" && modal.preview.eligibility.auditable) {
+      // The manual audit crank: confirm flips `ready-for-audit → in-audit` and
+      // spawns the auditor (ADR 0026). An ineligible Issue's preview is a read-only
+      // skip notice — confirm spawns nothing (the auditor would no-op anyway).
+      auditor?.audit(modal.preview);
     } else if (modal?.kind === "redispatch") {
       // Roll the orphan back onto its frontier; the normal spawn edge re-picks
       // it up. No spawn happens here. `rollback` re-reads the Issue from disk, so
@@ -1006,6 +1050,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   }
   if (modal?.kind === "review") {
     return <ReviewPreview preview={modal.preview} />;
+  }
+  if (modal?.kind === "audit") {
+    return <AuditPreview preview={modal.preview} />;
   }
   if (modal?.kind === "redispatch") {
     return <RedispatchPreview preview={modal.preview} />;

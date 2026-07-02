@@ -156,6 +156,79 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("tolerance policy", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("resolves the default policy (style/docs low, rest none) when no table is present", () => {
+      writeFileSync(configPath, 'root = "~"\n');
+
+      expect(loadConfig({ configPath, home }).review.tolerance).toEqual({
+        correctness: "none",
+        security: "none",
+        architecture: "none",
+        style: "low",
+        test: "none",
+        docs: "low",
+      });
+    });
+
+    it("resolves the configured per-Category thresholds from a [review.tolerance] table", () => {
+      writeWithRoot(
+        '[review.tolerance]\nstyle = "medium"\ndocs = "high"\narchitecture = "low"\n',
+      );
+
+      expect(loadConfig({ configPath, home }).review.tolerance).toEqual({
+        correctness: "none",
+        security: "none",
+        architecture: "low",
+        style: "medium",
+        test: "none",
+        docs: "high",
+      });
+    });
+
+    it("reproduces today's behaviour byte-for-byte with an all-none config", () => {
+      writeWithRoot(
+        '[review.tolerance]\ncorrectness = "none"\nsecurity = "none"\narchitecture = "none"\nstyle = "none"\ntest = "none"\ndocs = "none"\n',
+      );
+
+      const { tolerance } = loadConfig({ configPath, home }).review;
+
+      expect(Object.values(tolerance).every((v) => v === "none")).toBe(true);
+    });
+
+    it("falls back to the default for an out-of-set Severity without throwing", () => {
+      writeWithRoot('[review.tolerance]\nstyle = "extreme"\ndocs = "high"\n');
+
+      const { tolerance } = loadConfig({ configPath, home }).review;
+
+      // The bad value reverts to that Category's default; the good one applies.
+      expect(tolerance.style).toBe("low");
+      expect(tolerance.docs).toBe("high");
+    });
+
+    it("ignores an unknown Category key without throwing", () => {
+      writeWithRoot('[review.tolerance]\nperformance = "high"\nstyle = "medium"\n');
+
+      const { tolerance } = loadConfig({ configPath, home }).review;
+
+      expect(tolerance).not.toHaveProperty("performance");
+      expect(tolerance.style).toBe("medium");
+    });
+
+    it("does not throw when the tolerance value is the wrong type", () => {
+      writeWithRoot("[review.tolerance]\nstyle = 3\n");
+
+      expect(() => loadConfig({ configPath, home })).not.toThrow();
+      expect(loadConfig({ configPath, home }).review.tolerance.style).toBe(
+        "low",
+      );
+    });
+  });
+
   describe("agent runtime knobs", () => {
     /** Write a valid root plus the given extra TOML body. */
     function writeWithRoot(extra: string): void {
@@ -225,6 +298,73 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
       // The message lists the session-effort vocabulary, including xhigh/max.
       expect(() => loadConfig({ configPath, home })).toThrow(/xhigh/i);
+    });
+  });
+
+  describe("auditor runtime knobs", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults the auditor to model opus and inherited effort when the table is absent", () => {
+      // The auditor's model defaults to `opus` — the deliberate divergence from the
+      // inherit-by-default of the other two edges (ADR 0026), so the gate against
+      // silent scope drift is strong even on an unconfigured board.
+      writeFileSync(configPath, 'root = "~"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "opus",
+        effort: null,
+      });
+    });
+
+    it("reads model and effort from the [auditor] table when present", () => {
+      writeWithRoot('[auditor]\nmodel = "sonnet"\neffort = "high"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "sonnet",
+        effort: "high",
+      });
+    });
+
+    it("keeps the opus model default when only effort is set", () => {
+      writeWithRoot('[auditor]\neffort = "max"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "opus",
+        effort: "max",
+      });
+    });
+
+    it("overrides the opus default when only the model is set, leaving effort inherited", () => {
+      writeWithRoot('[auditor]\nmodel = "haiku"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "haiku",
+        effort: null,
+      });
+    });
+
+    it("throws a ConfigError naming the table for a non-table value", () => {
+      writeWithRoot('auditor = "opus"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/auditor/i);
+    });
+
+    it("throws a ConfigError for an empty model string", () => {
+      writeWithRoot('[auditor]\nmodel = ""\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/model/i);
+    });
+
+    it("throws a ConfigError naming the allowed values for an unknown effort", () => {
+      writeWithRoot('[auditor]\neffort = "extreme"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
     });
   });
 });

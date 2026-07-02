@@ -18,6 +18,7 @@ function issue(overrides: Partial<DispatchIssue> = {}): DispatchIssue {
     reviewVerdict: "reviewVerdict" in overrides ? overrides.reviewVerdict : "clean",
     slice: overrides.slice,
     reviewFindings: overrides.reviewFindings,
+    reviewTolerated: overrides.reviewTolerated,
     body: overrides.body ?? "",
   };
 }
@@ -197,6 +198,21 @@ describe("resolveVerdict", () => {
     expect(d.cleanups).toEqual([]);
     expect(d.humanReviews).toHaveLength(1);
     expect(d.humanReviews[0]!.path).toBe("/root/prd/001-a.md");
+    expect(d.humanReviews[0]!.reason).toBe("deviation");
+  });
+
+  it("resolves a deviating Issue to deviation even when the merge would conflict", () => {
+    // Deviation takes precedence over conflict (ADR 0026): because deviation is
+    // read before the merge handoff, a deviating Issue never reaches the merge, so
+    // a would-be conflict can never be the surfaced reason. This locks that
+    // ordering — the three human_review_reason values stay mutually exclusive.
+    const d = deps({
+      merge: () => ({ outcome: "conflict", files: ["src/a.ts"] }),
+    });
+    resolveVerdict(issue({ deviation: "took a shortcut on the cache" }), FEATURE, d);
+
+    expect(d.merges).toEqual([]); // never merged: deviation short-circuits first
+    expect(d.humanReviews).toHaveLength(1);
     expect(d.humanReviews[0]!.reason).toBe("deviation");
   });
 
