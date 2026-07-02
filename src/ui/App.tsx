@@ -470,6 +470,22 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
   // the synchronous `dispatch` action it gates, so there is no stale-read window.
   const frontierRef = useRef<readonly FrontierEntry[]>([]);
 
+  // The `o`-open path's async guard (ADR 0030): `renderTerminal` awaits an emulator
+  // flush, so between the keypress and the `.then` the user may have navigated to a
+  // different card, pressed `o` again, or opened an unrelated modal. `agentOutputLiveRef`
+  // mirrors the *current* selection and whether any modal is open (refreshed every
+  // render, unlike the handler's own closure which is frozen at keypress time) and
+  // `agentOutputRequestIdRef` is a monotonic counter so only the most recently started
+  // request may still apply its result — an older, superseded, or now-irrelevant
+  // resolution is discarded rather than silently hijacking whatever is on screen by
+  // the time it lands.
+  const agentOutputLiveRef = useRef<{
+    readonly prdId: string | undefined;
+    readonly issueId: string | undefined;
+    readonly modalOpen: boolean;
+  }>({ prdId: undefined, issueId: undefined, modalOpen: false });
+  const agentOutputRequestIdRef = useRef(0);
+
   // Resolve the stored grid coordinate against the live board into the card it
   // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
   // here on the render side and threaded into both the reducer's `move` action
@@ -483,6 +499,13 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
   const issueShape = laneShape(issues, ISSUE_LANES);
   const issueSel = selectedCoord(nav.issues, issueShape);
   const selectedIssue = cardAtCoord(issues, ISSUE_LANES, issueSel);
+  // Refreshed every render so the async `o`-open path above can compare "what was
+  // selected/open when the request started" against "what is selected/open now".
+  agentOutputLiveRef.current = {
+    prdId: selectedPrd?.id,
+    issueId: selectedIssue?.id,
+    modalOpen: modal !== undefined,
+  };
   // The lane shape for the level that currently owns input — what a `move`
   // carries so the pure reducer knows the grid's geometry.
   const activeShape = nav.level === "board" ? boardShape : issueShape;
@@ -796,10 +819,36 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
           // once the (bounded, short) flush resolves. `columns`/`rows` are read here
           // from the current window size, the same dimensions the render sizes the
           // scroll window to, so the emulated grid and the windowed view agree.
+          //
+          // The flush is awaited, so the keypress and the resolution are not the
+          // same instant: the user may navigate away, press `o` again, or open a
+          // different modal in between. `requestId` + `agentOutputLiveRef` (kept
+          // fresh every render, unlike this closure) let the `.then` tell whether
+          // its request is still the relevant one before it ever touches state —
+          // an older, superseded, or now-irrelevant resolution is dropped instead
+          // of silently hijacking whatever is on screen by the time it lands.
+          const requestId = ++agentOutputRequestIdRef.current;
+          const requestedPrdId = selectedPrd.id;
+          const requestedIssueId = selectedIssue.id;
           void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
             (lines) => {
+              const live = agentOutputLiveRef.current;
+              const stillRelevant =
+                agentOutputRequestIdRef.current === requestId &&
+                live.prdId === requestedPrdId &&
+                live.issueId === requestedIssueId &&
+                !live.modalOpen;
+              if (!stillRelevant) return;
               setDetailScroll(0); // always open at the top, never a stale position
               setModal({ kind: "agent-output", output, lines: [...lines] });
+            },
+            () => {
+              // The emulator rejected unexpectedly (e.g. a malformed byte stream
+              // throwing inside the write). Degrade to the same legible-notice
+              // pattern as the "no recorded agent" race below rather than leaving
+              // `o` a silent, permanent no-op.
+              if (agentOutputRequestIdRef.current !== requestId) return;
+              setNotice(`${requestedIssueId} agent output could not be rendered — re-check the board.`);
             },
           );
         } else {
