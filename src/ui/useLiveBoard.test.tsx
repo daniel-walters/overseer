@@ -134,6 +134,46 @@ describe("useLiveBoard", () => {
     expect(mirror.reconcile).toHaveBeenCalledWith(scanned);
   });
 
+  it("hands the mirror the post-reconcile board when a reactor is wired, not the pre-flip scan", async () => {
+    // When a reactor is wired, the board the user sees is the post-reconcile
+    // re-scan (see the re-scan test above). The mirror must reconcile against
+    // that same rendered board, not the pre-flip scan it would have gotten from
+    // the first read — otherwise it would echo a status JIRA has already moved
+    // past.
+    let onChange = () => {};
+    const scan = vi
+      .fn<() => Board>()
+      .mockReturnValueOnce(board("PreFlip"))
+      .mockReturnValue(board("PostFlip"));
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+    const reactor = {
+      reconcile: vi.fn(),
+      setEnabled: vi.fn(),
+      activity: vi.fn(() => "idle" as const),
+    };
+    const mirror = { reconcile: vi.fn() };
+
+    render(
+      <Probe
+        root="/root"
+        initialBoard={board("First")}
+        scan={scan}
+        watch={watch}
+        reactor={reactor}
+        mirror={mirror}
+      />,
+    );
+
+    onChange();
+    await tick();
+
+    expect(mirror.reconcile).toHaveBeenCalledTimes(1);
+    expect(mirror.reconcile).toHaveBeenCalledWith(board("PostFlip"));
+  });
+
   it("fires onReconciled after each post-rebuild reconcile, in order", async () => {
     // The activity signal is owned by the caller (LiveApp), which re-reads the
     // Reactor in this callback. The hook's contract is just that it fires it after
