@@ -3,6 +3,7 @@ import {
   parseBoardProject,
   parseWorkItemStatus,
   parseCreatedKey,
+  parseActiveSprintId,
 } from "./jiraSeam.js";
 
 describe("parseBoardProject", () => {
@@ -69,5 +70,32 @@ describe("parseCreatedKey", () => {
       errorMessages: ["Related to DS-42, cannot create: permission denied"],
     });
     expect(parseCreatedKey(errorJson)).toBeUndefined();
+  });
+});
+
+describe("parseActiveSprintId", () => {
+  it("reads the first sprint's id from `board list-sprints --state active --json`", () => {
+    // The real acli shape mirrors the Agile API: a `sprints` array of sprint
+    // objects, each with a numeric `id`. Called with `--state active`, every
+    // returned sprint is active, so the first one is the board's active sprint.
+    const json = JSON.stringify({
+      isLast: true,
+      sprints: [
+        { id: 87, state: "active", name: "Sprint 12" },
+        { id: 88, state: "active", name: "Sprint 13" },
+      ],
+    });
+    // Numeric ids coerce to their string form (the seam speaks in string ids).
+    expect(parseActiveSprintId(json)).toBe("87");
+  });
+
+  it("returns undefined when the board has no active sprint (empty list)", () => {
+    // Degrades to a logged no-op upstream: no active sprint ⇒ leave in backlog.
+    expect(parseActiveSprintId(JSON.stringify({ sprints: [] }))).toBeUndefined();
+  });
+
+  it("returns undefined for unparseable or shapeless output", () => {
+    expect(parseActiveSprintId("not json")).toBeUndefined();
+    expect(parseActiveSprintId(JSON.stringify({ isLast: true }))).toBeUndefined();
   });
 });

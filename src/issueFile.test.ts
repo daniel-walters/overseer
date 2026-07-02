@@ -285,6 +285,28 @@ describe("parseJiraOptIn", () => {
     const { data } = safeMatter('---\njira:\n  board: ""\n  project: "  "\n---\n');
     expect(parseJiraOptIn(data)).toEqual({});
   });
+
+  it("reads target: sprint from the block", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n  target: sprint\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42", target: "sprint" });
+  });
+
+  it("reads target: backlog from the block", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n  target: backlog\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42", target: "backlog" });
+  });
+
+  it("leaves target undefined when the block omits it (reconciler defaults it)", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n---\n');
+    expect(parseJiraOptIn(data)?.target).toBeUndefined();
+  });
+
+  it("drops an unrecognised target value to undefined", () => {
+    // A hand-edit typo (`target: current`) must never be read as a legal
+    // placement; the reconciler then falls back to its default.
+    const { data } = safeMatter('---\njira:\n  board: "42"\n  target: current\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42" });
+  });
 });
 
 describe("writeJiraEpic", () => {

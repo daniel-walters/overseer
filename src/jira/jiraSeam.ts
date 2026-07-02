@@ -68,6 +68,24 @@ export interface JiraSeam {
    * already at the target) is the reconciler's job, via {@link currentStatus}.
    */
   transition(key: string, toStatus: string): Promise<void>;
+  /**
+   * Resolve the board's live **active sprint** id (JIRA Agile API via acli), or
+   * `undefined` when the board has no active sprint — the reconciler treats the
+   * latter as a logged no-op that leaves the child in the backlog (user story 7).
+   * Used only for `target: sprint` PRDs, at child-create time. Rejects on an acli
+   * failure (unauthed, bad board, network), which the reconciler catches as a
+   * logged no-op just like {@link resolveProject}.
+   */
+  resolveActiveSprint(board: string): Promise<string | undefined>;
+  /**
+   * Place a child issue into a sprint (JIRA Agile API via acli) — the sprint
+   * resolved by {@link resolveActiveSprint}. Called **once at create** for a
+   * `target: sprint` PRD's child and never again (placement is set once; the team
+   * owns subsequent sprint moves — user story 8). Never called for an epic, which
+   * is never sprinted. Rejects on any acli failure, which the reconciler catches
+   * as a logged no-op (the child simply stays where JIRA created it).
+   */
+  assignToSprint(sprintId: string, key: string): Promise<void>;
 }
 
 /** The fields the mirror supplies when creating an epic. */
@@ -171,6 +189,40 @@ export function parseCreatedKey(output: string): string | undefined {
   }
   // Not parseable as JSON: a plain success line. Scan it for a JIRA key.
   return output.match(/[A-Z][A-Z0-9]+-\d+/)?.[0];
+}
+
+/**
+ * Recover the board's active-sprint id from `acli jira board list-sprints
+ * --state active --json` output. The Agile-API shape is an array of sprint
+ * objects under `sprints` (with a `values` fallback, the raw REST key), each
+ * carrying a numeric `id`; the first element's id is the board's active sprint
+ * (the call already filters to `--state active`). Returns `undefined` for an
+ * empty list (no active sprint) or unparseable/shapeless output, so the mirror
+ * degrades to a logged no-op — a child without an active sprint stays in the
+ * backlog rather than erroring. The numeric id is coerced to its string form,
+ * since the seam speaks in string ids throughout.
+ */
+export function parseActiveSprintId(json: string): string | undefined {
+  const parsed = tryParse(json);
+  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
+    return undefined;
+  }
+  const list =
+    (parsed as { sprints?: unknown }).sprints ??
+    (parsed as { values?: unknown }).values;
+  if (!Array.isArray(list)) return undefined;
+  return firstSprintId(list);
+}
+
+/** The `id` of the first array element that carries a usable sprint id, as a string. */
+function firstSprintId(items: readonly unknown[]): string | undefined {
+  for (const item of items) {
+    if (item === null || typeof item !== "object") continue;
+    const id = (item as { id?: unknown }).id;
+    if (typeof id === "number" && Number.isFinite(id)) return String(id);
+    if (typeof id === "string" && id.trim() !== "") return id.trim();
+  }
+  return undefined;
 }
 
 /** The `key` of the first array element that carries a non-blank string `key`. */
@@ -296,6 +348,48 @@ export const realJiraSeam: JiraSeam = {
       toStatus,
       "--yes",
     ]);
+  },
+
+  async resolveActiveSprint(board: string): Promise<string | undefined> {
+    // `--state active` filters to the (at most one) active sprint, so the first
+    // element of the parsed list is the board's active sprint; an empty list is
+    // "no active sprint" → undefined → the reconciler leaves the child in the
+    // backlog. An acli failure (unauthed, bad board, network) throws.
+    return parseActiveSprintId(
+      await runAcli([
+        "jira",
+        "board",
+        "list-sprints",
+        "--id",
+        board,
+        "--state",
+        "active",
+        "--json",
+      ]),
+    );
+  },
+
+  async assignToSprint(sprintId: string, key: string): Promise<void> {
+    // Sprint membership is a JIRA Agile-API operation
+    // (`POST /rest/agile/1.0/sprint/{id}/issue`), but acli 1.x exposes **no**
+    // command for it: `jira sprint` offers only create/delete/update/view/
+    // list-workitems (no add), and `workitem create`/`edit` accept neither a
+    // `--sprint` flag nor a `fields` payload (`edit --from-json` rejects an
+    // unknown `fields` key), so there is no acli path to place an existing issue
+    // into a sprint. This is the loose end the PRD's Further Notes flagged to
+    // validate before committing the seam impl — validated here as *unsupported*.
+    //
+    // Rather than guess an instance-specific Sprint custom-field id (which would
+    // risk writing the wrong field), this throws — the reconciler catches it as a
+    // logged no-op, so a `target: sprint` child simply stays where JIRA created
+    // it (the backlog) until a REST-token `JiraSeam` (the PRD's noted future
+    // option) or a future acli sprint-add command implements this operation. The
+    // reconciler, the seam interface, and their tests are complete and will drive
+    // real sprint placement unchanged the moment such an implementation is wired
+    // in — nothing above this boundary needs to change.
+    throw new Error(
+      `acli exposes no operation to add work item ${key} to sprint ${sprintId}; sprint placement needs a REST-token JiraSeam (see ADR 0028's noted future option)`,
+    );
   },
 };
 

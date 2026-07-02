@@ -222,7 +222,27 @@ export function writeHumanReview(
 export interface JiraOptIn {
   readonly board?: string;
   readonly project?: string;
+  /**
+   * Where the PRD's child issues land when first created (ADR 0028, user story 7):
+   * `"sprint"` drops each into the board's live active sprint at create,
+   * `"backlog"` leaves it in the project backlog. Absent ⇒ the reconciler applies
+   * {@link DEFAULT_JIRA_TARGET} — placement is set once at create and never
+   * re-evaluated (the team owns sprint moves), and the epic is never sprinted.
+   */
+  readonly target?: JiraTarget;
 }
+
+/** Where an opted-in PRD's child issues are placed at create — a sprint or the backlog. */
+export type JiraTarget = "sprint" | "backlog";
+
+/**
+ * The placement used when a `jira` block authors no (or an unrecognised) `target`.
+ * `backlog` is the least-invasive default: dropping agent work into a team's
+ * committed active sprint is the surprising action and must be opted into
+ * explicitly, so an omitted/typo'd `target` leaves the issue in the backlog for
+ * the team to plan in (user story 7/8).
+ */
+export const DEFAULT_JIRA_TARGET: JiraTarget = "backlog";
 
 /**
  * Parse the authored `jira` block into a {@link JiraOptIn}, or `undefined` when
@@ -248,10 +268,21 @@ export function parseJiraOptIn(data: Frontmatter): JiraOptIn | undefined {
   const table = block as Frontmatter;
   const board = coerceBoardId(table.board);
   const project = readPresentString(table, "project");
+  const target = coerceTarget(table.target);
   return {
     ...(board !== undefined ? { board } : {}),
     ...(project !== undefined ? { project } : {}),
+    ...(target !== undefined ? { target } : {}),
   };
+}
+
+/**
+ * A `target` is either `sprint` or `backlog`; anything else (absent, a typo, a
+ * non-string) reads as absent so the reconciler falls back to
+ * {@link DEFAULT_JIRA_TARGET} rather than acting on a value it doesn't understand.
+ */
+function coerceTarget(raw: unknown): JiraTarget | undefined {
+  return raw === "sprint" || raw === "backlog" ? raw : undefined;
 }
 
 /** A board id may be authored as a number or string; coerce to a non-blank string. */
