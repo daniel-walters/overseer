@@ -1,4 +1,9 @@
-import { Terminal } from "@xterm/headless";
+// `@xterm/headless` is a CommonJS package whose exports are assigned dynamically,
+// so Node's ESM loader can't statically detect the named `Terminal` export. Import
+// the module's default (its `module.exports`) and destructure `Terminal` from it.
+import xtermHeadless from "@xterm/headless";
+
+const { Terminal } = xtermHeadless;
 
 /**
  * The bytes→screen transform behind the `o` agent-output modal (ADR 0030): given a

@@ -75,19 +75,23 @@ describe("renderTerminal (raw TTY replay → resolved screen lines)", () => {
     // and assert it surfaces as a rejection App.tsx's `.catch` can degrade from,
     // not a crash.
     vi.resetModules();
+    // The package is CommonJS, so `renderTerminal` reads `Terminal` off the module's
+    // default export (its `module.exports`); mirror that shape here.
     vi.doMock("@xterm/headless", () => ({
-      Terminal: class {
-        buffer = {
-          active: {
-            get length() {
-              throw new Error("buffer read exploded");
+      default: {
+        Terminal: class {
+          buffer = {
+            active: {
+              get length() {
+                throw new Error("buffer read exploded");
+              },
             },
-          },
-        };
-        write(_bytes: string, cb: () => void) {
-          setTimeout(cb, 0);
-        }
-        dispose() {}
+          };
+          write(_bytes: string, cb: () => void) {
+            setTimeout(cb, 0);
+          }
+          dispose() {}
+        },
       },
     }));
     const { renderTerminal: mockedRenderTerminal } = await import("./renderTerminal.js");
