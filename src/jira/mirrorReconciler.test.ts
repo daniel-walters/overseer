@@ -403,6 +403,43 @@ describe("mirrorReconciler — epic status self-heal", () => {
     expect(logs.join("\n")).toMatch(/cache seed failed/i);
   });
 
+  it("retries the open-time cache seed on the next scan after a transient failure, rather than stranding the cache empty forever", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "In Progress"); // linked epic, already at target
+    seam.failSearch = true; // scan 1: the batched cache seed throws
+    const { reconciler, set } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    const b = board(prd("auth", "in-progress", "Auth"));
+
+    // Scan 1: the seed fails, so the epic (a cache-miss) is diff-gate-bypassed and
+    // a real transition is attempted — same as the seed never having run.
+    const first = await reconciler.reconcile(b);
+    expect(seam.calls.filter((c) => c.startsWith("search:"))).toEqual([
+      "search:DS-9",
+    ]);
+    expect(first.transitioned).toEqual([]); // "In Progress" is legal but already current
+
+    // The transient failure clears; scan 2 must retry the seed (not skip it, since
+    // `seeded` was never latched on the failed attempt) and, once it succeeds,
+    // populate the cache so scan 3 diff-gates to zero further JIRA calls at all.
+    seam.failSearch = false;
+    await reconciler.reconcile(b);
+    expect(seam.calls.filter((c) => c.startsWith("search:"))).toEqual([
+      "search:DS-9",
+      "search:DS-9",
+    ]);
+
+    const callsBeforeThird = seam.calls.length;
+    const third = await reconciler.reconcile(b);
+    expect(third).toEqual({
+      created: [],
+      transitioned: [],
+      childrenCreated: [],
+      childrenTransitioned: [],
+    });
+    expect(seam.calls.slice(callsBeforeThird)).toEqual([]);
+  });
+
   it("terminates the backref write-back self-scan as a zero-JIRA no-op", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");

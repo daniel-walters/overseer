@@ -208,9 +208,15 @@ export function createMirrorReconciler(
         // Board-open seed (ADR 0028): one JQL fetch of every already-mirrored key,
         // inside the guard so it runs exactly once and never races a second pass.
         // A fresh board with no backrefs collects no keys → no acli call at all.
+        // Only latch `seeded` on a *successful* seed (including the trivial
+        // zero-keys case): a transient acli/network failure must retry on the
+        // next reconcile rather than permanently stranding the cache empty for
+        // the rest of the process's life — an empty cache makes every linked
+        // key's diff-gate a permanent cache-miss, so `driveToTarget` would
+        // otherwise re-attempt a live transition on every single future scan
+        // forever, exactly the JIRA-call volume the seed exists to eliminate.
         if (!seeded) {
-          await seedCache(board, deps, cache, log);
-          seeded = true;
+          seeded = await seedCache(board, deps, cache, log);
         }
         return await reconcileOnce(board, deps, statusNames, cache, log);
       } finally {
@@ -227,16 +233,24 @@ export function createMirrorReconciler(
  * invisible to the mirror), and a board with no backrefs yet collects no keys — so
  * {@link JiraSeam.searchStatuses} short-circuits without shelling out. The seed is
  * the mirror's *only* JIRA read; every later scan diffs against this cache in
- * memory. A search failure is a logged no-op that leaves the cache empty: the
- * mirror then degrades to driving transitions blind (board wins) rather than
- * crashing or blocking the board.
+ * memory.
+ *
+ * Returns whether the seed may be considered done: `true` when there was nothing
+ * to seed, or the search succeeded (whether or not every key came back with a
+ * readable status); `false` on a search failure, so the caller does **not** latch
+ * `seeded` — a transient acli/network error retries on the very next reconcile
+ * instead of permanently stranding the cache empty (which would otherwise turn
+ * every linked key into a forever cache-miss, and `driveToTarget` would re-attempt
+ * a live transition on every future scan for the rest of the process's life,
+ * defeating the diff-gate's whole point). Each retry is logged as a no-op in the
+ * meantime, so the failure is still visible without taking down the board.
  */
 async function seedCache(
   board: Board,
   deps: MirrorReconcilerDeps,
   cache: Map<string, string>,
   log: (message: string) => void,
-): Promise<void> {
+): Promise<boolean> {
   const keys: string[] = [];
   for (const prd of board.prds) {
     const prdDir = join(deps.root, prd.id);
@@ -248,17 +262,19 @@ async function seedCache(
       if (childKey !== undefined) keys.push(childKey);
     }
   }
-  if (keys.length === 0) return;
+  if (keys.length === 0) return true;
   try {
     for (const { key, status } of await deps.seam.searchStatuses(keys)) {
       // Only a readable status seeds the cache; a found-but-unreadable one stays
       // absent, so the diff treats it as unknown and heals toward the board's truth.
       if (status !== undefined) cache.set(key, status);
     }
+    return true;
   } catch (err) {
     log(
-      `mirror cache seed failed — reconciling with an empty cache (no-op): ${errorMessage(err)}`,
+      `mirror cache seed failed — reconciling with an empty cache (no-op), will retry on the next scan: ${errorMessage(err)}`,
     );
+    return false;
   }
 }
 
