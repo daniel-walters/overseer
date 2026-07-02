@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
 import { realJiraSeam } from "./jiraSeam.js";
 
@@ -8,58 +8,160 @@ import { realJiraSeam } from "./jiraSeam.js";
  * `stackGitSeam.realgit.test.ts`), as the Issue's testing plan requires. The pure
  * parsers ({@link import("./jiraSeam.js").parseBoardProject} etc.) and the
  * reconciler are unit-tested with fakes; this proves the production seam actually
- * drives acli's create → transition → read round-trip.
+ * drives acli's create → transition → search round-trip against JIRA.
  *
  * **Gated, and skipped by default.** It creates a real epic, so it never runs in
  * ordinary CI or the unit loop. It runs only when both hold:
  *
  * - `acli` is on the PATH and authenticated, and
  * - `OVERSEER_JIRA_TEST_BOARD` names a JIRA board id safe to write throwaway epics
- *   into (its resolved project is where the epic lands).
+ *   into (its resolved project is where the epic lands, and its Epic workflow must
+ *   offer an "In Progress" transition).
  *
  * Set the env var against a scratch board to exercise it locally:
  *   `OVERSEER_JIRA_TEST_BOARD=34 pnpm test jiraSeam.realacli`
+ *
+ * **Self-cleaning.** Every epic it creates is tracked and deleted in `afterAll`
+ * (`acli jira workitem delete`), so repeated runs never accumulate orphan tickets —
+ * the JIRA analogue of the prior art's `rmSync(repo)` teardown. The seam under
+ * test owns only create/transition/read; the search verification and the cleanup
+ * shell out to acli directly (the `acli()` helper below), exactly as the git prior
+ * art reads and tears down its repo with a direct `git()` helper rather than
+ * through the seam.
  */
 
 const testBoard = process.env.OVERSEER_JIRA_TEST_BOARD;
 
+/** Run one acli invocation directly and return its stdout — the test's own tool handle. */
+function acli(...args: string[]): string {
+  return execFileSync("acli", args, {
+    encoding: "utf8",
+    timeout: 30000,
+    maxBuffer: 8 * 1024 * 1024,
+  });
+}
+
 /** Whether acli is installed and authenticated (so the round-trip can run). */
 function acliAuthed(): boolean {
   try {
-    execFileSync("acli", ["jira", "auth", "status"], {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10000,
-    });
+    acli("jira", "auth", "status");
     return true;
   } catch {
     return false;
   }
 }
 
+/**
+ * The keys this run created, deleted in `afterAll` so a failed assertion — which
+ * aborts the test body before any inline cleanup — still leaves JIRA clean.
+ */
+const createdKeys: string[] = [];
+
+/** One work item's key + current status name, parsed from `workitem search --json`. */
+interface FoundItem {
+  readonly key: string;
+  readonly status: string | undefined;
+}
+
+/** Parse the `workitem search --json` array into {@link FoundItem}s (tolerant of shape). */
+function parseSearchResults(json: string): FoundItem[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(json);
+  } catch {
+    return [];
+  }
+  if (!Array.isArray(parsed)) return [];
+  const items: FoundItem[] = [];
+  for (const item of parsed) {
+    if (item === null || typeof item !== "object") continue;
+    const key = (item as { key?: unknown }).key;
+    if (typeof key !== "string") continue;
+    const name = (item as { fields?: { status?: { name?: unknown } } }).fields
+      ?.status?.name;
+    items.push({ key, status: typeof name === "string" ? name : undefined });
+  }
+  return items;
+}
+
+/** JQL-search for a single key and return the matched item, or undefined if not found yet. */
+function searchByKey(key: string): FoundItem | undefined {
+  const out = acli(
+    "jira",
+    "workitem",
+    "search",
+    "--jql",
+    `key = ${key}`,
+    "--fields",
+    "key,status",
+    "--limit",
+    "1",
+    "--json",
+  );
+  return parseSearchResults(out).find((i) => i.key === key);
+}
+
+/**
+ * Poll `fn` until it returns a defined value or the deadline passes. JIRA's search
+ * index is eventually consistent, so a just-created/just-transitioned item can lag
+ * the write by a second or two — polling keeps the round-trip assertion honest
+ * without being flaky.
+ */
+async function poll<T>(
+  fn: () => T | undefined,
+  { timeoutMs = 20000, intervalMs = 2000 } = {},
+): Promise<T | undefined> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = fn();
+    if (value !== undefined) return value;
+    if (Date.now() >= deadline) return undefined;
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 const enabled = testBoard !== undefined && acliAuthed();
 
 describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
-  it("resolves a board's project, then creates → transitions → reads an epic", async () => {
+  afterAll(() => {
+    // Self-cleaning: bin every epic this run created so the test project stays
+    // free of orphaned tickets across repeated runs. Best-effort — a cleanup
+    // failure must not fail the run (the assertions already ran).
+    if (createdKeys.length === 0) return;
+    try {
+      acli("jira", "workitem", "delete", "--key", createdKeys.join(","), "--yes");
+    } catch {
+      // Nothing more to do; a leftover ticket is a manual tidy, not a test failure.
+    }
+  });
+
+  it("creates → transitions → finds an epic via JQL search, then cleans up", async () => {
     const board = testBoard!;
 
-    // Board → project location.
+    // Board → project location, through the seam.
     const project = await realJiraSeam.resolveProject(board);
     expect(project).toMatch(/^[A-Z][A-Z0-9]+$/);
 
-    // Create an epic in that project.
+    // Create an epic in that project, through the seam. Track its key first thing
+    // so afterAll deletes it even if a later assertion throws.
     const key = await realJiraSeam.createEpic({
       project,
-      summary: `Overseer mirror smoke test ${new Date().toISOString()}`,
+      summary: `Overseer mirror integration test ${new Date().toISOString()}`,
       description: "Created by the gated realJiraSeam integration test.",
     });
+    createdKeys.push(key);
     expect(key).toMatch(/^[A-Z][A-Z0-9]+-\d+/);
 
-    // Read its current status back.
-    const status = await realJiraSeam.currentStatus(key);
-    expect(typeof status).toBe("string");
-
-    // Drive it to In Progress and confirm the read reflects the move.
+    // Drive it to In Progress, through the seam.
     await realJiraSeam.transition(key, "In Progress");
-    expect(await realJiraSeam.currentStatus(key)).toBe("In Progress");
+
+    // Round-trip: find the epic via a real JQL search and confirm the search
+    // reflects both its identity and the transition we just drove.
+    const found = await poll(() => {
+      const item = searchByKey(key);
+      return item?.status === "In Progress" ? item : undefined;
+    });
+    expect(found?.key).toBe(key);
+    expect(found?.status).toBe("In Progress");
   }, 60000);
 });
