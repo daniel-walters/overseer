@@ -105,6 +105,34 @@ describe("useLiveBoard", () => {
     expect(order).toEqual(["scan", "reconcile"]);
   });
 
+  it("reconciles the JIRA mirror with the freshly-scanned board after each change", async () => {
+    let onChange = () => {};
+    const scanned = board("Updated");
+    const scan = vi.fn(() => scanned);
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+    const mirror = { reconcile: vi.fn() };
+
+    render(
+      <Probe
+        root="/root"
+        initialBoard={board("First")}
+        scan={scan}
+        watch={watch}
+        mirror={mirror}
+      />,
+    );
+
+    onChange();
+    await tick();
+
+    // The mirror is handed exactly the board the scan produced (not a re-read).
+    expect(mirror.reconcile).toHaveBeenCalledTimes(1);
+    expect(mirror.reconcile).toHaveBeenCalledWith(scanned);
+  });
+
   it("fires onReconciled after each post-rebuild reconcile, in order", async () => {
     // The activity signal is owned by the caller (LiveApp), which re-reads the
     // Reactor in this callback. The hook's contract is just that it fires it after

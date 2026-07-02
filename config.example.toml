@@ -42,3 +42,27 @@ effort = "high"
 [review]
 cap = 3
 effort = "medium"
+
+# --- JIRA mirror (optional) ---------------------------------------------------
+# Overseer can mirror a PRD into JIRA as a read-only epic for stakeholders (ADR
+# 0028). Mirroring is OFF by default and opted in *per PRD* — add a `jira` block
+# to that PRD's `prd.md`, e.g.:
+#
+#   jira:
+#     board: "42"        # optional; falls back to default_board below
+#     project: "PROJ"    # optional; normally derived from the board
+#
+# A PRD with no `jira` block is invisible to the mirror. acli (already
+# configured on your machine) owns JIRA auth — this table stores no credential.
+#
+# `default_board` is the board a `jira`-opted PRD mirrors to when its block names
+# none. `[jira.status]` renames the epic statuses the mirror targets, for a JIRA
+# workflow whose columns aren't the conventional To Do / In Progress / Done.
+
+[jira]
+default_board = "42"
+
+[jira.status]
+backlog = "To Do"
+"in-progress" = "In Progress"
+done = "Done"

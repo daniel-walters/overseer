@@ -6,7 +6,9 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig, ConfigError } from "./config.js";
 import type { ReviewConfig } from "./review/reviewConfig.js";
+import type { JiraConfig } from "./config.js";
 import type { AgentConfig } from "./agentConfig.js";
+import { realMirrorReconciler } from "./jira/mirrorReconciler.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
@@ -67,6 +69,7 @@ function runBoard(): void {
   let implementorAgent: AgentConfig;
   let reviewerAgent: AgentConfig;
   let auditorAgent: AgentConfig;
+  let jira: JiraConfig;
   try {
     const config = loadConfig();
     root = config.root;
@@ -74,6 +77,7 @@ function runBoard(): void {
     implementorAgent = config.implementor;
     reviewerAgent = config.reviewer;
     auditorAgent = config.auditor;
+    jira = config.jira;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -304,6 +308,31 @@ function runBoard(): void {
     reviewer: reviewerAgent,
     auditor: auditorAgent,
   });
+  // The JIRA mirror (ADR 0028): the in-process sibling of the Linked-PR overlay,
+  // reconciled fire-and-forget after each board rebuild. It pushes each opted-in
+  // PRD's epic to JIRA off the render path — the board never blocks on it and its
+  // acli failures degrade to logged no-ops (never a board marker or a crash). It
+  // is always wired (the mirror is off *per PRD* via the authored `jira` block, not
+  // by config), so an unconfigured board simply finds no opted-in PRDs and makes no
+  // acli calls. The scheduling that keeps it off the render path lives in the live
+  // loop; here we hand it the config's default board and status-name overrides.
+  const mirrorReconciler = realMirrorReconciler({
+    root,
+    defaultBoard: jira.defaultBoard,
+    statusNames: jira.statusNames,
+  });
+  const mirror = {
+    reconcile: (b: Board): void => {
+      // Fire-and-forget: every JiraSeam call is async (acli via execFile, never
+      // execFileSync), so this call already returns before any subprocess I/O
+      // happens — the board render never waits on acli. The reconciler swallows
+      // its own per-PRD failures, so a rejected promise can't surface — but
+      // guard anyway to honour "never throws out".
+      void mirrorReconciler.reconcile(b).catch(() => {
+        // Fire-and-forget: a mirror failure is never allowed to reach the board.
+      });
+    },
+  };
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
@@ -332,6 +361,7 @@ function runBoard(): void {
       agentOutputReader={agentOutputReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
+      mirror={mirror}
       reviewCap={review.cap}
     />,
     { alternateScreen: true },

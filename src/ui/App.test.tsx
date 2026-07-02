@@ -620,6 +620,7 @@ describe("App audit (c on a ready-for-audit Issue)", () => {
       reviewVerdict: undefined,
       slice: undefined,
       reviewFindings: undefined,
+      reviewTolerated: undefined,
       body: "",
       ...overrides,
     };

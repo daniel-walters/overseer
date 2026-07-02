@@ -15,6 +15,7 @@ const base: DispatchIssue = {
   reviewVerdict: undefined,
   slice: undefined,
   reviewFindings: undefined,
+  reviewTolerated: undefined,
   body: "",
   path: "/root/alpha/001.md",
 };

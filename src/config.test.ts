@@ -301,6 +301,82 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("jira mirror config", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults to no board and the conventional status names when [jira] is absent", () => {
+      writeFileSync(configPath, 'root = "~"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.jira.defaultBoard).toBeUndefined();
+      expect(config.jira.statusNames).toEqual({
+        backlog: "To Do",
+        inProgress: "In Progress",
+        inReview: "In Review",
+        done: "Done",
+      });
+    });
+
+    it("reads default_board from the [jira] table", () => {
+      writeWithRoot('[jira]\ndefault_board = "42"\n');
+
+      expect(loadConfig({ configPath, home }).jira.defaultBoard).toBe("42");
+    });
+
+    it("coerces a numeric default_board to a string board id", () => {
+      writeWithRoot("[jira]\ndefault_board = 42\n");
+
+      expect(loadConfig({ configPath, home }).jira.defaultBoard).toBe("42");
+    });
+
+    it("overrides individual status names from [jira.status], keeping defaults for the rest", () => {
+      writeWithRoot('[jira.status]\ndone = "Shipped"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.jira.statusNames).toEqual({
+        backlog: "To Do",
+        inProgress: "In Progress",
+        inReview: "In Review",
+        done: "Shipped",
+      });
+    });
+
+    it("overrides the in-progress name via the hyphenated [jira.status] key", () => {
+      writeWithRoot('[jira.status]\n"in-progress" = "Doing"\n');
+
+      expect(loadConfig({ configPath, home }).jira.statusNames.inProgress).toBe(
+        "Doing",
+      );
+    });
+
+    it("overrides the in-review name via the hyphenated [jira.status] key", () => {
+      writeWithRoot('[jira.status]\n"in-review" = "Reviewing"\n');
+
+      expect(loadConfig({ configPath, home }).jira.statusNames.inReview).toBe(
+        "Reviewing",
+      );
+    });
+
+    it("throws a ConfigError naming the table when [jira] is not a table", () => {
+      writeWithRoot('jira = "yes"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/jira/i);
+    });
+
+    it("throws a ConfigError for a blank status-name override", () => {
+      writeWithRoot('[jira.status]\ndone = ""\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/done/i);
+    });
+  });
+
   describe("auditor runtime knobs", () => {
     /** Write a valid root plus the given extra TOML body. */
     function writeWithRoot(extra: string): void {
