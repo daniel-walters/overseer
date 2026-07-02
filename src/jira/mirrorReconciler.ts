@@ -9,8 +9,10 @@ import {
   safeMatter,
   writeJiraEpic,
   writeJiraKey,
+  DEFAULT_JIRA_TARGET,
   FIELD,
   type JiraOptIn,
+  type JiraTarget,
 } from "../issueFile.js";
 import {
   DEFAULT_ISSUE_STATUS_NAMES,
@@ -75,6 +77,13 @@ export interface MirrorDelta {
   readonly childrenCreated: readonly CreatedChild[];
   /** Child status transitions executed this pass (in board/Issue order). */
   readonly childrenTransitioned: readonly ChildTransition[];
+  /**
+   * Children placed into a sprint this pass (in board/Issue order). Only a
+   * `target: sprint` PRD's *freshly-created* children appear here — placement is
+   * set once at create and never re-evaluated, and `target: backlog` children are
+   * never placed (they need no action to stay in the backlog).
+   */
+  readonly placed: readonly ChildPlacement[];
 }
 
 /** One epic created this pass: the PRD it mirrors and the new JIRA key. */
@@ -101,6 +110,13 @@ export interface ChildTransition {
   readonly to: string;
 }
 
+/** One child sprint placement: the Issue (filename), its child key, and the sprint id it landed in. */
+export interface ChildPlacement {
+  readonly issue: string;
+  readonly key: string;
+  readonly sprint: string;
+}
+
 /** The empty delta — a pass (or an overlapping call) that changed nothing in JIRA. */
 function emptyDelta(): MirrorDelta {
   return {
@@ -108,6 +124,7 @@ function emptyDelta(): MirrorDelta {
     transitioned: [],
     childrenCreated: [],
     childrenTransitioned: [],
+    placed: [],
   };
 }
 
@@ -199,6 +216,7 @@ async function reconcileOnce(
   const transitioned: EpicTransition[] = [];
   const childrenCreated: CreatedChild[] = [];
   const childrenTransitioned: ChildTransition[] = [];
+  const placed: ChildPlacement[] = [];
 
   for (const prd of board.prds) {
     const prdDir = join(deps.root, prd.id);
@@ -207,11 +225,19 @@ async function reconcileOnce(
       // No `jira` block ⇒ the PRD is invisible to the mirror (ADR 0028).
       if (optIn === undefined) continue;
 
+      // The board this PRD mirrors to (its own `board`, else the config default):
+      // needed both to resolve the project when creating the epic and to resolve
+      // the active sprint when placing children. Computed once here so a linked
+      // PRD (epic already exists) still has a board to resolve sprints against.
+      const boardId = optIn.board ?? deps.defaultBoard;
+      // Where this PRD's children land at create (sprint vs backlog); an absent
+      // `target` defaults to backlog (the least-invasive placement — ADR 0028).
+      const placement = optIn.target ?? DEFAULT_JIRA_TARGET;
+
       // Ensure the epic exists: a present backref is update-or-noop (never a
       // second epic — ADR 0029); an absent one creates then writes the backref.
       let key = epicKey;
       if (key === undefined) {
-        const boardId = optIn.board ?? deps.defaultBoard;
         if (boardId === undefined) {
           log(
             `PRD ${prd.id}: jira opt-in names no board and no default_board is configured — skipping (no-op).`,
@@ -282,18 +308,27 @@ async function reconcileOnce(
       // backref-write failed) `continue`d above, so we only ever reach here with an
       // epic a child can be nested under. Each Issue reconciles independently: a
       // failure on one is its own logged no-op and never stops its siblings.
+      //
+      // The active sprint is resolved lazily and at most once per PRD (memoized):
+      // only a `target: sprint` PRD with at least one *newly-created* child ever
+      // needs it, so a backlog PRD — or a fully-linked sprint PRD with nothing new
+      // to place — makes zero sprint reads (user story 19: very few JIRA calls).
+      const resolveActiveSprint = memoizeActiveSprint(boardId, deps, log);
       for (const issue of prd.issues) {
         const outcome = await reconcileChild(
           prd.id,
           prdDir,
           key,
           issue,
+          placement,
+          resolveActiveSprint,
           deps,
           statusNames,
           log,
         );
         if (outcome.created) childrenCreated.push(outcome.created);
         if (outcome.transitioned) childrenTransitioned.push(outcome.transitioned);
+        if (outcome.placed) placed.push(outcome.placed);
       }
     } catch (err) {
       // Any seam/file failure for one PRD is a logged no-op; the board is never
@@ -302,7 +337,50 @@ async function reconcileOnce(
     }
   }
 
-  return { created, transitioned, childrenCreated, childrenTransitioned };
+  return { created, transitioned, childrenCreated, childrenTransitioned, placed };
+}
+
+/**
+ * A per-PRD memoized resolver for the board's live active sprint id, used to place
+ * `target: sprint` children at create. It calls {@link JiraSeam.resolveActiveSprint}
+ * at most once per reconcile pass (caching the result — including `undefined` and a
+ * failure) so a PRD with several new children makes a single sprint read, not one
+ * per child (user story 19). It never throws: a board that can't be resolved (no
+ * `board` and no `default_board`), a board with no active sprint, or an acli
+ * failure all resolve to `undefined` — a logged no-op that leaves the child in the
+ * backlog, exactly the graceful degradation the mirror promises (ADR 0028).
+ */
+function memoizeActiveSprint(
+  boardId: string | undefined,
+  deps: MirrorReconcilerDeps,
+  log: (message: string) => void,
+): () => Promise<string | undefined> {
+  let resolved = false;
+  let sprintId: string | undefined;
+  return async () => {
+    if (resolved) return sprintId;
+    resolved = true;
+    if (boardId === undefined) {
+      log(
+        "sprint placement wanted but the PRD names no board and no default_board is configured — leaving in backlog (no-op).",
+      );
+      return undefined;
+    }
+    try {
+      sprintId = await deps.seam.resolveActiveSprint(boardId);
+      if (sprintId === undefined) {
+        log(
+          `board ${boardId} has no active sprint — leaving the child in the backlog (no-op).`,
+        );
+      }
+    } catch (err) {
+      log(
+        `board ${boardId}: active sprint could not be resolved — leaving the child in the backlog (no-op): ${errorMessage(err)}`,
+      );
+      sprintId = undefined;
+    }
+    return sprintId;
+  };
 }
 
 /**
@@ -324,6 +402,8 @@ async function reconcileChild(
   prdDir: string,
   epicKey: string,
   issue: Issue,
+  placement: JiraTarget,
+  resolveActiveSprint: () => Promise<string | undefined>,
   deps: MirrorReconcilerDeps,
   statusNames: IssueStatusNames,
   log: (message: string) => void,
@@ -338,6 +418,7 @@ async function reconcileChild(
     // already-linked epic needs no extra board→project lookup.
     let key = childKey;
     let created: CreatedChild | undefined;
+    let placed: ChildPlacement | undefined;
     if (key === undefined) {
       const description =
         body !== undefined && body.trim() !== "" ? body : undefined;
@@ -360,6 +441,28 @@ async function reconcileChild(
         return {};
       }
       created = { issue: issue.id, key };
+
+      // Placement is set **once at create** and never re-evaluated (the team owns
+      // sprint moves — user story 8), so it lives inside this create-only branch:
+      // a linked child (backref already present) is never re-placed. `target:
+      // backlog` needs no action (the child is already in the backlog); only
+      // `target: sprint` resolves the board's active sprint and assigns. A missing
+      // active sprint (memoized resolver → undefined) or a failed assignment is a
+      // logged no-op that leaves the child in the backlog — never a crash, so it
+      // can't erase the create that already succeeded.
+      if (placement === "sprint") {
+        const sprintId = await resolveActiveSprint();
+        if (sprintId !== undefined) {
+          try {
+            await deps.seam.assignToSprint(sprintId, key);
+            placed = { issue: issue.id, key, sprint: sprintId };
+          } catch (err) {
+            log(
+              `child ${key}: could not be placed into sprint ${sprintId} — leaving in the backlog (no-op): ${errorMessage(err)}`,
+            );
+          }
+        }
+      }
     }
 
     // Self-heal the child's status toward the Issue's authored status. An
@@ -370,14 +473,14 @@ async function reconcileChild(
       log(
         `child ${key}: the Issue's status could not be read — skipping self-heal (no-op).`,
       );
-      return { created };
+      return { created, placed };
     }
     const target = issueTargetStatus(status, statusNames);
     if (target === undefined) {
       log(
         `child ${key}: authored status "${status}" maps to no JIRA bucket — skipping self-heal (no-op).`,
       );
-      return { created };
+      return { created, placed };
     }
     // A read failure here (e.g. a transient acli/network error) must not erase
     // an already-recorded `created` — the child genuinely exists in JIRA and its
@@ -393,7 +496,7 @@ async function reconcileChild(
       } else if (!statusEquals(current, target)) {
         try {
           await deps.seam.transition(key, target);
-          return { created, transitioned: { key, to: target } };
+          return { created, transitioned: { key, to: target }, placed };
         } catch (err) {
           log(
             `child ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
@@ -405,7 +508,7 @@ async function reconcileChild(
         `child ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
       );
     }
-    return { created };
+    return { created, placed };
   } catch (err) {
     log(
       `Issue ${prdId}/${issue.id}: mirror reconcile failed (no-op): ${errorMessage(err)}`,
@@ -414,10 +517,11 @@ async function reconcileChild(
   }
 }
 
-/** What {@link reconcileChild} changed for one Issue: a create and/or a transition. */
+/** What {@link reconcileChild} changed for one Issue: a create, a transition, and/or a sprint placement. */
 interface ChildOutcome {
   readonly created?: CreatedChild;
   readonly transitioned?: ChildTransition;
+  readonly placed?: ChildPlacement;
 }
 
 /**

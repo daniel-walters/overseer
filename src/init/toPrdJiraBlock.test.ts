@@ -7,12 +7,10 @@ import { safeMatter, parseJiraOptIn } from "../issueFile.js";
 /**
  * The shipped `overseer-to-prd` skill authors the `jira` opt-in block into a new
  * `prd.md` (JIRA Mirror). These tests defend the seam between *authoring* (the
- * skill's prose) and *reading*: `board` and `project` are run through the real
- * parser (slice 001's `parseJiraOptIn`), so drift in those spellings fails here
- * instead of silently producing a `jira` block the mirror can't act on. `target`
- * has no parser yet — sprint/backlog placement is a later slice — so its test
- * only pins the field's spelling and legal values in the authored YAML, and the
- * config key test only pins `default_board`'s spelling in the skill's prose.
+ * skill's prose) and *reading*: `board`, `project`, and `target` are run through
+ * the real `parseJiraOptIn`, so drift in any of those spellings fails here instead
+ * of silently producing a `jira` block the mirror can't act on. The config key
+ * test only pins `default_board`'s spelling in the skill's prose.
  */
 const skillMd = join(
   dirname(fileURLToPath(import.meta.url)),
@@ -71,15 +69,13 @@ describe("overseer-to-prd jira block", () => {
     expect(parseJiraOptIn(data)?.board).toBeTruthy();
   });
 
-  it("authors the sprint-or-backlog target field on the block", () => {
-    const example = readJiraBlockExample();
-    const { data } = safeMatter(example);
+  it("authors a target the parser reads as a legal sprint/backlog placement", () => {
+    const { data } = safeMatter(readJiraBlockExample());
 
-    // `target: sprint|backlog` has no parser yet (deferred to the sprint/backlog
-    // placement slice); the skill must still emit it under this locked spelling
-    // with a legal value so that slice can read it verbatim once it lands.
-    const jira = data.jira as Record<string, unknown>;
-    expect(["sprint", "backlog"]).toContain(jira.target);
+    // No drift: the target the skill writes is one the reconciler acts on — the
+    // parser coerces anything unrecognised to undefined, so a legal value here
+    // proves the authored spelling round-trips to a real placement.
+    expect(["sprint", "backlog"]).toContain(parseJiraOptIn(data)?.target);
   });
 
   it("documents the config-defaulted board question against the real config key", () => {

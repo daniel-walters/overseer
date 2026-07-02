@@ -36,6 +36,14 @@ class FakeJiraSeam implements JiraSeam {
   failChildCreate = false;
   /** When set, `currentStatus` throws for this key — a simulated transient read failure. */
   failCurrentStatusFor: string | undefined = undefined;
+  /** board id → its live active sprint id, seeding {@link resolveActiveSprint}. */
+  readonly activeSprintByBoard = new Map<string, string>();
+  /** When set, `resolveActiveSprint` throws — a simulated acli/agile failure. */
+  failResolveActiveSprint = false;
+  /** When set, `assignToSprint` throws — a simulated placement failure (acli gap). */
+  failAssignToSprint = false;
+  /** child key → the sprint it was placed into, for placement assertions. */
+  readonly sprintByKey = new Map<string, string>();
   /** Ordered record of every seam call. */
   readonly calls: string[] = [];
   /** The inputs `createEpic` was called with, for summary/project assertions. */
@@ -87,6 +95,19 @@ class FakeJiraSeam implements JiraSeam {
       throw new Error(`illegal transition to ${toStatus}`);
     }
     this.statusByKey.set(key, toStatus);
+  }
+
+  async resolveActiveSprint(board: string): Promise<string | undefined> {
+    this.calls.push(`resolveActiveSprint:${board}`);
+    if (this.failResolveActiveSprint) throw new Error("acli sprint read failed");
+    // Absent ⇒ the board has no active sprint (a logged no-op upstream).
+    return this.activeSprintByBoard.get(board);
+  }
+
+  async assignToSprint(sprintId: string, key: string): Promise<void> {
+    this.calls.push(`assignToSprint:${sprintId}->${key}`);
+    if (this.failAssignToSprint) throw new Error("acli sprint assign failed");
+    this.sprintByKey.set(key, sprintId);
   }
 }
 
@@ -173,7 +194,7 @@ describe("mirrorReconciler — epic create", () => {
     const delta = await reconciler.reconcile(board(prd("private", "in-progress")));
 
     expect(seam.calls).toEqual([]);
-    expect(delta).toEqual({ created: [], transitioned: [], childrenCreated: [], childrenTransitioned: [] });
+    expect(delta).toEqual({ created: [], transitioned: [], childrenCreated: [], childrenTransitioned: [], placed: [] });
   });
 
   it("never creates a second epic when the backref is already present", async () => {
@@ -305,7 +326,7 @@ describe("mirrorReconciler — re-entrancy", () => {
     // Only the in-flight pass creates the epic; the overlapping call is a no-op.
     expect(seam.created).toEqual([{ project: "DS", summary: "Auth" }]);
     expect(firstDelta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
-    expect(secondDelta).toEqual({ created: [], transitioned: [], childrenCreated: [], childrenTransitioned: [] });
+    expect(secondDelta).toEqual({ created: [], transitioned: [], childrenCreated: [], childrenTransitioned: [], placed: [] });
     expect(epicKeyOf("auth")).toBe("DS-1");
   });
 });
@@ -627,6 +648,172 @@ describe("mirrorReconciler — child create", () => {
     expect(seam.childrenCreated).toHaveLength(1);
     expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
     expect(childKeyOf("auth", "001.md")).toBe("DS-101");
+  });
+});
+
+describe("mirrorReconciler — sprint/backlog placement", () => {
+  it("places a newly-created child into the board's active sprint when target is sprint", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1");
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The child lands in the board's live active sprint — recorded in the delta
+    // and driven through the seam.
+    expect(delta.placed).toEqual([
+      { issue: "001.md", key: "DS-101", sprint: "S1" },
+    ]);
+    expect(seam.sprintByKey.get("DS-101")).toBe("S1");
+    expect(seam.calls).toContain("assignToSprint:S1->DS-101");
+  });
+
+  it("leaves a target: backlog child in the backlog — no sprint resolve, no assign", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1"); // available, but must not be used
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "backlog" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The child is created, but never placed: backlog needs no action, so the
+    // sprint is never even resolved (user story 19: no needless JIRA calls).
+    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(delta.placed).toEqual([]);
+    expect(seam.calls.some((c) => c.startsWith("resolveActiveSprint"))).toBe(false);
+    expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
+  });
+
+  it("defaults an omitted target to backlog (no placement)", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1");
+    const { reconciler, set, setIssue } = harness(seam);
+    // No `target` on the block ⇒ the reconciler defaults to backlog.
+    set("auth", { optIn: optIn({ board: "34" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    expect(delta.placed).toEqual([]);
+    expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
+  });
+
+  it("places only at create — a later reconcile never re-places a linked child", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "To Do"); // linked epic
+    seam.statusByKey.set("DS-50", "To Do"); // linked child, already created earlier
+    seam.activeSprintByBoard.set("34", "S1");
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }), epicKey: "DS-9" });
+    setIssue("auth", "001.md", { status: "backlog", childKey: "DS-50" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The child already exists (backref present), so placement — set once at
+    // create — is never re-evaluated: the team owns sprint moves thereafter.
+    expect(delta.placed).toEqual([]);
+    expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
+  });
+
+  it("never sprints the epic — only children are placed", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1");
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The only assignment is the child's (DS-101); the epic (DS-1) is never
+    // placed into a sprint.
+    const assigns = seam.calls.filter((c) => c.startsWith("assignToSprint"));
+    expect(assigns).toEqual(["assignToSprint:S1->DS-101"]);
+    expect(seam.sprintByKey.has("DS-1")).toBe(false);
+  });
+
+  it("resolves the active sprint once per PRD, however many children it places", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1");
+    const { reconciler, set, setIssue } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+    setIssue("auth", "002.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(
+        prd("auth", "backlog", "Auth", [
+          issue("001.md", "backlog", "One"),
+          issue("002.md", "backlog", "Two"),
+        ]),
+      ),
+    );
+
+    // Both children land in the sprint, but the board's active sprint is read
+    // just once for the whole PRD (memoized) — not once per child.
+    expect(delta.placed).toEqual([
+      { issue: "001.md", key: "DS-101", sprint: "S1" },
+      { issue: "002.md", key: "DS-102", sprint: "S1" },
+    ]);
+    expect(seam.calls.filter((c) => c === "resolveActiveSprint:34")).toHaveLength(1);
+  });
+
+  it("degrades to a logged no-op when the board has no active sprint — child stays in backlog", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    // No active sprint seeded for board 34 ⇒ resolveActiveSprint returns undefined.
+    const { reconciler, set, setIssue, logs } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The child is still created; it simply isn't placed — a logged no-op.
+    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(delta.placed).toEqual([]);
+    expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
+    expect(logs.join("\n")).toMatch(/no active sprint/i);
+  });
+
+  it("keeps a child's create when its sprint assignment fails — a logged no-op, never a throw", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1");
+    seam.failAssignToSprint = true; // the assign throws (e.g. the acli sprint gap)
+    const { reconciler, set, setIssue, childKeyOf, logs } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The child genuinely exists and its backref is written; a failed placement
+    // must not erase that or crash the pass — it's just a logged no-op.
+    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(childKeyOf("auth", "001.md")).toBe("DS-101");
+    expect(delta.placed).toEqual([]);
+    expect(seam.sprintByKey.has("DS-101")).toBe(false);
+    expect(logs.join("\n")).toMatch(/could not be placed/i);
   });
 });
 
