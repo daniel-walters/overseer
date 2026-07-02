@@ -218,6 +218,12 @@ async function reconcileOnce(
   const childrenTransitioned: ChildTransition[] = [];
   const placed: ChildPlacement[] = [];
 
+  // Shared across every PRD in this pass (not one per PRD): two or more
+  // `target: sprint` PRDs mirroring to the same board (their own `board` or a
+  // common `default_board`) must not each pay for their own
+  // `resolveActiveSprint` acli call — see {@link createSprintResolver}.
+  const resolveSprintForBoard = createSprintResolver(deps, log);
+
   for (const prd of board.prds) {
     const prdDir = join(deps.root, prd.id);
     try {
@@ -309,11 +315,13 @@ async function reconcileOnce(
       // epic a child can be nested under. Each Issue reconciles independently: a
       // failure on one is its own logged no-op and never stops its siblings.
       //
-      // The active sprint is resolved lazily and at most once per PRD (memoized):
-      // only a `target: sprint` PRD with at least one *newly-created* child ever
-      // needs it, so a backlog PRD — or a fully-linked sprint PRD with nothing new
-      // to place — makes zero sprint reads (user story 19: very few JIRA calls).
-      const resolveActiveSprint = memoizeActiveSprint(boardId, deps, log);
+      // The active sprint is resolved lazily and at most once per board for the
+      // whole pass (shared cache, not per-PRD): only a `target: sprint` PRD with
+      // at least one *newly-created* child ever needs it, so a backlog PRD — or a
+      // fully-linked sprint PRD with nothing new to place — makes zero sprint
+      // reads, and PRDs sharing a board make just one read for all of them
+      // (user story 19: very few JIRA calls).
+      const resolveActiveSprint = () => resolveSprintForBoard(boardId);
       for (const issue of prd.issues) {
         const outcome = await reconcileChild(
           prd.id,
@@ -341,25 +349,34 @@ async function reconcileOnce(
 }
 
 /**
- * A per-PRD memoized resolver for the board's live active sprint id, used to place
- * `target: sprint` children at create. It calls {@link JiraSeam.resolveActiveSprint}
- * at most once per reconcile pass (caching the result — including `undefined` and a
- * failure) so a PRD with several new children makes a single sprint read, not one
- * per child (user story 19). It never throws: a board that can't be resolved (no
- * `board` and no `default_board`), a board with no active sprint, or an acli
- * failure all resolve to `undefined` — a logged no-op that leaves the child in the
- * backlog, exactly the graceful degradation the mirror promises (ADR 0028).
+ * Build a resolver for a board's live active sprint id, its cache shared across
+ * every PRD in one reconcile pass (not one resolver per PRD): two or more
+ * `target: sprint` PRDs that mirror to the same board (their own `board` or a
+ * common `default_board`) must make only one `resolveActiveSprint` acli call
+ * between them, not one each — the whole pass makes at most one sprint read per
+ * distinct board, however many PRDs share it (user story 19: very few JIRA
+ * calls). Never throws: an unresolvable board (no `board` and no
+ * `default_board`), a board with no active sprint, or an acli failure all
+ * resolve (and cache) to `undefined` — a logged no-op that leaves the child in
+ * the backlog, exactly the graceful degradation the mirror promises (ADR 0028).
  */
-function memoizeActiveSprint(
-  boardId: string | undefined,
+function createSprintResolver(
   deps: MirrorReconcilerDeps,
   log: (message: string) => void,
-): () => Promise<string | undefined> {
-  let resolved = false;
-  let sprintId: string | undefined;
-  return async () => {
-    if (resolved) return sprintId;
-    resolved = true;
+): (boardId: string | undefined) => Promise<string | undefined> {
+  const cache = new Map<string | undefined, Promise<string | undefined>>();
+  return (boardId) => {
+    let pending = cache.get(boardId);
+    if (pending === undefined) {
+      pending = resolveOnce(boardId);
+      cache.set(boardId, pending);
+    }
+    return pending;
+  };
+
+  async function resolveOnce(
+    boardId: string | undefined,
+  ): Promise<string | undefined> {
     if (boardId === undefined) {
       log(
         "sprint placement wanted but the PRD names no board and no default_board is configured — leaving in backlog (no-op).",
@@ -367,20 +384,20 @@ function memoizeActiveSprint(
       return undefined;
     }
     try {
-      sprintId = await deps.seam.resolveActiveSprint(boardId);
+      const sprintId = await deps.seam.resolveActiveSprint(boardId);
       if (sprintId === undefined) {
         log(
           `board ${boardId} has no active sprint — leaving the child in the backlog (no-op).`,
         );
       }
+      return sprintId;
     } catch (err) {
       log(
         `board ${boardId}: active sprint could not be resolved — leaving the child in the backlog (no-op): ${errorMessage(err)}`,
       );
-      sprintId = undefined;
+      return undefined;
     }
-    return sprintId;
-  };
+  }
 }
 
 /**

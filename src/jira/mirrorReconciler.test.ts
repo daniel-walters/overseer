@@ -775,6 +775,30 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
     expect(seam.calls.filter((c) => c === "resolveActiveSprint:34")).toHaveLength(1);
   });
 
+  it("resolves the active sprint once per board for the whole pass, even across PRDs that share it", async () => {
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    seam.activeSprintByBoard.set("34", "S1");
+    const { reconciler, set, setIssue } = harness(seam);
+    // Two PRDs, both `target: sprint`, both naming the same board.
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("auth", "001.md", { status: "backlog" });
+    set("billing", { optIn: optIn({ board: "34", target: "sprint" }) });
+    setIssue("billing", "001.md", { status: "backlog" });
+
+    const delta = await reconciler.reconcile(
+      board(
+        prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")]),
+        prd("billing", "backlog", "Billing", [issue("001.md", "backlog", "One")]),
+      ),
+    );
+
+    // Both PRDs' children land in the sprint, but the shared board's active
+    // sprint is read just once for the whole pass — not once per PRD.
+    expect(delta.placed.map((p) => p.sprint)).toEqual(["S1", "S1"]);
+    expect(seam.calls.filter((c) => c === "resolveActiveSprint:34")).toHaveLength(1);
+  });
+
   it("degrades to a logged no-op when the board has no active sprint — child stays in backlog", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
