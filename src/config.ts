@@ -54,9 +54,10 @@ export interface Config {
   /**
    * The auditor agent's runtime (model + effort), from `[auditor]`. Always
    * present, but with a deliberately different default from the other two edges:
-   * absent config resolves to {@link DEFAULT_AUDITOR_CONFIG} (**model `opus`**,
-   * effort inherited), so an unconfigured board still gates plan-conformance with
-   * a capable model (ADR 0026). A present `[auditor]` table overrides either knob.
+   * absent config resolves to {@link DEFAULT_AUDITOR_CONFIG} (**model `sonnet`**,
+   * **effort `medium`**), so an unconfigured board still gates plan-conformance
+   * on a pinned runtime (ADR 0026). A present `[auditor]` table overrides either
+   * knob.
    */
   readonly auditor: AgentConfig;
   /**
@@ -169,9 +170,9 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
       configPath,
       DEFAULT_AGENT_CONFIG,
     ),
-    // The auditor edge alone defaults its model to `opus` (ADR 0026); `effort`
-    // still inherits. Threading the default through `parseAgent` keeps one parser
-    // for all three edges — only the fallback differs.
+    // The auditor edge alone defaults to a pinned `sonnet`/`medium` rather than
+    // inheriting (ADR 0026). Threading the default through `parseAgent` keeps one
+    // parser for all three edges — only the fallback differs.
     auditor: parseAgent(
       parsed.auditor,
       "auditor",
@@ -366,8 +367,9 @@ function parseEffort(raw: unknown, configPath: string): ReviewEffort {
  * which table for error messages (`implementor` / `reviewer` / `auditor`).
  *
  * `defaults` is threaded in rather than hardcoded so the auditor edge can default
- * its model to `opus` while the other two inherit (ADR 0026) — one parser, two
- * fallbacks. An explicit value in the table always overrides the default.
+ * to a pinned `sonnet`/`medium` while the other two inherit (ADR 0026) — one
+ * parser, two fallbacks. An explicit value in the table always overrides the
+ * default.
  */
 function parseAgent(
   raw: unknown,

@@ -30,7 +30,7 @@ export interface AuditorDeps {
   ) => string | undefined;
   /**
    * The auditor agent runtime (model + effort) a manual `c` launches at — the
-   * `[auditor]` config the CLI threads here (defaulting to **opus**, ADR 0026),
+   * `[auditor]` config the CLI threads here (defaulting to **sonnet/medium**, ADR 0026),
    * the *same* value the Reactor's auto-auditor uses, so a hand-driven audit and
    * an automated one launch the auditor identically.
    */

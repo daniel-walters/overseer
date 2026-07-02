@@ -49,6 +49,17 @@ describe("ensureConfig", () => {
     expect(config.root).toBe(join(home, "overseer"));
   });
 
+  it("writes an explicit [auditor] table pinned to the sonnet/medium default", () => {
+    ensureConfig({ configPath, home, defaultRoot: "~/overseer" });
+
+    // The table is redundant with the built-in default, but is written so the
+    // knob is visible to new users. Assert it round-trips to that default.
+    expect(loadConfig({ configPath, home }).auditor).toEqual({
+      model: "sonnet",
+      effort: "medium",
+    });
+  });
+
   it("leaves an existing config byte-for-byte unchanged", () => {
     const existing = 'root = "~/my/custom/place"\n';
     mkdirSync(join(home, ".config", "overseer"), { recursive: true });

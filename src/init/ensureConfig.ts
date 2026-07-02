@@ -33,6 +33,26 @@ export interface EnsureConfigResult {
  * byte-for-byte unchanged and no root directory is created — and it reports the
  * config already existed.
  */
+/**
+ * The TOML body written into a freshly-bootstrapped config: the required `root`
+ * plus an explicit `[auditor]` table pinned to the auditor edge's default
+ * (`sonnet`/`medium`). The table is redundant with the built-in default, so a
+ * config that omits it behaves identically — it is written to surface the knob
+ * to new users and give them an obvious line to edit.
+ */
+function bootstrapConfig(defaultRoot: string): string {
+  return [
+    `root = "${defaultRoot}"`,
+    "",
+    "# Fresh-eyes plan-conformance auditor. These are the built-in defaults;",
+    "# edit them (or delete the table) to change or inherit the launcher's model.",
+    "[auditor]",
+    'model = "sonnet"',
+    'effort = "medium"',
+    "",
+  ].join("\n");
+}
+
 export function ensureConfig(
   options: EnsureConfigOptions = {},
 ): EnsureConfigResult {
@@ -50,7 +70,7 @@ export function ensureConfig(
   mkdirSync(expandHome(defaultRoot, home), { recursive: true });
 
   mkdirSync(dirname(configPath), { recursive: true });
-  writeFileSync(configPath, `root = "${defaultRoot}"\n`);
+  writeFileSync(configPath, bootstrapConfig(defaultRoot));
 
   return { created: true, configPath };
 }

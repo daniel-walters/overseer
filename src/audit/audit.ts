@@ -27,7 +27,7 @@ export interface AuditDeps {
   /**
    * The auditor agent runtime (model + effort) this pass launches at. Optional:
    * omitted ⇒ inherit the launcher's model/effort. In production the auditor edge
-   * defaults its model to `opus` (ADR 0026), threaded in by the caller.
+   * defaults to a pinned `sonnet`/`medium` (ADR 0026), threaded in by the caller.
    */
   readonly agent?: AgentConfig;
   /** Append a spawn-failure record to the durable dispatch log. */

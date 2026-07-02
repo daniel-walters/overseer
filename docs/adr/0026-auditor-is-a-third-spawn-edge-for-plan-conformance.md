@@ -98,12 +98,17 @@ definition, a third spawn.
   (decision unchanged from today). A Deviation changes the *destination*
   (`human-review` instead of auto-merge), not whether review runs.
 
-- **The auditor defaults to `opus`** even when unconfigured — a deliberate
-  divergence from the implementor/reviewer edges (which default to inherit per
+- **The auditor defaults to a pinned `sonnet`/`medium`** even when unconfigured —
+  a deliberate divergence from the implementor/reviewer edges (which default to
+  inherit per
   [ADR 0020](./0020-per-edge-agent-model-and-effort-are-configurable.md)). The
-  auditor is the gate against silent scope drift, so it must be strong by default,
-  not only when someone remembers to set it. An optional `[auditor]` table
-  (`model`/`effort`) overrides it, mirroring 0020.
+  auditor is the gate against silent scope drift, so its runtime must be
+  predictable by default rather than tracking whatever the launcher happens to
+  run. An optional `[auditor]` table (`model`/`effort`) overrides either knob,
+  mirroring 0020. (This default was originally `opus` with inherited effort; it
+  was later pinned to `sonnet`/`medium` — a cheaper conformance pass at a fixed
+  effort — and `overseer init` now writes the table explicitly so the knob is
+  visible.)
 
 ## Consequences
 

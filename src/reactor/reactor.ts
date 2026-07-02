@@ -134,9 +134,9 @@ export interface ReactorDeps {
    * The auditor agent runtime (model + effort) the audit edge launches at — the
    * second spawn edge's counterpart to {@link implementor}/{@link reviewer},
    * sourced from the CLI's `[auditor]` config and shared with the manual `c`
-   * auditor. Optional: omitted ⇒ {@link DEFAULT_AUDITOR_CONFIG} (**model `opus`**,
-   * effort inherited — the one edge whose default is not inherit-everything, ADR
-   * 0026), as the wiring tests rely on.
+   * auditor. Optional: omitted ⇒ {@link DEFAULT_AUDITOR_CONFIG} (**model
+   * `sonnet`**, **effort `medium`** — the one edge whose default is a pinned
+   * runtime, not inherit-everything, ADR 0026), as the wiring tests rely on.
    */
   readonly auditor?: AgentConfig;
 }
@@ -266,9 +266,9 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // matching edge, just as `review` is resolved once and shared.
   const implementor = deps.implementor ?? DEFAULT_AGENT_CONFIG;
   const reviewer = deps.reviewer ?? DEFAULT_AGENT_CONFIG;
-  // The auditor edge alone defaults its model to `opus` (ADR 0026) rather than
-  // inheriting, so an unconfigured board still gates plan-conformance with a
-  // capable model. Resolved once and threaded onto every audit spawn.
+  // The auditor edge alone defaults to a pinned `sonnet`/`medium` (ADR 0026)
+  // rather than inheriting, so an unconfigured board still gates plan-conformance
+  // on a known runtime. Resolved once and threaded onto every audit spawn.
   const auditor = deps.auditor ?? DEFAULT_AUDITOR_CONFIG;
   // Whether the most recent reconcile attempted any spawn — the second input
   // (beside `enabled`) to the board-level activity signal. Starts false so a

@@ -383,15 +383,16 @@ describe("loadConfig", () => {
       writeFileSync(configPath, `root = "~"\n${extra}`);
     }
 
-    it("defaults the auditor to model opus and inherited effort when the table is absent", () => {
-      // The auditor's model defaults to `opus` — the deliberate divergence from the
-      // inherit-by-default of the other two edges (ADR 0026), so the gate against
-      // silent scope drift is strong even on an unconfigured board.
+    it("defaults the auditor to model sonnet and effort medium when the table is absent", () => {
+      // The auditor defaults to a pinned `sonnet`/`medium` — the deliberate
+      // divergence from the inherit-by-default of the other two edges (ADR 0026),
+      // so the gate against silent scope drift runs on a known runtime even on an
+      // unconfigured board.
       writeFileSync(configPath, 'root = "~"\n');
 
       expect(loadConfig({ configPath, home }).auditor).toEqual({
-        model: "opus",
-        effort: null,
+        model: "sonnet",
+        effort: "medium",
       });
     });
 
@@ -404,21 +405,21 @@ describe("loadConfig", () => {
       });
     });
 
-    it("keeps the opus model default when only effort is set", () => {
+    it("keeps the sonnet model default when only effort is set", () => {
       writeWithRoot('[auditor]\neffort = "max"\n');
 
       expect(loadConfig({ configPath, home }).auditor).toEqual({
-        model: "opus",
+        model: "sonnet",
         effort: "max",
       });
     });
 
-    it("overrides the opus default when only the model is set, leaving effort inherited", () => {
+    it("overrides the model default when only the model is set, keeping the medium effort default", () => {
       writeWithRoot('[auditor]\nmodel = "haiku"\n');
 
       expect(loadConfig({ configPath, home }).auditor).toEqual({
         model: "haiku",
-        effort: null,
+        effort: "medium",
       });
     });
 
