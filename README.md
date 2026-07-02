@@ -172,10 +172,20 @@ carries a `status` frontmatter field; canonical Issue statuses are `backlog`,
 The bundled skills (installed by `overseer init`) are the authoring pipeline that
 produces the PRDs and Issues Overseer reads:
 
-- `overseer-grill-with-docs` — stress-test a plan and maintain the domain docs.
+- `overseer-grill-prep` — when you have a goal but don't yet know what PRDs it
+  breaks into, survey the project and interview divergently to surface a *slate*
+  of candidate PRD shapes, written to `<root>/_slate/<initiative>.md`. The slate
+  is a staging doc, invisible to the board.
+- `overseer-grill-with-docs` — stress-test one plan and maintain the domain docs.
+  Run with no area named and it lists the slate's candidates for you to pick.
 - `overseer-to-prd` — write the conversation up as a `prd.md` in the root.
 - `overseer-to-issues` — break a PRD into independently-grabbable Issue files.
 - `overseer-merge` — the human-invoked merge for a resolved `human-review` Issue.
+
+When the work is fuzzy, the pipeline reads breadth-first then depth-first:
+`grill-prep` (project → candidate PRDs) → `grill-with-docs` (converge on one) →
+`to-prd` → `to-issues`. When you already know the one feature, start at
+`grill-with-docs`.
 
 Once the Issues are files in the root, open Overseer and ignite the work there
 (`d`) — the board is where work is dispatched and observed.

@@ -14,6 +14,11 @@ root = "~/work/prds"
 # capable model at high effort. The reviewer runs once per pass (and may run up
 # to `review.cap` times), so a faster model at medium effort keeps each pass
 # quick; bump it toward opus/high if you find reviews missing real bugs.
+#
+# The [auditor] is the one exception to inherit-by-default: its `model` defaults
+# to "opus" even when the table (or just the model field) is omitted, so the
+# fresh-eyes plan-conformance gate is strong out of the box. `effort` still
+# inherits. Set the table only to override that "opus" default.
 
 [implementor]
 model = "opus"
@@ -22,6 +27,11 @@ effort = "high"
 [reviewer]
 model = "sonnet"
 effort = "medium"
+
+# Optional — even if this whole table is absent, the auditor's model is "opus".
+[auditor]
+model = "opus"
+effort = "high"
 
 # --- Review loop (optional) ---------------------------------------------------
 # `cap` is the number of `/code-review` passes before an Issue escalates to

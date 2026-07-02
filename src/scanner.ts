@@ -14,6 +14,7 @@ import {
   derivePrdLane,
   derivePrdNeedsReview,
   derivePrdStalled,
+  derivePrdTolerated,
   type Board,
   type PRD,
   type Issue,
@@ -25,6 +26,7 @@ import {
 } from "./model.js";
 import type { Absence } from "./dispatch/liveness.js";
 import type { FailedEdgeKind } from "./dispatch/failureLog.js";
+import { isActiveStatus } from "./dispatch/status.js";
 
 /**
  * Look up the probe's trust-qualified absence ({@link Absence}) for one Issue by
@@ -103,16 +105,19 @@ export type LinkedPrLookup = (prdDir: string) => LinkedPr | undefined;
  *
  * `lookupLiveness` is the optional liveness overlay (ADR 0008), recomputed and
  * passed in on each board rebuild — never read from the Issue files (ADR 0002).
- * It is consulted only for `in-progress` / `in-review` Issues (the two lanes a
- * spawned agent owns); every other lane scans with no liveness. Omitting it (the
+ * It is consulted only for `in-progress` / `in-audit` / `in-review` Issues (the
+ * three statuses a spawned agent owns); every other status scans with no liveness.
+ * Omitting it (the
  * eager first render, board-only tests) simply leaves every card unmarked.
  *
  * `lookupSuppressed` is the mirror-image optional overlay, gated to the opposite
- * (awaiting) `ready-for-agent` / `ready-for-review` lanes — the two an agent has
- * *not* started on. Positional params rather than an `overlays` bag because each
- * gates a disjoint slice of the board; the same omit-it-and-cards-are-blank
- * contract holds for all of them. Because the two Issue-level lanes are disjoint,
- * no Issue can carry both the liveness and the suppressed overlay.
+ * (awaiting) `ready-for-agent` / `ready-for-audit` / `ready-for-review` lanes —
+ * the three awaiting spawns an agent has *not* started on — plus the `in-review`
+ * lane (a failed clean merge). Positional params rather than an `overlays` bag
+ * because each gates a disjoint slice of the board; the same
+ * omit-it-and-cards-are-blank contract holds for all of them. Because the
+ * active-agent and awaiting-spawn statuses are disjoint, no single Issue can carry
+ * both the liveness and the suppressed overlay.
  *
  * `lookupPr` is the PRD-level Linked PR overlay (ADR 0013), the board's third
  * derived overlay — joined onto a PRD (not an Issue) and consulted only for a
@@ -204,13 +209,22 @@ function scanPrd(
   // `true` stamps the field. It is mutually exclusive with needsReview (a stalled
   // PRD has nothing in flight; a human-review Issue is in-flight-or-later), but
   // composed independently so neither suppresses the other.
+  // The tolerated overlay is the board's third Issue→PRD roll-up: `true` when ≥1
+  // Issue merged with tolerated findings (derivePrdTolerated, ADR 0027). Like the
+  // other two it is derived from the Issues, never read from/written to `prd.md`,
+  // and only `true` stamps the field. Purely informational, so it is composed
+  // independently and co-renders freely with needsReview / stalled / the Linked PR
+  // marker — none suppresses it and it suppresses none.
   const base: PRD = { id: dirName, title, lane, issues };
   const withNeedsReview: PRD = derivePrdNeedsReview(issues)
     ? { ...base, needsReview: true }
     : base;
-  const prd: PRD = derivePrdStalled(issues)
+  const withStalled: PRD = derivePrdStalled(issues)
     ? { ...withNeedsReview, stalled: true }
     : withNeedsReview;
+  const prd: PRD = derivePrdTolerated(issues)
+    ? { ...withStalled, tolerated: true }
+    : withStalled;
   // The Linked PR overlay rides only on a `done` PRD, keyed by its absolute dir
   // path (ADR 0013). The `done` gate both scopes the marker to PRDs that can have
   // a feature-branch PR and bounds the per-scan `gh` query to finished work — a
@@ -245,9 +259,6 @@ function scanIssues(
   );
 }
 
-/** The two lanes an active spawned agent owns, where a liveness marker belongs. */
-const LIVENESS_LANES: ReadonlySet<Lane> = new Set<Lane>(["in-progress", "in-review"]);
-
 /** Parse one Issue file. Identity is the filename; title falls back to the slug. */
 function scanIssue(
   path: string,
@@ -258,7 +269,8 @@ function scanIssue(
 ): Issue {
   const { data } = safeMatter(readFileSync(path, "utf8"));
   const title = readString(data, FIELD.title) ?? slugFromFileName(fileName);
-  const { lane, readyFor, malformedStatus } = placeOrBacklog(data[FIELD.status]);
+  const rawStatus = data[FIELD.status];
+  const { lane, readyFor, malformedStatus } = placeOrBacklog(rawStatus);
   // `blocked_by` rides every Issue (it's authored regardless of lane) so the
   // PRD-level stalled roll-up can check a ready-for-agent Issue's blockers
   // against its done siblings. Empty list ⇒ omit, keeping the model minimal.
@@ -274,16 +286,20 @@ function scanIssue(
   const withReadyFor: Issue =
     readyFor === undefined ? issue : { ...issue, readyFor };
 
-  // The liveness overlay rides only on the two active-agent lanes (in-progress,
-  // in-review), keyed by the Issue's absolute path — the sidecar's join key
-  // (ADR 0008). Once a lookup is wired in, such a card always carries a verdict:
-  // the lookup's absence mapped to live/orphaned/unknown, and a default of
-  // "unknown" when it has none — the honesty boundary below.
-  const withLiveness = applyLiveness(withReadyFor, path, lane, lookupLiveness);
+  // The liveness overlay rides only on the active-agent *statuses* (in-progress,
+  // in-audit, in-review), keyed by the Issue's absolute path — the sidecar's join
+  // key (ADR 0008). The gate is per-status, not per-lane, because the `audit` lane
+  // folds an active status (in-audit) and a waiting one (ready-for-audit): only the
+  // active card carries a verdict, and that is the very signal that distinguishes
+  // the two on the shared column (ADR 0026). Once a lookup is wired in, such a card
+  // always carries a verdict: the lookup's absence mapped to live/orphaned/unknown,
+  // and a default of "unknown" when it has none — the honesty boundary below.
+  const withLiveness = applyLiveness(withReadyFor, path, rawStatus, lookupLiveness);
 
-  // The suppressed overlay rides the two awaiting `ready-*` lanes (a failed spawn)
-  // plus the `in-review` lane (a failed clean merge on the resolve edge — ADR
-  // 0019), with the edge derived from the same placement. On `in-review` it is NOT
+  // The suppressed overlay rides the three awaiting lanes — `ready` (agent),
+  // `audit` (`ready-for-audit`), and `ready-for-review` (a failed spawn) — plus
+  // the `in-review` lane (a failed clean merge on the resolve edge — ADR 0019),
+  // with the edge derived from the same placement. On `in-review` it is NOT
   // disjoint from the liveness verdict computed above — a held merge can sit on a
   // card whose dead reviewer also reads `orphaned` — so the Card resolves the
   // overlap by precedence: the suppressed marker outranks liveness (and the N/cap
@@ -305,7 +321,20 @@ function scanIssue(
   // below untouched.
   const withReviewPass = applyReviewPass(withSuppressed, path, lane, lookupReviewPass);
 
-  if (lane !== "human-review") return withReviewPass;
+  // The merged-with-tolerated marker (review-tolerance PRD, ADR 0027): a `done`
+  // Issue whose frontmatter carries a non-blank `review_tolerated` waved tolerable
+  // findings through at its clean merge, so the card lights the neutral marker.
+  // Gated on the `done` lane (not a verdict): the same field on a `human-review`
+  // Issue — a deviating Issue whose review converged clean-with-tolerated — is
+  // audit trail there, never a marker, so the gate is on placement, not the field.
+  // Read straight from the file (the marker renders a recorded fact); blank reads
+  // as absent (`readPresentString`), so a genuinely zero-findings merge stays bare.
+  const withTolerated: Issue =
+    lane === "done" && readPresentString(data, FIELD.reviewTolerated) !== undefined
+      ? { ...withReviewPass, tolerated: true }
+      : withReviewPass;
+
+  if (lane !== "human-review") return withTolerated;
   // The escalation reason (an enum, drives the card marker) and the free-text
   // note (the reviewer's "why", surfaced in the detail view) are parsed
   // independently: each only lands on a human-review card, each treats an
@@ -315,8 +344,8 @@ function scanIssue(
   const humanReviewNote = readPresentString(data, FIELD.humanReviewNote);
   const withReason =
     humanReviewReason === undefined
-      ? withSuppressed
-      : { ...withSuppressed, humanReviewReason };
+      ? withTolerated
+      : { ...withTolerated, humanReviewReason };
   const withNote =
     humanReviewNote === undefined
       ? withReason
@@ -334,35 +363,40 @@ function scanIssue(
 }
 
 /**
- * Add the liveness verdict to an Issue, but only on an `in-progress` / `in-review`
- * card. This is the honesty boundary (ADR 0008 / 0009): once a lookup is
- * provided, every active-agent card *must* carry a verdict — silence on an
- * in-progress card is the very ambiguity the feature exists to kill.
+ * Add the liveness verdict to an Issue, but only on an active-agent *status*
+ * (`in-progress` / `in-audit` / `in-review`). This is the honesty boundary (ADR
+ * 0008 / 0009): once a lookup is provided, every active-agent card *must* carry a
+ * verdict — silence on an in-progress card is the very ambiguity the feature
+ * exists to kill.
  *
- * The lane gate lives here, not in the probe: the probe emits a status-ignorant
- * trust-qualified {@link Absence}, and this is the one place that knows these two
- * lanes are owned by an active agent (ADR 0009). It maps the absence to the
- * card-level verdict:
+ * The gate is per-status, not per-lane (ADR 0026): the `audit` lane folds the
+ * active `in-audit` and the waiting `ready-for-audit`, and only the active one is
+ * agent-owned, so keying on the status (not the column) is what keeps a waiting
+ * card unmarked while a live/orphaned auditor reads its verdict — the distinction
+ * the shared column relies on. The gate lives here, not in the probe: the probe
+ * emits a status-ignorant trust-qualified {@link Absence}, and this is the one
+ * place that knows which statuses an active agent owns (ADR 0009). It maps the
+ * absence to the card-level verdict:
  *
  * - `live` → **live** (the handle is in the registry).
  * - `absent-clean` → **orphaned** (a trustworthy query says the agent is gone:
- *   stuck on an active lane, recoverable).
+ *   stuck on an active status, recoverable).
  * - `absent-degraded` → **unknown** (the query couldn't be trusted; a false
  *   `orphaned` would invite a double-spawn, so it degrades to `unknown`).
  * - no recorded handle → **unknown** (a previous session, an empty sidecar, or
  *   the spawn/record gap). Never a false `live`, and never a false `orphaned`.
  *
- * A card outside the two active-agent lanes (ready, done, backlog) — or any
- * card when no lookup is wired in — is returned unchanged and stays unmarked:
- * no agent owns it, so it has no liveness to report.
+ * A card on any non-active status (ready-*, done, backlog) — or any card when no
+ * lookup is wired in — is returned unchanged and stays unmarked: no agent owns
+ * it, so it has no liveness to report.
  */
 function applyLiveness(
   issue: Issue,
   path: string,
-  lane: Lane,
+  status: unknown,
   lookupLiveness?: LivenessLookup,
 ): Issue {
-  if (!lookupLiveness || !LIVENESS_LANES.has(lane)) return issue;
+  if (!lookupLiveness || !isActiveStatus(status)) return issue;
   return { ...issue, liveness: livenessFromAbsence(lookupLiveness(path)) };
 }
 
@@ -448,16 +482,21 @@ function applySuppressed(
 
 /**
  * The failed-set edge a lane implies, or `undefined` if the lane carries no
- * suppressible edge. Reads the derived placement, so the three suppressible lanes
- * map to their edge — the two spawn edges plus the non-spawn `resolve` edge (ADR
- * 0019) — and every other lane (including a `ready-for-human` card, which shares
- * the `ready` lane but launches no agent) yields no edge.
+ * suppressible edge. Reads the derived placement, so the four suppressible lanes
+ * map to their edge — the three spawn edges plus the non-spawn `resolve` edge (ADR
+ * 0019 / 0026) — and every other lane (including a `ready-for-human` card, which
+ * shares the `ready` lane but launches no agent) yields no edge. The `audit` lane
+ * folds `ready-for-audit` and `in-audit`; only a `ready-for-audit` card (a rolled-
+ * back failed spawn) is ever in the failed-set under the `audit` edge, so the
+ * suppressed marker lands on the right card and an active `in-audit` card is never
+ * falsely stamped (its path is absent from the set).
  */
 function suppressedEdgeForLane(
   lane: Lane,
   readyFor: ReadyFor | undefined,
 ): FailedEdgeKind | undefined {
   if (lane === "ready" && readyFor === "agent") return "implementor";
+  if (lane === "audit") return "audit";
   if (lane === "ready-for-review") return "reviewer";
   if (lane === "in-review") return "resolve";
   return undefined;

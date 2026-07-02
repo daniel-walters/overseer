@@ -331,10 +331,12 @@ describe("scanBoard approvable overlay (A on a human-review Issue)", () => {
 
 describe("scanBoard liveness overlay", () => {
   /**
-   * A throwaway root with one Issue in each of the four interesting lanes: the
-   * two the overlay applies to (in-progress, in-review) and two it must never
-   * touch (ready-for-agent, done). The liveness lookup is keyed by the Issue's
-   * absolute path — the same `prdDir/filename` key the sidecar records (ADR 0008).
+   * A throwaway root with one Issue in each interesting status: the active ones
+   * the overlay applies to (in-progress, in-review, in-audit) and the ones it must
+   * never touch (ready-for-agent, done, and the waiting ready-for-audit that
+   * shares the audit lane with the active in-audit). The liveness lookup is keyed
+   * by the Issue's absolute path — the same `prdDir/filename` key the sidecar
+   * records (ADR 0008).
    */
   function liveRoot(): { root: string; pathOf: (file: string) => string } {
     const root = mkdtempSync(join(tmpdir(), "overseer-live-"));
@@ -345,6 +347,8 @@ describe("scanBoard liveness overlay", () => {
     writeFileSync(join(dir, "002-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
     writeFileSync(join(dir, "003-queued.md"), "---\nstatus: ready-for-agent\n---\nbody\n");
     writeFileSync(join(dir, "004-shipped.md"), "---\nstatus: done\n---\nbody\n");
+    writeFileSync(join(dir, "006-auditing.md"), "---\nstatus: in-audit\n---\nbody\n");
+    writeFileSync(join(dir, "007-await-audit.md"), "---\nstatus: ready-for-audit\n---\nbody\n");
     return { root, pathOf: (file) => join(dir, file) };
   }
 
@@ -391,6 +395,29 @@ describe("scanBoard liveness overlay", () => {
     );
   });
 
+  it("maps an absent-clean verdict on an in-audit card to orphaned", () => {
+    // `in-audit` is the auditor's active status — an active-agent card like
+    // in-progress / in-review — so a dead auditor surfaces as an Orphan, `R`-able
+    // back to ready-for-audit (ADR 0026).
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("006-auditing.md") ? "absent-clean" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "006-auditing.md").liveness).toBe(
+      "orphaned",
+    );
+  });
+
+  it("overlays a live verdict on an in-audit Issue (so K and o work on a live auditor)", () => {
+    const { root, pathOf } = liveRoot();
+    const board = scanBoard(root, (path) =>
+      path === pathOf("006-auditing.md") ? "live" : undefined,
+    );
+
+    expect(issueById(featureIssues(board), "006-auditing.md").liveness).toBe("live");
+  });
+
   it("maps an absent-degraded verdict to unknown, never orphaned", () => {
     // An untrustworthy query (it threw, or did not parse to an array): the agent
     // might still be alive behind the hiccup, so the card must read unknown.
@@ -404,17 +431,20 @@ describe("scanBoard liveness overlay", () => {
     );
   });
 
-  it("never overlays liveness on a lane that is not in-progress or in-review", () => {
-    // The lookup claims every Issue is gone-clean; only the two active-agent
-    // lanes may carry the marker — a ready or done card never shows a verdict, so
-    // an Issue that legitimately advanced past the active status never reads
-    // orphaned (ADR 0009).
+  it("never overlays liveness on a status that is not active (in-progress / in-audit / in-review)", () => {
+    // The lookup claims every Issue is gone-clean; only the active-agent statuses
+    // may carry the marker — a ready or done card never shows a verdict, so an
+    // Issue that legitimately advanced past the active status never reads orphaned
+    // (ADR 0009). The waiting `ready-for-audit` card shares the `audit` lane with
+    // the active `in-audit` one, so the gate is per-status, not per-lane: a card
+    // nobody is auditing yet stays unmarked (ADR 0026).
     const { root } = liveRoot();
     const board = scanBoard(root, () => "absent-clean");
     const issues = featureIssues(board);
 
     expect(issueById(issues, "003-queued.md").liveness).toBeUndefined();
     expect(issueById(issues, "004-shipped.md").liveness).toBeUndefined();
+    expect(issueById(issues, "007-await-audit.md").liveness).toBeUndefined();
   });
 
   it("leaves liveness unset when no lookup is provided", () => {
@@ -628,12 +658,13 @@ describe("scanBoard review-pass overlay", () => {
 describe("scanBoard suppressed overlay", () => {
   /**
    * A throwaway root with one Issue in each lane that matters to the suppressed
-   * overlay: the three suppressible lanes it applies to (ready-for-agent →
-   * implementor edge, ready-for-review → reviewer edge, in-review → resolve edge —
-   * ADR 0019), the `ready-for-human` card that shares the `ready` lane but is *not*
-   * a spawn target, and the three lanes a lingering failed-set entry must stay
-   * inert on (in-progress, done, backlog). The suppressed lookup is keyed by the
-   * Issue's absolute path and the edge the lane implies.
+   * overlay: the four suppressible lanes it applies to (ready-for-agent →
+   * implementor edge, audit → audit edge — ADR 0026, ready-for-review → reviewer
+   * edge, in-review → resolve edge — ADR 0019), the `ready-for-human` card that
+   * shares the `ready` lane but is *not* a spawn target, and the three lanes a
+   * lingering failed-set entry must stay inert on (in-progress, done, backlog). The
+   * suppressed lookup is keyed by the Issue's absolute path and the edge the lane
+   * implies.
    */
   function suppressedRoot(): { root: string; pathOf: (file: string) => string } {
     const root = mkdtempSync(join(tmpdir(), "overseer-suppressed-"));
@@ -647,6 +678,7 @@ describe("scanBoard suppressed overlay", () => {
     writeFileSync(join(dir, "005-reviewing.md"), "---\nstatus: in-review\n---\nbody\n");
     writeFileSync(join(dir, "006-shipped.md"), "---\nstatus: done\n---\nbody\n");
     writeFileSync(join(dir, "007-parked.md"), "---\nstatus: backlog\n---\nbody\n");
+    writeFileSync(join(dir, "008-toaudit.md"), "---\nstatus: ready-for-audit\n---\nbody\n");
     return { root, pathOf: (file) => join(dir, file) };
   }
 
@@ -674,6 +706,43 @@ describe("scanBoard suppressed overlay", () => {
     );
 
     expect(issueById(featureIssues(board), "002-toreview.md").suppressed).toBe(true);
+  });
+
+  it("stamps suppressed on a ready-for-audit card the lookup reports suppressed", () => {
+    // A failed auditor launch (ADR 0026) rolls the Issue back to ready-for-audit
+    // and records `(path, audit)` in the failed-set; the marker must render on the
+    // `audit` lane, the second of the three spawn edges.
+    const { root, pathOf } = suppressedRoot();
+    const board = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("008-toaudit.md") && edge === "audit",
+    );
+
+    expect(issueById(featureIssues(board), "008-toaudit.md").suppressed).toBe(true);
+  });
+
+  it("derives the edge from the lane: ready-for-audit asks the audit edge", () => {
+    // The audit lane asks `audit`, not a different spawn edge: a lookup that
+    // suppresses only the audit edge for its path marks it, and one that suppresses
+    // only the reviewer edge for that same path does not — one failing edge can't
+    // mask another for the same Issue.
+    const { root, pathOf } = suppressedRoot();
+    const onAudit = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("008-toaudit.md") && edge === "audit",
+    );
+    expect(issueById(featureIssues(onAudit), "008-toaudit.md").suppressed).toBe(true);
+
+    const onReviewer = scanBoard(
+      root,
+      undefined,
+      (path, edge) => path === pathOf("008-toaudit.md") && edge === "reviewer",
+    );
+    expect(
+      issueById(featureIssues(onReviewer), "008-toaudit.md").suppressed,
+    ).toBeUndefined();
   });
 
   it("derives the edge from the lane: ready-for-agent asks the implementor edge", () => {
@@ -768,11 +837,11 @@ describe("scanBoard suppressed overlay", () => {
   });
 
   it("lane-gates: a lingering entry on a non-suppressible lane never marks the card", () => {
-    // The lookup claims every (path, edge) is suppressed; only the three
-    // suppressible lanes (ready-for-agent, ready-for-review, in-review) may carry
-    // the marker. An in-progress / done / backlog card with a matching stale entry
-    // stays blank — lane-gating is what makes the append-only set's stale entries
-    // inert.
+    // The lookup claims every (path, edge) is suppressed; only the four
+    // suppressible lanes (ready-for-agent, audit, ready-for-review, in-review) may
+    // carry the marker. An in-progress / done / backlog card with a matching stale
+    // entry stays blank — lane-gating is what makes the append-only set's stale
+    // entries inert.
     const { root } = suppressedRoot();
     const board = scanBoard(root, undefined, () => true);
     const issues = featureIssues(board);
@@ -821,6 +890,10 @@ describe("scanBoard suppressed overlay", () => {
     // ready-for-agent: suppressed only, never liveness (no agent owns it).
     expect(issueById(issues, "001-queued.md").suppressed).toBe(true);
     expect(issueById(issues, "001-queued.md").liveness).toBeUndefined();
+    // ready-for-audit: the waiting audit card is suppressed only — liveness gates on
+    // the active in-audit status, never the awaiting one that folds into the lane.
+    expect(issueById(issues, "008-toaudit.md").suppressed).toBe(true);
+    expect(issueById(issues, "008-toaudit.md").liveness).toBeUndefined();
     // in-review: the deliberate overlap — both fields present on the model.
     expect(issueById(issues, "005-reviewing.md").suppressed).toBe(true);
     expect(issueById(issues, "005-reviewing.md").liveness).toBe("live");
@@ -1055,5 +1128,107 @@ describe("scanBoard needs-review overlay", () => {
 
       expect(prdById(board.prds, "feature").stalled).toBe(true);
     });
+  });
+});
+
+describe("scanBoard tolerated overlay (merged with tolerated findings)", () => {
+  /** Build a throwaway PRD whose Issues carry the given frontmatter blocks. */
+  function prdWithIssues(files: Record<string, string>): string {
+    const root = mkdtempSync(join(tmpdir(), "overseer-tol-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "prd.md"), "---\ntitle: Feature\n---\nbody\n");
+    for (const [name, fm] of Object.entries(files)) {
+      writeFileSync(join(dir, name), `---\n${fm}\n---\nbody\n`);
+    }
+    return root;
+  }
+
+  function featureIssues(root: string): readonly Issue[] {
+    return prdById(scanBoard(root).prds, "feature").issues;
+  }
+
+  it("sets tolerated on a done Issue carrying review_tolerated", () => {
+    // A clean-with-tolerated merge (ADR 0027): the done Issue records what it
+    // waved through, so the board can light the neutral marker.
+    const root = prdWithIssues({
+      "001-merged.md": 'status: done\nreview_tolerated: "style:low — two nits"',
+    });
+
+    expect(issueById(featureIssues(root), "001-merged.md").tolerated).toBe(true);
+  });
+
+  it("leaves tolerated unset on a done Issue with no review_tolerated", () => {
+    // A genuinely zero-findings merge carries no manifest — it must read distinct
+    // from a clean-with-tolerated one, so no marker.
+    const root = prdWithIssues({ "001-clean.md": "status: done" });
+
+    expect(
+      issueById(featureIssues(root), "001-clean.md").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("treats a blank review_tolerated as absent (no marker)", () => {
+    const root = prdWithIssues({
+      "001-blank.md": 'status: done\nreview_tolerated: ""',
+    });
+
+    expect(
+      issueById(featureIssues(root), "001-blank.md").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("gates the marker on the done lane: a human-review Issue carrying the field stays unmarked", () => {
+    // A deviating Issue whose review converged clean-with-tolerated routes to
+    // human-review (deviation wins precedence); there the field is audit trail,
+    // not a marker — the "merged with tolerated" marker is done-only.
+    const root = prdWithIssues({
+      "001-deviated.md":
+        'status: human-review\nreview_tolerated: "style:low — a nit"',
+    });
+
+    expect(
+      issueById(featureIssues(root), "001-deviated.md").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("rolls the marker up to the PRD card", () => {
+    // The Issue→PRD roll-up (user story 12): a PRD reads as carrying tolerated
+    // findings without zooming into its Issues.
+    const root = prdWithIssues({
+      "001-merged.md": 'status: done\nreview_tolerated: "style:low — a nit"',
+      "002-plain.md": "status: done",
+    });
+
+    expect(prdById(scanBoard(root).prds, "feature").tolerated).toBe(true);
+  });
+
+  it("leaves the PRD roll-up unset when no done Issue carries the field", () => {
+    const root = prdWithIssues({
+      "001-clean.md": "status: done",
+      "002-working.md": "status: in-progress",
+    });
+
+    expect(
+      prdById(scanBoard(root).prds, "feature").tolerated,
+    ).toBeUndefined();
+  });
+
+  it("derives the PRD roll-up from the Issues regardless of any prd.md frontmatter", () => {
+    // A derived roll-up, never read from prd.md (ADR 0002 / 0003): a prd.md
+    // asserting review_tolerated: false cannot suppress a genuine marker.
+    const root = mkdtempSync(join(tmpdir(), "overseer-tol-"));
+    const dir = join(root, "feature");
+    mkdirSync(dir);
+    writeFileSync(
+      join(dir, "prd.md"),
+      "---\ntitle: Feature\nreview_tolerated: false\n---\nbody\n",
+    );
+    writeFileSync(
+      join(dir, "001-merged.md"),
+      '---\nstatus: done\nreview_tolerated: "style:low — a nit"\n---\nbody\n',
+    );
+
+    expect(prdById(scanBoard(root).prds, "feature").tolerated).toBe(true);
   });
 });
