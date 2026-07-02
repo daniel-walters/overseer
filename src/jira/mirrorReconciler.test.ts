@@ -34,6 +34,8 @@ class FakeJiraSeam implements JiraSeam {
   failCreate = false;
   /** When set, `createChildIssue` throws — a child-create failure isolated from the epic. */
   failChildCreate = false;
+  /** When set, `currentStatus` throws for this key — a simulated transient read failure. */
+  failCurrentStatusFor: string | undefined = undefined;
   /** Ordered record of every seam call. */
   readonly calls: string[] = [];
   /** The inputs `createEpic` was called with, for summary/project assertions. */
@@ -73,6 +75,9 @@ class FakeJiraSeam implements JiraSeam {
 
   async currentStatus(key: string): Promise<string | undefined> {
     this.calls.push(`currentStatus:${key}`);
+    if (key === this.failCurrentStatusFor) {
+      throw new Error("acli read failed");
+    }
     return this.statusByKey.get(key);
   }
 
@@ -581,6 +586,28 @@ describe("mirrorReconciler — child create", () => {
     expect(seam.childrenCreated).toHaveLength(1);
     expect(delta.childrenCreated).toEqual([]);
     expect(logs.join("\n")).toMatch(/duplicate child/i);
+  });
+
+  it("keeps a child's create in the delta even when the post-create status read fails", async () => {
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "To Do"); // epic already at target
+    seam.projectByBoard.set("34", "DS");
+    const { reconciler, set, childKeyOf } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    // createChildIssue always mints the next DS-10x key; tell the fake to fail
+    // the very next currentStatus read (the freshly-created child's).
+    seam.failCurrentStatusFor = "DS-101";
+
+    const delta = await reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
+    );
+
+    // The child was genuinely created and its backref durably written; a
+    // transient read failure during self-heal must not erase that from the
+    // delta (mirrors the epic path's create-before-self-heal-read ordering).
+    expect(seam.childrenCreated).toHaveLength(1);
+    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(childKeyOf("auth", "001.md")).toBe("DS-101");
   });
 });
 

@@ -365,20 +365,31 @@ async function reconcileChild(
       );
       return { created };
     }
-    const current = await deps.seam.currentStatus(key);
-    if (current === undefined) {
-      log(
-        `child ${key}: current status could not be read — skipping self-heal (no-op).`,
-      );
-    } else if (!statusEquals(current, target)) {
-      try {
-        await deps.seam.transition(key, target);
-        return { created, transitioned: { key, to: target } };
-      } catch (err) {
+    // A read failure here (e.g. a transient acli/network error) must not erase
+    // an already-recorded `created` — the child genuinely exists in JIRA and its
+    // backref is durably written, so that create belongs in the delta regardless
+    // of whether this pass's self-heal read succeeds (mirrors the epic path's
+    // create-before-self-heal-read ordering in `reconcileOnce`).
+    try {
+      const current = await deps.seam.currentStatus(key);
+      if (current === undefined) {
         log(
-          `child ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+          `child ${key}: current status could not be read — skipping self-heal (no-op).`,
         );
+      } else if (!statusEquals(current, target)) {
+        try {
+          await deps.seam.transition(key, target);
+          return { created, transitioned: { key, to: target } };
+        } catch (err) {
+          log(
+            `child ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+          );
+        }
       }
+    } catch (err) {
+      log(
+        `child ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
+      );
     }
     return { created };
   } catch (err) {
