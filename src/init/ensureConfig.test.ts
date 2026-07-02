@@ -35,6 +35,27 @@ describe("ensureConfig", () => {
     expect(readFileSync(configPath, "utf8")).toMatch(/root\s*=\s*"~\/overseer"/);
   });
 
+  it("scaffolds the recommended Agent-runtime and review tables", () => {
+    ensureConfig({ configPath, home, defaultRoot: "~/overseer" });
+
+    const written = readFileSync(configPath, "utf8");
+    expect(written).toMatch(/\[implementor\]\s+model = "opus"\s+effort = "high"/);
+    expect(written).toMatch(
+      /\[reviewer\]\s+model = "sonnet"\s+effort = "medium"/,
+    );
+    expect(written).toMatch(/\[review\]\s+cap = 3\s+effort = "medium"/);
+  });
+
+  it("writes a scaffolded config whose tables loadConfig resolves", () => {
+    ensureConfig({ configPath, home, defaultRoot: "~/overseer" });
+
+    const config = loadConfig({ configPath, home });
+
+    expect(config.implementor).toEqual({ model: "opus", effort: "high" });
+    expect(config.reviewer).toEqual({ model: "sonnet", effort: "medium" });
+    expect(config.review).toEqual({ cap: 3, effort: "medium" });
+  });
+
   it("creates the default root directory when none exists", () => {
     ensureConfig({ configPath, home, defaultRoot: "~/overseer" });
 
