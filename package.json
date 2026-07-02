@@ -21,6 +21,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "dependencies": {
+    "@xterm/headless": "^6.0.0",
     "chokidar": "^4.0.3",
     "gray-matter": "^4.0.3",
     "ink": "^7.0.5",

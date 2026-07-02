@@ -1637,6 +1637,117 @@ describe("App agent output (o on a live card)", () => {
     await tick();
     expect(stripAnsi(lastFrame() ?? "")).toContain("o Read"); // now the hint shows
   });
+
+  it("runs the raw logs bytes through the injected renderer and shows its resolved lines", async () => {
+    // The reader stays raw (returns `claude logs` bytes verbatim); the App feeds
+    // those bytes through the terminal-emulator seam (ADR 0030) and renders the
+    // *resolved* lines. Injecting a fake renderer proves the wiring: the raw redraw
+    // stream is not shown, the emulator's screen is.
+    const raw = "Progress: 10%\rProgress: 100%\n";
+    const reader = spyOutputReader({ title: "OAuth", output: raw });
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(async () => ["Progress: 100%"]);
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+
+    // The renderer received the raw bytes verbatim, sized to a positive grid.
+    expect(fakeRender).toHaveBeenCalledTimes(1);
+    const [bytes, cols, rows] = fakeRender.mock.calls[0]!;
+    expect(bytes).toBe(raw);
+    expect(cols).toBeGreaterThan(0);
+    expect(rows).toBeGreaterThan(0);
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("to close"); // the modal opened
+    expect(frame).toContain("Progress: 100%"); // the resolved screen line
+    expect(frame).not.toContain("Progress: 10%\r"); // not the raw redraw stream
+  });
+
+  it("shows the (no output yet) placeholder when the renderer resolves to no real content", async () => {
+    // Empty / whitespace-only bytes resolve to no real content, so the placeholder
+    // branch — keyed off the resolved lines — still fires (a just-spawned agent).
+    const reader = spyOutputReader({ title: "OAuth", output: "   \n\n" });
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(async () => []);
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("to close"); // the modal still opened
+    expect(frame).toContain("(no output yet)"); // ...onto the placeholder
+  });
+
+  it("discards a stale renderer resolution if the selection changes before it resolves", async () => {
+    // The emulator flush is awaited (ADR 0030), so there is a real window between
+    // pressing `o` and the modal opening. If the user moves off the live card
+    // during that window, the eventual resolution must not pop the agent-output
+    // modal open over whatever the user is now looking at.
+    const reader = spyOutputReader({ title: "OAuth", output: "compiling…\n" });
+    let resolveRender: ((lines: readonly string[]) => void) | undefined;
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(() => new Promise((resolve) => (resolveRender = resolve)));
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin); // now on 020-oauth (live)
+    stdin.write("o");
+    await tick(); // the render is in flight, but not yet resolved
+
+    stdin.write(ARROW_UP); // move to 010-login (the orphan) before it resolves
+    await tick();
+
+    resolveRender?.(["compiling…"]);
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("to close"); // the modal never opened
+    expect(frame).not.toContain("compiling…"); // the stale output never rendered
+  });
+
+  it("discards an older in-flight request when a newer o press supersedes it", async () => {
+    // Two quick `o` presses on the same card race two emulator flushes; only the
+    // most recently started request may populate the modal, regardless of settle
+    // order — otherwise a slow first flush could overwrite a fast second one.
+    const reader = spyOutputReader({ title: "OAuth", output: "compiling…\n" });
+    const resolvers: Array<(lines: readonly string[]) => void> = [];
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(() => new Promise((resolve) => resolvers.push(resolve)));
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o"); // first request
+    await tick();
+    stdin.write("o"); // second request supersedes the first — modal is still closed, so `o` reaches the handler again
+    await tick();
+
+    expect(resolvers).toHaveLength(2);
+    resolvers[1]?.(["second"]); // the newer request resolves first
+    await tick();
+    resolvers[0]?.(["first"]); // the older, superseded request resolves after
+
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("second"); // the newer request's result won
+    expect(frame).not.toContain("first"); // the stale older result was discarded
+  });
 });
 
 describe("App go to PR (g on a done PRD)", () => {
