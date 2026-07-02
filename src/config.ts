@@ -16,8 +16,8 @@ import {
   type AgentEffort,
 } from "./agentConfig.js";
 import {
-  DEFAULT_EPIC_STATUS_NAMES,
-  type EpicStatusNames,
+  DEFAULT_ISSUE_STATUS_NAMES,
+  type IssueStatusNames,
 } from "./jira/statusMapping.js";
 
 /** The resolved configuration: one board, one root, the review-loop + agent knobs. */
@@ -60,17 +60,19 @@ export interface Config {
  * The resolved `[jira]` config. `defaultBoard` is the board a `jira`-opted PRD
  * mirrors to when its block names none (the common case); it is optional because
  * a PRD may name its own `board`, and a board is only *needed* once a PRD opts in.
- * `statusNames` is always whole — the {@link EpicStatusNames} defaults filled in
- * for any name the `[jira.status]` table did not override.
+ * `statusNames` is always whole — the {@link IssueStatusNames} defaults filled in
+ * for any name the `[jira.status]` table did not override. It carries all four
+ * buckets (the epic half reads three of them, the Issue half all four), so one
+ * override map serves both.
  */
 export interface JiraConfig {
   readonly defaultBoard?: string;
-  readonly statusNames: EpicStatusNames;
+  readonly statusNames: IssueStatusNames;
 }
 
 /** The mirror's resolved defaults: no board configured, conventional status names. */
 export const DEFAULT_JIRA_CONFIG: JiraConfig = {
-  statusNames: DEFAULT_EPIC_STATUS_NAMES,
+  statusNames: DEFAULT_ISSUE_STATUS_NAMES,
 };
 
 /** Options for {@link loadConfig}; the defaults point at the real environment. */
@@ -190,13 +192,14 @@ function parseDefaultBoard(
 
 /**
  * Parse the optional `[jira.status]` override table into a complete
- * {@link EpicStatusNames}, filling each absent name from
- * {@link DEFAULT_EPIC_STATUS_NAMES}. The lane-named keys (`backlog`,
- * `in-progress`, `done`) map onto the camelCased status fields; a present name
- * must be a non-blank string or it is a user-fixable {@link ConfigError}.
+ * {@link IssueStatusNames}, filling each absent name from
+ * {@link DEFAULT_ISSUE_STATUS_NAMES}. The bucket-named keys (`backlog`,
+ * `in-progress`, `in-review`, `done`) map onto the camelCased status fields; a
+ * present name must be a non-blank string or it is a user-fixable
+ * {@link ConfigError}.
  */
-function parseStatusNames(raw: unknown, configPath: string): EpicStatusNames {
-  if (raw === undefined) return DEFAULT_EPIC_STATUS_NAMES;
+function parseStatusNames(raw: unknown, configPath: string): IssueStatusNames {
+  if (raw === undefined) return DEFAULT_ISSUE_STATUS_NAMES;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new ConfigError(
       `Config at ${configPath} has a "[jira.status]" that is not a table.`,
@@ -207,19 +210,25 @@ function parseStatusNames(raw: unknown, configPath: string): EpicStatusNames {
     backlog: parseStatusName(
       table.backlog,
       "backlog",
-      DEFAULT_EPIC_STATUS_NAMES.backlog,
+      DEFAULT_ISSUE_STATUS_NAMES.backlog,
       configPath,
     ),
     inProgress: parseStatusName(
       table["in-progress"],
       "in-progress",
-      DEFAULT_EPIC_STATUS_NAMES.inProgress,
+      DEFAULT_ISSUE_STATUS_NAMES.inProgress,
+      configPath,
+    ),
+    inReview: parseStatusName(
+      table["in-review"],
+      "in-review",
+      DEFAULT_ISSUE_STATUS_NAMES.inReview,
       configPath,
     ),
     done: parseStatusName(
       table.done,
       "done",
-      DEFAULT_EPIC_STATUS_NAMES.done,
+      DEFAULT_ISSUE_STATUS_NAMES.done,
       configPath,
     ),
   };

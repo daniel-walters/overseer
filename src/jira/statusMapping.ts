@@ -62,6 +62,72 @@ export function epicTargetStatus(
 }
 
 /**
+ * The named JIRA statuses an Issue's mirrored **child** is driven to — the four
+ * buckets the ten authored statuses coarsen to (CONTEXT.md → JIRA mirror, user
+ * story 15). A superset of {@link EpicStatusNames} (it adds `inReview`, the
+ * status inside the In-Progress *category* that the epic rollup never needs), so
+ * one `[jira.status]` override map feeds both halves: a value of this type is
+ * structurally assignable wherever an {@link EpicStatusNames} is wanted.
+ * `backlog` names the "To Do" status (every not-yet-started authored status lands
+ * there); `inReview` names the "In Review" status.
+ */
+export interface IssueStatusNames extends EpicStatusNames {
+  readonly inReview: string;
+}
+
+/**
+ * The conventional JIRA status names for the four Issue buckets, used when the
+ * `[jira]` config supplies no override — the {@link DEFAULT_EPIC_STATUS_NAMES}
+ * three plus the standard `In Review` status.
+ */
+export const DEFAULT_ISSUE_STATUS_NAMES: IssueStatusNames = {
+  ...DEFAULT_EPIC_STATUS_NAMES,
+  inReview: "In Review",
+};
+
+/**
+ * Which of the four {@link IssueStatusNames} buckets each authored Issue status
+ * maps to. The single source of the Issue-half mapping (CONTEXT.md → JIRA mirror):
+ * every not-yet-started status → the `backlog`/"To Do" bucket, the sole active
+ * status → `inProgress`, every review-ish status (audit, review, and the folded-in
+ * `human-review`) → `inReview`, and `done` → `done`. Kept as data (not a switch)
+ * so it stays exhaustively table-testable and a new status is one line.
+ */
+const ISSUE_STATUS_BUCKET: Readonly<Record<string, keyof IssueStatusNames>> = {
+  backlog: "backlog",
+  "ready-for-human": "backlog",
+  "ready-for-agent": "backlog",
+  "in-progress": "inProgress",
+  "ready-for-audit": "inReview",
+  "in-audit": "inReview",
+  "ready-for-review": "inReview",
+  "in-review": "inReview",
+  "human-review": "inReview",
+  done: "done",
+};
+
+/**
+ * The named JIRA status an Issue's mirrored child should track, given the Issue's
+ * authored `status` string, or `undefined` when the status is not one of the ten
+ * authored values. A workflow-specific {@link IssueStatusNames} (from config)
+ * overrides the conventional names.
+ *
+ * `undefined` (not a throw, not a wrong bucket) is the fail-safe for an
+ * unrecognised/malformed status: the reconciler creates the child regardless but
+ * skips its self-heal, exactly as it skips when an epic's current status can't be
+ * read — a data error never drives a child to a bogus column. The own-property
+ * guard keeps an `Object.prototype` member name (`toString`, `constructor`, …)
+ * from reading an inherited value off the lookup and returning a bogus bucket.
+ */
+export function issueTargetStatus(
+  status: string,
+  names: IssueStatusNames = DEFAULT_ISSUE_STATUS_NAMES,
+): string | undefined {
+  if (!Object.hasOwn(ISSUE_STATUS_BUCKET, status)) return undefined;
+  return names[ISSUE_STATUS_BUCKET[status]!];
+}
+
+/**
  * Whether two status names refer to the same status, comparing case- and
  * surrounding-whitespace-insensitively. The reconciler uses this to decide the
  * epic is already at its target (an idempotent no-op) rather than firing a

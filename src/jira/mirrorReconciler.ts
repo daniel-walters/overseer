@@ -5,19 +5,22 @@ import { readFileSync, appendFileSync, mkdirSync } from "node:fs";
 import {
   parseJiraOptIn,
   readPresentString,
+  readString,
   safeMatter,
   writeJiraEpic,
+  writeJiraKey,
   FIELD,
   type JiraOptIn,
 } from "../issueFile.js";
 import {
-  DEFAULT_EPIC_STATUS_NAMES,
+  DEFAULT_ISSUE_STATUS_NAMES,
   epicTargetStatus,
+  issueTargetStatus,
   statusEquals,
-  type EpicStatusNames,
+  type IssueStatusNames,
 } from "./statusMapping.js";
 import { realJiraSeam, type JiraSeam } from "./jiraSeam.js";
-import type { Board } from "../model.js";
+import type { Board, Issue } from "../model.js";
 
 /**
  * The reconciler spine of the JIRA mirror (ADR 0028) — the in-process sibling of
@@ -68,6 +71,10 @@ export interface MirrorDelta {
   readonly created: readonly CreatedEpic[];
   /** Epic status transitions executed this pass (in board order). */
   readonly transitioned: readonly EpicTransition[];
+  /** Child issues created this pass (in board/Issue order). */
+  readonly childrenCreated: readonly CreatedChild[];
+  /** Child status transitions executed this pass (in board/Issue order). */
+  readonly childrenTransitioned: readonly ChildTransition[];
 }
 
 /** One epic created this pass: the PRD it mirrors and the new JIRA key. */
@@ -82,6 +89,28 @@ export interface EpicTransition {
   readonly to: string;
 }
 
+/** One child created this pass: the Issue (filename) it mirrors and the new JIRA key. */
+export interface CreatedChild {
+  readonly issue: string;
+  readonly key: string;
+}
+
+/** One child status self-heal: the child key and the target status it moved to. */
+export interface ChildTransition {
+  readonly key: string;
+  readonly to: string;
+}
+
+/** The empty delta — a pass (or an overlapping call) that changed nothing in JIRA. */
+function emptyDelta(): MirrorDelta {
+  return {
+    created: [],
+    transitioned: [],
+    childrenCreated: [],
+    childrenTransitioned: [],
+  };
+}
+
 /**
  * The mirror-relevant state read off a PRD's `prd.md`: its opt-in block (absent ⇒
  * the PRD is invisible to the mirror) and its epic backref (absent ⇒ no epic yet).
@@ -91,20 +120,42 @@ export interface MirrorFileState {
   readonly epicKey?: string;
 }
 
+/**
+ * The mirror-relevant state read off one Issue file: its authored `status` (the
+ * raw string the child's target bucket maps from — read from the file, not the
+ * board's already-collapsed lane, so audit statuses map correctly), its body
+ * **prose with frontmatter stripped** (the child description), and its child
+ * backref (absent ⇒ no child yet). A missing/unreadable Issue reads as all-absent.
+ */
+export interface IssueMirrorState {
+  readonly status?: string;
+  readonly body?: string;
+  readonly childKey?: string;
+}
+
 /** The injectable collaborators, defaulted to the real acli/file wiring in {@link realMirrorDeps}. */
 export interface MirrorReconcilerDeps {
   /** The scanned root; a PRD's directory is `join(root, prd.id)`. */
   readonly root: string;
   /** The JIRA I/O port (acli in production, a fake in tests). */
   readonly seam: JiraSeam;
-  /** Epic status-name targets; defaults to the conventional {@link DEFAULT_EPIC_STATUS_NAMES}. */
-  readonly statusNames?: EpicStatusNames;
+  /**
+   * Status-name targets for both halves; defaults to the conventional
+   * {@link DEFAULT_ISSUE_STATUS_NAMES}. The four-bucket Issue superset feeds the
+   * child self-heal *and* — being structurally an {@link EpicStatusNames} — the
+   * three-bucket epic self-heal, so one override map serves both.
+   */
+  readonly statusNames?: IssueStatusNames;
   /** The config's `default_board`, used when a PRD's opt-in names no board. */
   readonly defaultBoard?: string;
   /** Read a PRD's opt-in + epic backref from its `prd.md`. */
   readonly readMirror: (prdDir: string) => MirrorFileState;
   /** Write the epic backref onto a PRD's `prd.md`. */
   readonly writeEpic: (prdDir: string, key: string) => void;
+  /** Read an Issue file's status + body prose + child backref (keyed by its absolute path). */
+  readonly readIssueMirror: (issuePath: string) => IssueMirrorState;
+  /** Write the child backref onto an Issue file. */
+  readonly writeIssueKey: (issuePath: string, key: string) => void;
   /** Where a no-op/failure is logged (the mirror never surfaces to the board). */
   readonly log?: (message: string) => void;
 }
@@ -117,7 +168,7 @@ export interface MirrorReconcilerDeps {
 export function createMirrorReconciler(
   deps: MirrorReconcilerDeps,
 ): MirrorReconciler {
-  const statusNames = deps.statusNames ?? DEFAULT_EPIC_STATUS_NAMES;
+  const statusNames = deps.statusNames ?? DEFAULT_ISSUE_STATUS_NAMES;
   const log = deps.log ?? (() => {});
   /** True while a reconcile is in flight; the re-entrancy guard reads it. */
   let reconciling = false;
@@ -127,7 +178,7 @@ export function createMirrorReconciler(
       // A pass already in flight owns this tick's writes; a second call arriving
       // before it settles (see the class doc's re-entrancy note) is a no-op rather
       // than racing it onto the same not-yet-backreffed PRDs.
-      if (reconciling) return { created: [], transitioned: [] };
+      if (reconciling) return emptyDelta();
       reconciling = true;
       try {
         return await reconcileOnce(board, deps, statusNames, log);
@@ -141,11 +192,13 @@ export function createMirrorReconciler(
 async function reconcileOnce(
   board: Board,
   deps: MirrorReconcilerDeps,
-  statusNames: EpicStatusNames,
+  statusNames: IssueStatusNames,
   log: (message: string) => void,
 ): Promise<MirrorDelta> {
   const created: CreatedEpic[] = [];
   const transitioned: EpicTransition[] = [];
+  const childrenCreated: CreatedChild[] = [];
+  const childrenTransitioned: ChildTransition[] = [];
 
   for (const prd of board.prds) {
     const prdDir = join(deps.root, prd.id);
@@ -192,21 +245,55 @@ async function reconcileOnce(
       // Self-heal: drive the legal transition toward the lane's target status.
       // Idempotent — no transition when already at target; an illegal/absent
       // one is caught below as a logged no-op (graceful degradation).
+      //
+      // Isolated in its own try/catch (not the outer per-PRD one): a transient
+      // `currentStatus` read failure here must not escape to the outer catch,
+      // which would abort this PRD's whole pass and — now that the child loop
+      // sits below — silently skip child creation/self-heal for every Issue of
+      // this PRD too, contradicting "each Issue reconciles independently"
+      // (mirrors the identical isolation `reconcileChild` applies to its own
+      // self-heal read, one level down).
       const target = epicTargetStatus(prd.lane, statusNames);
-      const current = await deps.seam.currentStatus(key);
-      if (current === undefined) {
-        log(
-          `epic ${key}: current status could not be read — skipping self-heal (no-op).`,
-        );
-      } else if (!statusEquals(current, target)) {
-        try {
-          await deps.seam.transition(key, target);
-          transitioned.push({ key, to: target });
-        } catch (err) {
+      try {
+        const current = await deps.seam.currentStatus(key);
+        if (current === undefined) {
           log(
-            `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+            `epic ${key}: current status could not be read — skipping self-heal (no-op).`,
           );
+        } else if (!statusEquals(current, target)) {
+          try {
+            await deps.seam.transition(key, target);
+            transitioned.push({ key, to: target });
+          } catch (err) {
+            log(
+              `epic ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+            );
+          }
         }
+      } catch (err) {
+        log(
+          `epic ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
+        );
+      }
+
+      // The epic is now durably recorded (backref written or already present), so
+      // its key can safely parent children — the epic-before-child ordering (ADR
+      // 0028). Every path that leaves `key` unusable (no board, create failed,
+      // backref-write failed) `continue`d above, so we only ever reach here with an
+      // epic a child can be nested under. Each Issue reconciles independently: a
+      // failure on one is its own logged no-op and never stops its siblings.
+      for (const issue of prd.issues) {
+        const outcome = await reconcileChild(
+          prd.id,
+          prdDir,
+          key,
+          issue,
+          deps,
+          statusNames,
+          log,
+        );
+        if (outcome.created) childrenCreated.push(outcome.created);
+        if (outcome.transitioned) childrenTransitioned.push(outcome.transitioned);
       }
     } catch (err) {
       // Any seam/file failure for one PRD is a logged no-op; the board is never
@@ -215,7 +302,131 @@ async function reconcileOnce(
     }
   }
 
-  return { created, transitioned };
+  return { created, transitioned, childrenCreated, childrenTransitioned };
+}
+
+/**
+ * Reconcile one Issue's mirrored child under its PRD's already-existing epic:
+ * create-on-first-appearance (incl. a backlog Issue), write the `jira_key`
+ * backref, then self-heal the child's status toward the Issue's authored status
+ * (mapped to a JIRA bucket by {@link issueTargetStatus}). Mirrors the epic half's
+ * shape one level down — idempotent create keyed on the backref (ADR 0029, so a
+ * rename/renumber neither orphans nor duplicates), and every JIRA failure a logged
+ * no-op (ADR 0028).
+ *
+ * Wrapped in its own try/catch so one Issue's failure is isolated: the remaining
+ * Issues of the PRD (and the other PRDs) still reconcile. Returns what it changed
+ * (a create and/or a transition, or nothing) so the caller appends to the delta in
+ * board/Issue order — no shared mutable accumulator threaded through.
+ */
+async function reconcileChild(
+  prdId: string,
+  prdDir: string,
+  epicKey: string,
+  issue: Issue,
+  deps: MirrorReconcilerDeps,
+  statusNames: IssueStatusNames,
+  log: (message: string) => void,
+): Promise<ChildOutcome> {
+  const issuePath = join(prdDir, issue.id);
+  try {
+    const { status, body, childKey } = deps.readIssueMirror(issuePath);
+
+    // Ensure the child exists: a present backref is update-or-noop (never a second
+    // child — ADR 0029); an absent one creates then writes the backref. The child's
+    // project is the epic's (a JIRA key is `PROJECT-NUMBER`), so a child under an
+    // already-linked epic needs no extra board→project lookup.
+    let key = childKey;
+    let created: CreatedChild | undefined;
+    if (key === undefined) {
+      const description =
+        body !== undefined && body.trim() !== "" ? body : undefined;
+      key = await deps.seam.createChildIssue({
+        project: projectFromKey(epicKey),
+        parent: epicKey,
+        summary: issue.title,
+        ...(description !== undefined ? { description } : {}),
+      });
+
+      // Write the backref so the next pass is update-or-noop, not a duplicate
+      // child (ADR 0029) — the same higher-stakes failure the epic half calls out:
+      // a child created in JIRA whose backref never landed is re-created every pass.
+      try {
+        deps.writeIssueKey(issuePath, key);
+      } catch (err) {
+        log(
+          `Issue ${prdId}/${issue.id}: created child ${key} in JIRA but failed to write its jira_key backref — the next reconcile will create a duplicate child unless the backref is added by hand: ${errorMessage(err)}`,
+        );
+        return {};
+      }
+      created = { issue: issue.id, key };
+    }
+
+    // Self-heal the child's status toward the Issue's authored status. An
+    // unreadable status, or one outside the ten authored values (a data error the
+    // board would flag `malformedStatus`), skips the self-heal as a logged no-op —
+    // the child still exists, it just isn't driven to a bogus column.
+    if (status === undefined) {
+      log(
+        `child ${key}: the Issue's status could not be read — skipping self-heal (no-op).`,
+      );
+      return { created };
+    }
+    const target = issueTargetStatus(status, statusNames);
+    if (target === undefined) {
+      log(
+        `child ${key}: authored status "${status}" maps to no JIRA bucket — skipping self-heal (no-op).`,
+      );
+      return { created };
+    }
+    // A read failure here (e.g. a transient acli/network error) must not erase
+    // an already-recorded `created` — the child genuinely exists in JIRA and its
+    // backref is durably written, so that create belongs in the delta regardless
+    // of whether this pass's self-heal read succeeds (mirrors the epic path's
+    // create-before-self-heal-read ordering in `reconcileOnce`).
+    try {
+      const current = await deps.seam.currentStatus(key);
+      if (current === undefined) {
+        log(
+          `child ${key}: current status could not be read — skipping self-heal (no-op).`,
+        );
+      } else if (!statusEquals(current, target)) {
+        try {
+          await deps.seam.transition(key, target);
+          return { created, transitioned: { key, to: target } };
+        } catch (err) {
+          log(
+            `child ${key}: transition to "${target}" is not available — leaving as-is (no-op): ${errorMessage(err)}`,
+          );
+        }
+      }
+    } catch (err) {
+      log(
+        `child ${key}: current status could not be read — skipping self-heal (no-op): ${errorMessage(err)}`,
+      );
+    }
+    return { created };
+  } catch (err) {
+    log(
+      `Issue ${prdId}/${issue.id}: mirror reconcile failed (no-op): ${errorMessage(err)}`,
+    );
+    return {};
+  }
+}
+
+/** What {@link reconcileChild} changed for one Issue: a create and/or a transition. */
+interface ChildOutcome {
+  readonly created?: CreatedChild;
+  readonly transitioned?: ChildTransition;
+}
+
+/**
+ * The project key a JIRA issue key belongs to — the substring before its trailing
+ * `-NUMBER` (a key is `PROJECT-NUMBER`, e.g. `DS-100` → `DS`). Lets a child be
+ * created in its epic's project without a second board→project lookup.
+ */
+function projectFromKey(key: string): string {
+  return key.replace(/-\d+$/, "");
 }
 
 /**
@@ -242,6 +453,34 @@ export function readMirrorFile(prdDir: string): MirrorFileState {
 /** The production backref writer: write `jira_epic` onto the PRD's `prd.md`. */
 export function writeMirrorEpic(prdDir: string, key: string): void {
   writeJiraEpic(join(prdDir, "prd.md"), key);
+}
+
+/**
+ * The production Issue-file reader: parse one Issue's `status`, its **body prose
+ * with frontmatter stripped** (the child description), and its `jira_key` child
+ * backref via the shared `issueFile` contract. A missing/unreadable Issue (it
+ * vanished mid-scan, or a rename left the board's id stale) reads as all-absent,
+ * so the reconciler skips it rather than throwing — the scanner's "a file that
+ * vanished is just gone" contract.
+ */
+export function readIssueMirrorFile(issuePath: string): IssueMirrorState {
+  let raw: string;
+  try {
+    raw = readFileSync(issuePath, "utf8");
+  } catch {
+    return {};
+  }
+  const { data, content } = safeMatter(raw);
+  return {
+    status: readString(data, FIELD.status),
+    body: content,
+    childKey: readPresentString(data, FIELD.jiraKey),
+  };
+}
+
+/** The production child-backref writer: write `jira_key` onto the Issue file. */
+export function writeMirrorIssueKey(issuePath: string, key: string): void {
+  writeJiraKey(issuePath, key);
 }
 
 /**
@@ -277,7 +516,7 @@ export function appendMirrorLog(logPath: string, message: string): void {
 export function realMirrorReconciler(opts: {
   readonly root: string;
   readonly defaultBoard?: string;
-  readonly statusNames?: EpicStatusNames;
+  readonly statusNames?: IssueStatusNames;
   readonly logPath?: string;
 }): MirrorReconciler {
   const logPath = opts.logPath ?? defaultMirrorLogPath();
@@ -288,6 +527,8 @@ export function realMirrorReconciler(opts: {
     statusNames: opts.statusNames,
     readMirror: readMirrorFile,
     writeEpic: writeMirrorEpic,
+    readIssueMirror: readIssueMirrorFile,
+    writeIssueKey: writeMirrorIssueKey,
     log: (message) => appendMirrorLog(logPath, message),
   });
 }

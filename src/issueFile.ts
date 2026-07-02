@@ -55,6 +55,16 @@ export const FIELD = {
    * to `prd.md`; it touches no Issue content or status.
    */
   jiraEpic: "jira_epic",
+  /**
+   * The mirror-written child backref on an Issue file (ADR 0029): the JIRA key of
+   * the child issue this Issue is mirrored to, nested under its PRD's
+   * {@link jiraEpic}. Its presence makes child create idempotent — matched on the
+   * backref, not the file path, so renaming/renumbering the Issue file neither
+   * orphans nor duplicates the ticket. Written via {@link writeJiraKey}, read back
+   * with {@link readPresentString}. Like {@link jiraEpic} it is the mirror's sole,
+   * write-once reach into the Issue file, touching no content or `status`.
+   */
+  jiraKey: "jira_key",
 } as const;
 
 /** The untyped frontmatter bag gray-matter parses out of a file. */
@@ -266,6 +276,24 @@ export function writeJiraEpic(path: string, epicKey: string): void {
   writeFileSync(
     path,
     matter.stringify(content, { ...data, [FIELD.jiraEpic]: epicKey }),
+  );
+}
+
+/**
+ * Write the mirror-owned `jira_key` backref onto an Issue file in a single write,
+ * recording the JIRA key of the child issue this Issue is mirrored to (ADR 0029).
+ * The Issue-file twin of {@link writeJiraEpic}: it goes through the `gray-matter`
+ * write path, adding (or overwriting) exactly this one bookkeeping key while
+ * round-tripping every other frontmatter key (`title`, `status`, `blocked_by`, …)
+ * and the markdown body untouched. It writes no Issue content or `status` — the
+ * mirror never drives the board (ADR 0028). Idempotent by construction: writing
+ * the same key twice is a harmless overwrite, never a second key.
+ */
+export function writeJiraKey(path: string, childKey: string): void {
+  const { data, content } = matter(readFileSync(path, "utf8"));
+  writeFileSync(
+    path,
+    matter.stringify(content, { ...data, [FIELD.jiraKey]: childKey }),
   );
 }
 

@@ -171,5 +171,27 @@ describe.skipIf(!enabled)("realJiraSeam against a live JIRA (gated)", () => {
     });
     expect(found?.key).toBe(key);
     expect(found?.status).toBe("In Progress");
+
+    // Create a child nested under the epic (native `parent`) and drive the same
+    // round-trip the reconciler runs per Issue. Track its key first thing so
+    // afterAll bins it too, even if a later assertion throws.
+    const child = await realJiraSeam.createChildIssue({
+      project,
+      parent: key,
+      summary: `Overseer child integration test ${new Date().toISOString()}`,
+      description: "Created by the gated realJiraSeam integration test.",
+    });
+    createdKeys.push(child);
+    expect(child).toMatch(/^[A-Z][A-Z0-9]+-\d+/);
+
+    // Drive the child to In Progress and confirm a real JQL search reflects both
+    // its identity and the transition — same search path as the epic above.
+    await realJiraSeam.transition(child, "In Progress");
+    const foundChild = await poll(() => {
+      const item = searchByKey(child);
+      return item?.status === "In Progress" ? item : undefined;
+    });
+    expect(foundChild?.key).toBe(child);
+    expect(foundChild?.status).toBe("In Progress");
   }, 60000);
 });
