@@ -5,6 +5,11 @@ import {
   type MirrorFileState,
   type IssueMirrorState,
 } from "./mirrorReconciler.js";
+import {
+  createImmediateWriteQueue,
+  createPacedWriteQueue,
+  type PacedWriteQueue,
+} from "./pacedWriteQueue.js";
 import type {
   CreateChildInput,
   CreateEpicInput,
@@ -144,7 +149,13 @@ function board(...prds: PRD[]): Board {
  * handles to inspect/seed the store (the prd.md opt-in + epic backref, the Issue
  * files' status/body/child-backref) and the captured log lines.
  */
-function harness(seam: FakeJiraSeam, defaultBoard?: string) {
+function harness(
+  seam: FakeJiraSeam,
+  defaultBoard?: string,
+  // Defaults to a pass-through queue so ordering/delta assertions are free of the
+  // timing dimension; the pacing tests inject a clocked queue to drive drain ticks.
+  queue: PacedWriteQueue = createImmediateWriteQueue(),
+) {
   const files = new Map<string, MirrorFileState>();
   const issueFiles = new Map<string, IssueMirrorState>();
   const logs: string[] = [];
@@ -155,6 +166,7 @@ function harness(seam: FakeJiraSeam, defaultBoard?: string) {
   const reconciler = createMirrorReconciler({
     root: ROOT,
     seam,
+    queue,
     defaultBoard,
     readMirror: (prdDir) => files.get(prdDir) ?? {},
     writeEpic: (prdDir, key) => {
@@ -1088,5 +1100,194 @@ describe("mirrorReconciler — diff-gated sync (cache + open-time seed)", () => 
     );
     expect(third.childrenTransitioned).toEqual([]);
     expect(seam.calls.slice(callsBeforeThird)).toEqual([]);
+  });
+});
+
+/**
+ * A hand-cranked clock so a paced-queue test can advance the reconcile one drain
+ * tick at a time and assert exactly how much fan-out each tick released — no real
+ * timers, no flakiness. Each `sleep()` parks a resolver; `tick()` releases every
+ * sleep currently parked (the queue's pump only ever has one outstanding at a
+ * time, so one `tick()` == one interval elapsed).
+ */
+function manualClock() {
+  let parked: Array<() => void> = [];
+  return {
+    sleep: (): Promise<void> =>
+      new Promise<void>((resolve) => parked.push(resolve)),
+    tick: (): void => {
+      const due = parked;
+      parked = [];
+      for (const resolve of due) resolve();
+    },
+  };
+}
+
+/** Yield to the event loop so the queue's parked continuations run before we assert. */
+async function flush(): Promise<void> {
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+}
+
+describe("mirrorReconciler — paced write queue", () => {
+  it("drains a populated PRD's backfill creates a bounded burst per tick, not all at once", async () => {
+    // Backfill scenario (acceptance): a jira block added to an in-flight PRD whose
+    // epic already exists — so this pass creates a child per Issue at once. Six
+    // Issues, a burst of two, means three drain ticks rather than one six-wide spike.
+    const clock = manualClock();
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "To Do"); // the already-linked epic
+    const { reconciler, set, setIssue, childKeyOf } = harness(
+      seam,
+      undefined,
+      createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
+    );
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    const issues = Array.from({ length: 6 }, (_v, i) => `00${i}.md`);
+    for (const id of issues) setIssue("auth", id, { status: "backlog" });
+
+    // Fire-and-forget: the board never awaits the pass, so we drive it by ticks.
+    const pass = reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", issues.map((id) => issue(id)))),
+    );
+
+    // Tick 1 released only the first burst; the remaining creates are still parked.
+    await flush();
+    expect(seam.childrenCreated).toHaveLength(2);
+
+    clock.tick();
+    await flush();
+    expect(seam.childrenCreated).toHaveLength(4);
+
+    clock.tick();
+    await flush();
+    expect(seam.childrenCreated).toHaveLength(6);
+
+    const delta = await pass;
+    // Every child landed, in board/Issue order, and each got its backref written.
+    expect(delta.childrenCreated.map((c) => c.issue)).toEqual(issues);
+    for (const id of issues) expect(childKeyOf("auth", id)).toBeDefined();
+  });
+
+  it("paces a wide dispatch wave's transitions a bounded burst per tick", async () => {
+    // Wide dispatch wave (acceptance): many already-linked children advance to
+    // in-progress in one scan, so the pass emits a transition per Issue. The queue
+    // spreads those over ticks instead of firing the whole wave at once.
+    const clock = manualClock();
+    const seam = new FakeJiraSeam();
+    seam.legalStatuses.add("In Progress");
+    seam.statusByKey.set("DS-9", "In Progress"); // epic already at its target
+    const ids = Array.from({ length: 6 }, (_v, i) => `10${i}.md`);
+    const childKeys = ids.map((_id, i) => `DS-${50 + i}`);
+    for (const key of childKeys) seam.statusByKey.set(key, "To Do");
+    const { reconciler, set, setIssue } = harness(
+      seam,
+      undefined,
+      createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
+    );
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    ids.forEach((id, i) =>
+      setIssue("auth", id, { status: "in-progress", childKey: childKeys[i] }),
+    );
+
+    const pass = reconciler.reconcile(
+      board(
+        prd(
+          "auth",
+          "in-progress",
+          "Auth",
+          ids.map((id) => issue(id, "in-progress")),
+        ),
+      ),
+    );
+
+    const transitions = () =>
+      seam.calls.filter((c) => c.startsWith("transition:"));
+
+    await flush();
+    expect(transitions()).toHaveLength(2);
+
+    clock.tick();
+    await flush();
+    expect(transitions()).toHaveLength(4);
+
+    clock.tick();
+    await flush();
+    expect(transitions()).toHaveLength(6);
+
+    const delta = await pass;
+    expect(delta.childrenTransitioned).toHaveLength(6);
+    // Order is board/Issue order regardless of the queue's concurrent completion.
+    expect(delta.childrenTransitioned.map((t) => t.key)).toEqual(childKeys);
+  });
+
+  it("keeps epic-before-child ordering when the creates flow through the queue", async () => {
+    // Even paced, a child create can never precede its epic's: the reconciler awaits
+    // the epic create (its own queued write) before submitting any child create.
+    const clock = manualClock();
+    const seam = new FakeJiraSeam();
+    seam.projectByBoard.set("34", "DS");
+    const { reconciler, set, setIssue } = harness(
+      seam,
+      undefined,
+      createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
+    );
+    set("auth", { optIn: optIn({ board: "34" }) });
+    const ids = ["001.md", "002.md", "003.md"];
+    for (const id of ids) setIssue("auth", id, { status: "backlog" });
+
+    const pass = reconciler.reconcile(
+      board(prd("auth", "backlog", "Auth", ids.map((id) => issue(id)))),
+    );
+    // Drain enough ticks for the epic (tick 1) then all children (following ticks).
+    for (let i = 0; i < 4; i += 1) {
+      await flush();
+      clock.tick();
+    }
+    await pass;
+
+    const epicAt = seam.calls.indexOf("createEpic:DS");
+    const firstChildAt = seam.calls.findIndex((c) => c.startsWith("createChild:"));
+    expect(epicAt).toBeGreaterThanOrEqual(0);
+    expect(firstChildAt).toBeGreaterThan(epicAt);
+    // Every child was parented to the one epic that was created first.
+    for (const child of seam.childrenCreated) expect(child.parent).toBe("DS-1");
+  });
+
+  it("does not block the pass — writes land incrementally while the queue drains", async () => {
+    // "The board never blocks on the queue": the pass resolves only once the queue
+    // is fully drained, but writes land tick by tick in the meantime — a half-drained
+    // queue just means JIRA is a few seconds behind, which the mirror already accepts.
+    const clock = manualClock();
+    const seam = new FakeJiraSeam();
+    seam.statusByKey.set("DS-9", "To Do");
+    const { reconciler, set, setIssue } = harness(
+      seam,
+      undefined,
+      createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
+    );
+    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    const ids = ["001.md", "002.md", "003.md", "004.md"];
+    for (const id of ids) setIssue("auth", id, { status: "backlog" });
+
+    let settled = false;
+    const pass = reconciler
+      .reconcile(board(prd("auth", "backlog", "Auth", ids.map((id) => issue(id)))))
+      .then((d) => {
+        settled = true;
+        return d;
+      });
+
+    // Partway through: some writes have landed but the pass is still outstanding.
+    await flush();
+    expect(seam.childrenCreated).toHaveLength(2);
+    expect(settled).toBe(false);
+
+    clock.tick();
+    await flush();
+    expect(seam.childrenCreated).toHaveLength(4);
+
+    // Only now, with the backlog empty, does the pass complete.
+    await pass;
+    expect(settled).toBe(true);
   });
 });

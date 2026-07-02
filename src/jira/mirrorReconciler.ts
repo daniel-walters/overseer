@@ -22,7 +22,23 @@ import {
   type IssueStatusNames,
 } from "./statusMapping.js";
 import { realJiraSeam, type JiraSeam } from "./jiraSeam.js";
+import {
+  createPacedWriteQueue,
+  type PacedWriteQueue,
+} from "./pacedWriteQueue.js";
 import type { Board, Issue } from "../model.js";
+
+/**
+ * Production pacing for the write queue (ADR 0028, user story 20): at most this
+ * many writes are kicked off per {@link MIRROR_WRITE_INTERVAL_MS} tick, so the one
+ * real burst — a bulk first sync or a wide dispatch wave — drains over a few
+ * seconds instead of firing all at once and tripping JIRA's rate limit. Steady
+ * state is a trickle the diff-gate already keeps tiny, so these need only tame the
+ * outlier, not throttle normal operation.
+ */
+export const MIRROR_WRITE_BURST = 5;
+/** Milliseconds the paced write queue waits between drain ticks. */
+export const MIRROR_WRITE_INTERVAL_MS = 1000;
 
 /**
  * The reconciler spine of the JIRA mirror (ADR 0028) — the in-process sibling of
@@ -67,8 +83,18 @@ import type { Board, Issue } from "../model.js";
  * that arrives while one is already in flight is a clean no-op, same as it would
  * be if the file watcher simply hadn't coalesced the two events.
  *
- * A paced write queue for bulk first-sync fan-out extends this later; the epic +
- * child mirror, child sprint placement, and the diff-gated cache are in place.
+ * **Paced writes (ADR 0028, user story 20).** Every write a pass makes — epic and
+ * child creates, status transitions, sprint assignments — is routed through a
+ * {@link PacedWriteQueue}, so a single reconcile's bulk fan-out (the first sync of
+ * an already-populated PRD, or a wide dispatch wave) drains a bounded burst per
+ * tick over a few seconds rather than firing all at once and tripping JIRA's rate
+ * limit. Steady state stays a trickle (the diff-gate keeps it tiny), so the queue
+ * only ever tames the outlier. A PRD's children are reconciled concurrently so
+ * their writes reach the queue as one batch; epic-before-child ordering survives
+ * because the epic's create is awaited before any child's create is submitted.
+ * Still fire-and-forget: the board never awaits the queue, and a half-drained
+ * queue just means JIRA is a few seconds behind (already acceptable — it is stale
+ * whenever the TUI is closed).
  */
 export interface MirrorReconciler {
   /**
@@ -170,6 +196,16 @@ export interface MirrorReconcilerDeps {
   /** The JIRA I/O port (acli in production, a fake in tests). */
   readonly seam: JiraSeam;
   /**
+   * The paced write queue every mirror *write* (epic/child create, transition,
+   * sprint assignment) is routed through, so a single reconcile's bulk fan-out
+   * drains a bounded burst per tick rather than firing all at once (ADR 0028, user
+   * story 20). Defaults to a {@link createPacedWriteQueue} tuned to
+   * {@link MIRROR_WRITE_BURST}/{@link MIRROR_WRITE_INTERVAL_MS}; tests inject a
+   * clocked queue to assert the pacing, or an immediate one to assert ordering
+   * without the timing dimension.
+   */
+  readonly queue?: PacedWriteQueue;
+  /**
    * Status-name targets for both halves; defaults to the conventional
    * {@link DEFAULT_ISSUE_STATUS_NAMES}. The four-bucket Issue superset feeds the
    * child self-heal *and* — being structurally an {@link EpicStatusNames} — the
@@ -200,6 +236,12 @@ export function createMirrorReconciler(
 ): MirrorReconciler {
   const statusNames = deps.statusNames ?? DEFAULT_ISSUE_STATUS_NAMES;
   const log = deps.log ?? (() => {});
+  const queue =
+    deps.queue ??
+    createPacedWriteQueue({
+      burst: MIRROR_WRITE_BURST,
+      intervalMs: MIRROR_WRITE_INTERVAL_MS,
+    });
   /** True while a reconcile is in flight; the re-entrancy guard reads it. */
   let reconciling = false;
   /**
@@ -235,7 +277,7 @@ export function createMirrorReconciler(
         if (!seeded) {
           seeded = await seedCache(board, deps, cache, log);
         }
-        return await reconcileOnce(board, deps, statusNames, cache, log);
+        return await reconcileOnce(board, deps, queue, statusNames, cache, log);
       } finally {
         reconciling = false;
       }
@@ -298,6 +340,7 @@ async function seedCache(
 async function reconcileOnce(
   board: Board,
   deps: MirrorReconcilerDeps,
+  queue: PacedWriteQueue,
   statusNames: IssueStatusNames,
   cache: Map<string, string>,
   log: (message: string) => void,
@@ -342,7 +385,14 @@ async function reconcileOnce(
         }
         const project =
           optIn.project ?? (await deps.seam.resolveProject(boardId));
-        key = await deps.seam.createEpic({ project, summary: prd.title });
+        // The create is a write, so it drains through the paced queue like every
+        // other — but it is *awaited* here before any of this PRD's children are
+        // submitted, which is exactly how epic-before-child ordering survives the
+        // queue: a child create can only enter the queue once its parent's key
+        // (and backref) exist.
+        key = await queue.run(() =>
+          deps.seam.createEpic({ project, summary: prd.title }),
+        );
 
         // The epic now exists in JIRA; write the backref so the next pass
         // treats it as update-or-noop instead of creating a second epic
@@ -375,7 +425,9 @@ async function reconcileOnce(
       // no-op); an illegal/absent transition is a logged no-op (graceful
       // degradation), never a crash or a `human-review`.
       const target = epicTargetStatus(prd.lane, statusNames);
-      if (await driveToTarget(key, target, cache, deps, log, `epic ${key}`)) {
+      if (
+        await driveToTarget(key, target, queue, cache, deps, log, `epic ${key}`)
+      ) {
         transitioned.push({ key, to: target });
       }
 
@@ -393,19 +445,31 @@ async function reconcileOnce(
       // reads, and PRDs sharing a board make just one read for all of them
       // (user story 19: very few JIRA calls).
       const resolveActiveSprint = () => resolveSprintForBoard(boardId);
-      for (const issue of prd.issues) {
-        const outcome = await reconcileChild(
-          prd.id,
-          prdDir,
-          key,
-          issue,
-          placement,
-          resolveActiveSprint,
-          deps,
-          statusNames,
-          cache,
-          log,
-        );
+      // Reconcile the PRD's children concurrently so their writes hit the paced
+      // queue *as a batch* — that batching is the whole point of the queue for a
+      // bulk first sync (many child creates) or a wide dispatch wave (many
+      // transitions): the queue releases a bounded burst per tick rather than
+      // firing the lot at once. Each child's own writes still go through the queue
+      // in FIFO submission order, and the delta is rebuilt from `outcomes` in
+      // board/Issue order below, so a scrambled completion order can't reorder it.
+      const outcomes = await Promise.all(
+        prd.issues.map((issue) =>
+          reconcileChild(
+            prd.id,
+            prdDir,
+            key,
+            issue,
+            placement,
+            resolveActiveSprint,
+            deps,
+            queue,
+            statusNames,
+            cache,
+            log,
+          ),
+        ),
+      );
+      for (const outcome of outcomes) {
         if (outcome.created) childrenCreated.push(outcome.created);
         if (outcome.transitioned) childrenTransitioned.push(outcome.transitioned);
         if (outcome.placed) placed.push(outcome.placed);
@@ -497,6 +561,7 @@ async function reconcileChild(
   placement: JiraTarget,
   resolveActiveSprint: () => Promise<string | undefined>,
   deps: MirrorReconcilerDeps,
+  queue: PacedWriteQueue,
   statusNames: IssueStatusNames,
   cache: Map<string, string>,
   log: (message: string) => void,
@@ -515,12 +580,14 @@ async function reconcileChild(
     if (key === undefined) {
       const description =
         body !== undefined && body.trim() !== "" ? body : undefined;
-      key = await deps.seam.createChildIssue({
-        project: projectFromKey(epicKey),
-        parent: epicKey,
-        summary: issue.title,
-        ...(description !== undefined ? { description } : {}),
-      });
+      key = await queue.run(() =>
+        deps.seam.createChildIssue({
+          project: projectFromKey(epicKey),
+          parent: epicKey,
+          summary: issue.title,
+          ...(description !== undefined ? { description } : {}),
+        }),
+      );
 
       // Write the backref so the next pass is update-or-noop, not a duplicate
       // child (ADR 0029) — the same higher-stakes failure the epic half calls out:
@@ -549,9 +616,13 @@ async function reconcileChild(
       // can't erase the create that already succeeded.
       if (placement === "sprint") {
         const sprintId = await resolveActiveSprint();
+        // Snapshot the freshly-created key into a const so the deferred queue task
+        // keeps its narrowed `string` type (a closure over the mutable `let key`
+        // would widen back to `string | undefined`).
+        const childKey = key;
         if (sprintId !== undefined) {
           try {
-            await deps.seam.assignToSprint(sprintId, key);
+            await queue.run(() => deps.seam.assignToSprint(sprintId, childKey));
             placed = { issue: issue.id, key, sprint: sprintId };
           } catch (err) {
             log(
@@ -583,7 +654,9 @@ async function reconcileChild(
     // this pass has already cached the child's landing status, so an unchanged
     // child is a pure no-op; the transition (and its cache update) only fires when
     // the authored status crosses a bucket the cache doesn't already reflect.
-    if (await driveToTarget(key, target, cache, deps, log, `child ${key}`)) {
+    if (
+      await driveToTarget(key, target, queue, cache, deps, log, `child ${key}`)
+    ) {
       return { created, transitioned: { key, to: target }, placed };
     }
     return { created, placed };
@@ -613,6 +686,7 @@ async function reconcileChild(
 async function driveToTarget(
   key: string,
   target: string,
+  queue: PacedWriteQueue,
   cache: Map<string, string>,
   deps: MirrorReconcilerDeps,
   log: (message: string) => void,
@@ -621,7 +695,7 @@ async function driveToTarget(
   const lastKnown = cache.get(key);
   if (lastKnown !== undefined && statusEquals(lastKnown, target)) return false;
   try {
-    await deps.seam.transition(key, target);
+    await queue.run(() => deps.seam.transition(key, target));
     cache.set(key, target);
     return true;
   } catch (err) {
