@@ -45,9 +45,16 @@ const SCROLLBACK_LINES = 10_000;
  * read with `translateToString(true)` (trailing blanks trimmed), and trailing
  * whitespace-only lines are dropped so empty or whitespace-only input yields no real
  * content — the signal the modal's `(no output yet)` placeholder keys off.
+ *
+ * `write()`'s callback fires asynchronously, after `write()` itself has already
+ * returned — so a throw inside it lands outside the `Promise` constructor's own
+ * synchronous try/catch and would otherwise become an uncaught exception that
+ * crashes the whole process, not a rejection {@link import("./App.js").App}'s
+ * `.catch` can degrade gracefully. The body is wrapped so any such failure (a bug in
+ * the buffer read, or in `@xterm/headless` itself) rejects instead.
  */
 export const renderTerminal: TerminalRenderer = (bytes, cols, rows) =>
-  new Promise((resolve) => {
+  new Promise((resolve, reject) => {
     const term = new Terminal({
       cols: Math.max(1, cols),
       rows: Math.max(1, rows),
@@ -56,18 +63,23 @@ export const renderTerminal: TerminalRenderer = (bytes, cols, rows) =>
       allowProposedApi: true,
     });
     term.write(bytes, () => {
-      const buffer = term.buffer.active;
-      const lines: string[] = [];
-      for (let i = 0; i < buffer.length; i++) {
-        lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+      try {
+        const buffer = term.buffer.active;
+        const lines: string[] = [];
+        for (let i = 0; i < buffer.length; i++) {
+          lines.push(buffer.getLine(i)?.translateToString(true) ?? "");
+        }
+        // Drop trailing blank rows the fixed grid always carries below the last real
+        // content, so a snapshot ending in empty rows neither inflates the scroll
+        // range nor masks the placeholder for empty/whitespace-only input.
+        while (lines.length > 0 && (lines[lines.length - 1] ?? "").trim().length === 0) {
+          lines.pop();
+        }
+        term.dispose();
+        resolve(lines);
+      } catch (err) {
+        term.dispose();
+        reject(err instanceof Error ? err : new Error(String(err)));
       }
-      // Drop trailing blank rows the fixed grid always carries below the last real
-      // content, so a snapshot ending in empty rows neither inflates the scroll
-      // range nor masks the placeholder for empty/whitespace-only input.
-      while (lines.length > 0 && (lines[lines.length - 1] ?? "").trim().length === 0) {
-        lines.pop();
-      }
-      term.dispose();
-      resolve(lines);
     });
   });

@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { renderTerminal } from "./renderTerminal.js";
 
 /**
@@ -65,5 +65,36 @@ describe("renderTerminal (raw TTY replay → resolved screen lines)", () => {
     expect(lines[0]).toBe("LINE0");
     expect(lines[lines.length - 1]).toBe("LINE59");
     expect(lines.length).toBe(60);
+  });
+
+  it("rejects instead of crashing the process when reading the resolved buffer throws", async () => {
+    // `@xterm/headless`'s write() callback fires asynchronously, after write() has
+    // already returned — a throw in there lands outside the Promise constructor's
+    // own synchronous try/catch and, unguarded, becomes an uncaught exception
+    // rather than a rejection. Force that failure path (a buffer read blowing up)
+    // and assert it surfaces as a rejection App.tsx's `.catch` can degrade from,
+    // not a crash.
+    vi.resetModules();
+    vi.doMock("@xterm/headless", () => ({
+      Terminal: class {
+        buffer = {
+          active: {
+            get length() {
+              throw new Error("buffer read exploded");
+            },
+          },
+        };
+        write(_bytes: string, cb: () => void) {
+          setTimeout(cb, 0);
+        }
+        dispose() {}
+      },
+    }));
+    const { renderTerminal: mockedRenderTerminal } = await import("./renderTerminal.js");
+    await expect(mockedRenderTerminal("anything\n", 80, 24)).rejects.toThrow(
+      "buffer read exploded",
+    );
+    vi.doUnmock("@xterm/headless");
+    vi.resetModules();
   });
 });
