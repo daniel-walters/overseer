@@ -78,6 +78,23 @@ describe("buildImplementorPrompt", () => {
     expect(prompt).toContain("overseer-tdd");
   });
 
+  it("instructs the agent to read and follow the repo's CLAUDE.md and use its skills", () => {
+    // Assert over the static template (empty Issue/PRD) so following the target
+    // repo's own CLAUDE.md and `.claude/skills/` is a property of the prompt
+    // itself — not something a caller-supplied body happened to mention. This is
+    // what stops a bare `claude --bg` implementor from ignoring repo-specific
+    // conventions that are loaded but not otherwise prioritised.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
+    });
+    expect(prompt).toContain("CLAUDE.md");
+    expect(prompt.toLowerCase()).toContain(".claude/skills");
+  });
+
   it("instructs the agent to commit to the worktree with no PR", () => {
     const prompt = build().toLowerCase();
     expect(prompt).toContain("commit");

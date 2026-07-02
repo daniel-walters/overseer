@@ -62,6 +62,18 @@ Work in an isolated git worktree branched off the feature branch
 (${featureBranch}) in the target repository. Do all of your work in that
 worktree so that other agents touching the same repo do not collide with you.
 
+## Follow the repository's own conventions
+
+Before you write any code, read the target repository's \`CLAUDE.md\` (the one at
+the repo root, plus any nested \`CLAUDE.md\` files on the paths you touch) and
+follow it. Those instructions are authoritative for how work is done in this
+repo and take precedence over these defaults wherever they are more specific —
+build and test commands, code style, commit conventions, and any constraints.
+
+Use the repository's own skills wherever they fit the task. When a skill in the
+repo's \`.claude/skills/\` matches what you are doing — testing, committing,
+migrations, and so on — invoke it rather than improvising your own approach.
+
 ## How to finish
 
 1. Drive the implementation with the \`overseer-tdd\` skill: work test-first in a
