@@ -104,8 +104,11 @@ function searchByKey(key: string): FoundItem | undefined {
 /**
  * Poll `fn` until it returns a defined value or the deadline passes. JIRA's search
  * index is eventually consistent, so a just-created/just-transitioned item can lag
- * the write by a second or two — polling keeps the round-trip assertion honest
- * without being flaky.
+ * the write by a second or two — long enough that `acli jira workitem search` on a
+ * `key = <key>` JQL clause for a not-yet-indexed key exits non-zero ("issue does
+ * not exist"), not just returns an empty result. `fn` (which shells out via
+ * `searchByKey`) is called inside the loop's own try/catch, not the caller's, so
+ * that lag is a retry, not an aborted test.
  */
 async function poll<T>(
   fn: () => T | undefined,
@@ -113,7 +116,12 @@ async function poll<T>(
 ): Promise<T | undefined> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
-    const value = fn();
+    let value: T | undefined;
+    try {
+      value = fn();
+    } catch {
+      value = undefined;
+    }
     if (value !== undefined) return value;
     if (Date.now() >= deadline) return undefined;
     await new Promise((r) => setTimeout(r, intervalMs));
