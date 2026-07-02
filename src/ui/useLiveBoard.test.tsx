@@ -100,9 +100,10 @@ describe("useLiveBoard", () => {
     onChange();
     await tick();
 
-    // The reactor reconciles, and only after the board has been re-scanned.
+    // The reactor reconciles, and only after the board has been re-scanned; then
+    // a second scan re-reads the post-flip disk state into the rendered board.
     expect(reactor.reconcile).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["scan", "reconcile"]);
+    expect(order).toEqual(["scan", "reconcile", "scan"]);
   });
 
   it("reconciles the JIRA mirror with the freshly-scanned board after each change", async () => {
@@ -168,7 +169,75 @@ describe("useLiveBoard", () => {
     await tick();
 
     expect(onReconciled).toHaveBeenCalledTimes(1);
-    expect(order).toEqual(["scan", "reconcile", "onReconciled"]);
+    expect(order).toEqual(["scan", "reconcile", "scan", "onReconciled"]);
+  });
+
+  it("re-scans after the reconcile so a flipped status surfaces in the same refresh", async () => {
+    // The reconcile flips an Issue's status (e.g. ready-for-review → in-review on
+    // the review-spawn edge) and writes it to disk. Without a post-reconcile
+    // re-scan the flip only reaches the screen if that write round-trips as a
+    // fresh watcher event — which FSEvents can coalesce or drop under a burst.
+    // A single refresh (one watch callback) must render the post-flip board.
+    let onChange = () => {};
+    const scan = vi
+      .fn<() => Board>()
+      .mockReturnValueOnce(board("PreFlip")) // the pre-reconcile scan
+      .mockReturnValue(board("PostFlip")); // the post-reconcile re-scan
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+    const reactor = {
+      reconcile: vi.fn(), // a no-op stand-in for the status-flipping reconcile
+      setEnabled: vi.fn(),
+      activity: vi.fn(() => "idle" as const),
+    };
+
+    const { lastFrame } = render(
+      <Probe
+        root="/root"
+        initialBoard={board("First")}
+        scan={scan}
+        watch={watch}
+        reactor={reactor}
+      />,
+    );
+
+    onChange(); // exactly one watch callback — no second FS event
+    await tick();
+
+    // The board reflects the post-reconcile scan, not the pre-flip one, off a
+    // single refresh: scanned before AND after the reconcile.
+    expect(scan).toHaveBeenCalledTimes(2);
+    expect(reactor.reconcile).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toContain("PostFlip");
+  });
+
+  it("scans only once for a board-only config (no reactor can flip a status)", async () => {
+    // With no Reactor wired nothing can flip a status mid-refresh, so the extra
+    // post-reconcile scan (and its liveness-probe fork) is pure waste: one scan
+    // renders the board.
+    let onChange = () => {};
+    const scan = vi.fn(() => board("Updated"));
+    const watch = (_root: string, cb: () => void) => {
+      onChange = cb;
+      return () => {};
+    };
+
+    const { lastFrame } = render(
+      <Probe
+        root="/root"
+        initialBoard={board("First")}
+        scan={scan}
+        watch={watch}
+      />,
+    );
+
+    onChange();
+    await tick();
+
+    expect(scan).toHaveBeenCalledTimes(1);
+    expect(lastFrame()).toContain("Updated");
   });
 
   it("works with no reactor wired (board-only tests)", async () => {
@@ -249,7 +318,7 @@ describe("useLiveBoard", () => {
     refresh();
     await tick();
 
-    expect(order).toEqual(["scan", "reconcile", "onReconciled"]);
+    expect(order).toEqual(["scan", "reconcile", "scan", "onReconciled"]);
   });
 
   it("tears down the watcher on unmount", () => {
