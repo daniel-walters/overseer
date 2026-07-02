@@ -46,7 +46,10 @@ imperfect wrapping for foreign-width content is accepted).
 The `o`-open path therefore becomes **asynchronous**, revising the "synchronous seam"
 framing of ADR 0023 for this one read. The frozen-snapshot contract, `scrollDetail`
 windowing, the `(no output yet)` placeholder, the verbatim "No job matching" surfacing,
-and the reader's failure/timeout placeholders are all unchanged.
+and the reader's failure/timeout placeholders are all unchanged. (The "close-and-reopen is
+the refresh" gesture noted here is later superseded by the in-modal `r` refresh —
+[ADR 0031](./0031-agent-output-refreshes-on-demand-not-a-live-tail.md) — which keeps the
+frozen-snapshot contract but replaces the refresh gesture.)
 
 ## Consequences
 
