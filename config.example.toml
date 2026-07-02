@@ -57,8 +57,16 @@ effort = "medium"
 # configured on your machine) owns JIRA auth — this table stores no credential.
 #
 # `default_board` is the board a `jira`-opted PRD mirrors to when its block names
-# none. `[jira.status]` renames the epic statuses the mirror targets, for a JIRA
-# workflow whose columns aren't the conventional To Do / In Progress / Done.
+# none. `[jira.status]` renames the statuses the mirror targets, for a JIRA
+# workflow whose columns aren't the conventional names below.
+#
+# There are FOUR status keys, one per bucket the mirror drives cards to. The PRD
+# epic only ever uses three (backlog / in-progress / done); the fourth,
+# `in-review`, applies to child Issues — every review-ish Issue status
+# (ready-for-audit, in-audit, ready-for-review, in-review, human-review) coarsens
+# to it. Override any key whose default name doesn't exist on your board (e.g. a
+# board with a "Code Review" column instead of "In Review"): a transition to a
+# status your workflow lacks is a logged no-op, so the card silently won't move.
 
 [jira]
 default_board = "42"
@@ -66,4 +74,5 @@ default_board = "42"
 [jira.status]
 backlog = "To Do"
 "in-progress" = "In Progress"
+"in-review" = "In Review"
 done = "Done"
