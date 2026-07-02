@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { fileURLToPath } from "node:url";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createDetailReader } from "./detailReader.js";
 
@@ -51,6 +53,32 @@ describe("readDetail when zoomed into an Issue", () => {
     expect(detail?.body).not.toContain("status:");
     // It read the Issue, not the PRD body.
     expect(detail?.body).not.toContain("Let users sign in.");
+  });
+
+  it("surfaces the Issue's review_tolerated reason (what was waved through)", () => {
+    // A tmp PRD, not the shared board: the board's scan-level tests assert against
+    // the fixed set of Issues there, so the review_tolerated case lives isolated.
+    const root = mkdtempSync(join(tmpdir(), "overseer-detail-"));
+    const prdDir = join(root, "merged-prd");
+    mkdirSync(prdDir);
+    writeFileSync(join(prdDir, "prd.md"), "---\ntitle: Tmp\n---\nbody\n");
+    writeFileSync(
+      join(prdDir, "001-merged.md"),
+      '---\ntitle: Merged\nstatus: done\nreview_tolerated: "style:low — two nits"\n---\nThe body.\n',
+    );
+    const tmpReader = createDetailReader(root);
+
+    const detail = tmpReader.readDetail("merged-prd", "001-merged.md");
+    expect(detail?.reviewTolerated).toBe("style:low — two nits");
+    // The body still resolves alongside it.
+    expect(detail?.body).toContain("The body.");
+  });
+
+  it("leaves reviewTolerated undefined for an Issue without the field", () => {
+    // The shared fixture Issues carry no review_tolerated, so a plain zoom reads
+    // undefined — no tolerated header will render in the modal.
+    const detail = reader.readDetail("auth-system", "001-password-hashing.md");
+    expect(detail?.reviewTolerated).toBeUndefined();
   });
 
   it("returns undefined when the selected Issue file has vanished", () => {

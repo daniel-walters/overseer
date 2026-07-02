@@ -2,7 +2,7 @@ import { marked, setOptions, type MarkedOptions } from "marked";
 import TerminalRenderer from "marked-terminal";
 import wrapAnsi from "wrap-ansi";
 import type { CardDetail } from "./detailReader.js";
-import { REASON_MARKER } from "../model.js";
+import { REASON_MARKER, TOLERATED_MARKER } from "../model.js";
 
 /**
  * Render a markdown body to terminal text (ANSI styling for headings, list
@@ -57,28 +57,42 @@ function escapeNoteMarkdown(note: string): string {
 }
 
 /**
- * Compose the markdown the detail modal renders for a card: the reviewer's
- * human-review header (the escalation reason as a heading, the note beneath it)
- * prepended to the frontmatter-stripped body. The header renders for any card
- * carrying a non-blank `humanReviewNote` (the App sets it from the parsed model
- * field — ADR 0014); the reason only chooses the heading text and may be absent,
- * since the scanner lands the note independently of the reason. A PRD's `prd.md`
- * and every Issue without a note compose to the body alone, so their detail view
- * is unchanged.
+ * Compose the markdown the detail modal renders for a card: up to two header
+ * blocks — the reviewer's human-review escalation (reason as heading, note
+ * beneath) and the `◌ tolerated` findings that were waved through (ADR 0027, its
+ * `review_tolerated` reason beneath) — prepended to the frontmatter-stripped body.
+ * The human-review header renders for any card carrying a non-blank
+ * `humanReviewNote` (the App sets it from the parsed model field — ADR 0014); the
+ * reason only chooses the heading text and may be absent, since the scanner lands
+ * the note independently of the reason. The tolerated header renders for any card
+ * carrying a non-blank `reviewTolerated` (the detail reader sources it from the
+ * file, since the model carries only the boolean). Both can appear on one card (a
+ * `human-review` Issue whose review converged clean-with-tolerated), in which case
+ * the escalation reads first and the tolerated audit trail beneath it. A PRD's
+ * `prd.md` and every Issue with neither compose to the body alone, so their detail
+ * view is unchanged.
  *
- * The header is plain markdown folded into the same string as the body, so it
- * flows through one render and one scroll window — the note scrolls like the body
- * (a multi-sentence explanation stays fully readable, never card-truncated)
- * rather than being pinned chrome that would need its own viewport accounting.
- * The note itself is escaped ({@link escapeNoteMarkdown}) so quoted agent output
- * renders literally and can't collide with the `---` separator.
+ * Each header is plain markdown folded into the same string as the body, so it
+ * flows through one render and one scroll window — a multi-sentence explanation
+ * stays fully readable, never card-truncated — rather than being pinned chrome
+ * that would need its own viewport accounting. Each reason is escaped
+ * ({@link escapeNoteMarkdown}) so quoted agent output renders literally and can't
+ * collide with the `---` separator.
  */
 export function composeDetailMarkdown(detail: CardDetail): string {
+  const headers: string[] = [];
   const note = detail.humanReviewNote?.trim();
-  if (!note) return detail.body;
-  const header = `## ${headerHeading(detail.humanReviewReason)}\n\n${escapeNoteMarkdown(note)}`;
+  if (note) {
+    headers.push(`## ${headerHeading(detail.humanReviewReason)}\n\n${escapeNoteMarkdown(note)}`);
+  }
+  const tolerated = detail.reviewTolerated?.trim();
+  if (tolerated) {
+    headers.push(`## ${TOLERATED_MARKER}\n\n${escapeNoteMarkdown(tolerated)}`);
+  }
+  if (headers.length === 0) return detail.body;
+  const header = headers.join("\n\n");
   // A blank body would otherwise leave a trailing separator with nothing under
-  // it; join only the present parts so the header stands alone when the Issue
+  // it; join only the present parts so the header(s) stand alone when the Issue
   // file has frontmatter but no body.
   return detail.body.trim().length > 0 ? `${header}\n\n---\n\n${detail.body}` : header;
 }

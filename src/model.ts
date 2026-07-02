@@ -277,6 +277,18 @@ export const REASON_MARKER: Record<HumanReviewReason, string> = {
 };
 
 /**
+ * The tolerated marker: a `done` Issue (or a PRD rolling one up) that merged with
+ * tolerated findings waved through (ADR 0027). Neutral/cyan `◌` family — a
+ * recorded fact, never a call to action. Lives here beside {@link REASON_MARKER}
+ * for the same reason: two presentation surfaces share it — the card's terse
+ * marker (`Card.tsx`) and the detail view's header heading (`markdown.ts`, above
+ * the free-text `review_tolerated` reason) — so the marker string cannot drift
+ * between them, and the markdown layer reads it without dragging in the React
+ * component. The colour reinforcement stays in the component.
+ */
+export const TOLERATED_MARKER = "◌ tolerated";
+
+/**
  * The liveness overlay on an Issue card: whether the agent Overseer spawned for
  * it is still in Claude's live session registry (CONTEXT.md, ADR 0008 / 0009).
  * Derived on each board open by joining the recorded `--bg` handles against

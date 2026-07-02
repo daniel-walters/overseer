@@ -1,7 +1,7 @@
 import React from "react";
 import { Box, Text } from "ink";
 import type { ReadyFor, HumanReviewReason, Liveness, LinkedPr } from "../model.js";
-import { REASON_MARKER } from "../model.js";
+import { REASON_MARKER, TOLERATED_MARKER } from "../model.js";
 
 interface CardProps {
   title: string;
@@ -207,18 +207,13 @@ const STALLED_MARKER = "◌ stalled";
 const STALLED_COLOR = "cyan";
 
 /**
- * The tolerated marker — a `done` Issue (or a PRD rolling one up) that merged with
- * tolerated findings (ADR 0027). Deliberately in the neutral `◌` family with the
- * same cyan as {@link STALLED_COLOR}: it is *informational*, never a call to action
- * (nothing needs a human), so it reads apart from the yellow `⚠` needs-a-human
- * family and the red `⊘` "nothing ran" marker. Its own own-line truncating idiom,
- * like every other marker. The `◌` glyph is shared with `◌ stalled` (both neutral
- * "here's a fact, not an alarm" signals) but the word distinguishes them, and their
- * lanes never overlap.
+ * The colour of the neutral tolerated marker — the neutral family, not a warning.
+ * The marker *text* ({@link TOLERATED_MARKER}) lives in `model.ts` because the
+ * detail view's header shares it; only this on-screen colour reinforcement, unused
+ * by the markdown layer, stays local. Same cyan as {@link STALLED_COLOR}: both are
+ * neutral `◌` "here's a fact, not an alarm" signals, set apart from the yellow `⚠`
+ * needs-a-human family and the red `⊘` "nothing ran" marker.
  */
-const TOLERATED_MARKER = "◌ tolerated";
-
-/** The colour of the neutral tolerated marker — the neutral family, not a warning. */
 const TOLERATED_COLOR = "cyan";
 
 /**
