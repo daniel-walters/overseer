@@ -116,4 +116,15 @@ describe("AgentOutputModal", () => {
     // It is a frozen snapshot, not a stream — the hint must not promise a tail.
     expect(frame).not.toMatch(/tail|follow|live/i);
   });
+
+  it("renders an r-to-refresh hint alongside the scroll/close/quit hints", () => {
+    // `r` refreshes the snapshot in place (ADR 0031); the hint makes the gesture
+    // discoverable without reading docs, and — like the rest — must not imply a tail.
+    const { lastFrame } = render(
+      <AgentOutputModal output={{ title: "T", output: "x" }} />,
+    );
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("r to refresh");
+    expect(frame).not.toMatch(/tail|follow|live/i);
+  });
 });

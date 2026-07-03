@@ -1748,6 +1748,127 @@ describe("App agent output (o on a live card)", () => {
     expect(frame).toContain("second"); // the newer request's result won
     expect(frame).not.toContain("first"); // the stale older result was discarded
   });
+
+  // A renderer that echoes the bytes as lines, so a refresh test can assert the
+  // *new* read's output replaced the old one deterministically (no real emulator).
+  const echoRender = () =>
+    vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >(async (bytes) => bytes.replace(/\n+$/, "").split("\n"));
+
+  it("re-reads and replaces the displayed screen on r", async () => {
+    // The open froze the first snapshot; `r` re-runs the same read (ADR 0031) and
+    // replaces the screen with the current output — a manual, in-place refresh.
+    let current = "first snapshot\n";
+    const reader = {
+      readAgentOutput: vi.fn<
+        (prdId: string, issueId: string) => AgentOutput | undefined
+      >(() => ({ title: "OAuth", output: current })),
+    };
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={echoRender()} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("first snapshot");
+
+    // The agent advances between reads; the next read returns new output.
+    current = "second snapshot\n";
+    stdin.write("r");
+    await tick();
+
+    expect(reader.readAgentOutput).toHaveBeenCalledTimes(2);
+    expect(reader.readAgentOutput).toHaveBeenLastCalledWith("auth", "020-oauth");
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("second snapshot"); // replaced with the current screen
+    expect(frame).not.toContain("first snapshot"); // the stale snapshot is gone
+    expect(frame).toContain("to close"); // still the same modal, refreshed in place
+  });
+
+  it("resets the scroll offset to the top on r", async () => {
+    // Taller than the test viewport so `j` genuinely scrolls; a refresh must land
+    // back at the top, identical to opening the modal fresh.
+    const tall = Array.from({ length: 300 }, (_, i) => `OUTLINE${i}`).join("\n");
+    const reader = spyOutputReader({ title: "OAuth", output: tall });
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+    for (let i = 0; i < 5; i++) {
+      stdin.write("j");
+      await tick();
+    }
+    expect(stripAnsi(lastFrame() ?? "")).not.toContain("OUTLINE0"); // scrolled off
+
+    stdin.write("r");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("OUTLINE0"); // back at the top
+  });
+
+  it("shows the verbatim 'No job matching' message on a refresh after the agent exited", async () => {
+    // The agent finished between reads; `claude logs` prints its "No job matching"
+    // message (exit 0) which the reader returns verbatim — the informative "it
+    // finished" signal (ADR 0023), surfaced by the refresh with no special-casing.
+    let current = "running tests…\n";
+    const reader = {
+      readAgentOutput: vi.fn<
+        (prdId: string, issueId: string) => AgentOutput | undefined
+      >(() => ({ title: "OAuth", output: current })),
+    };
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={echoRender()} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+
+    current = "No job matching '17f1797e'. Run 'claude agents' to list sessions.";
+    stdin.write("r");
+    await tick();
+
+    expect(stripAnsi(lastFrame() ?? "")).toContain("No job matching");
+  });
+
+  it("r inside the modal refreshes and never triggers the board-level review action", async () => {
+    // The modal owns input while open (it returns before the keybind registry runs),
+    // so `r` refreshes the snapshot rather than colliding with the review binding.
+    const reader = spyOutputReader();
+    const reviewer = {
+      readReview: vi.fn(() => undefined),
+      review: vi.fn(),
+    };
+    const { stdin } = render(
+      <App board={orphanBoard} agentOutputReader={reader} reviewer={reviewer} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+    stdin.write("r");
+    await tick();
+
+    expect(reviewer.readReview).not.toHaveBeenCalled(); // no review action
+    expect(reader.readAgentOutput).toHaveBeenCalledTimes(2); // open + refresh
+  });
+
+  it("does nothing on r when no agent-output modal is open", async () => {
+    const reader = spyOutputReader();
+    const { stdin } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("r"); // no modal open — refresh has nothing to re-read
+    await tick();
+
+    expect(reader.readAgentOutput).not.toHaveBeenCalled();
+  });
 });
 
 describe("App go to PR (g on a done PRD)", () => {

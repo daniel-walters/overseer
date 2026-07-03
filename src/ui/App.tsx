@@ -878,15 +878,24 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     // modal's contract: `o` or Esc close it (restoring the prior selection/zoom),
     // `q` closes it and quits. `j`/`k` and the down/up arrows scroll the output,
     // clamped to `[0, agentOutputMaxOffset]` (a snapshot that fits has `maxOffset` 0,
-    // so the keys are inert). Everything else is swallowed. It is a read-only viewer
-    // of a frozen snapshot — nothing to confirm, no tail — so closing is just
-    // clearing the frozen capture; close-and-reopen is the refresh gesture.
+    // so the keys are inert). `r` refreshes the snapshot in place (ADR 0031): it
+    // re-runs the *same* read the open did over the modal's captured source ids and
+    // replaces the screen with the current one (scroll reset to the top) — a manual,
+    // on-demand refresh, not a live tail. Because the modal owns input here (this
+    // branch `return`s before the board keybind registry runs), `r` never collides
+    // with the board-level review binding. Everything else is swallowed.
     if (modal?.kind === "agent-output") {
       if (input === "o" || key.escape) {
         setModal(undefined);
       } else if (input === "q") {
         setModal(undefined);
         exit();
+      } else if (input === "r") {
+        // Reuse the shared open/refresh path verbatim, keyed by the source ids the
+        // modal froze at open — the synchronous `claude logs` read stays synchronous,
+        // no seam is made async, and the async-guard/scroll-reset/modal-set logic is
+        // the same code the `o`-open runs (Issue 002).
+        openAgentOutput(modal.prdId, modal.issueId);
       } else if (input === "j" || key.downArrow) {
         setDetailScroll((o) => Math.min(o + 1, agentOutputMaxOffset));
       } else if (input === "k" || key.upArrow) {
@@ -946,14 +955,19 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
 
   /**
    * The shared open/refresh path for the agent-output modal, keyed by
-   * `(prdId, issueId)` so it can be called from more than one place (the `o`-open
-   * today; the `r` refresh next, Issue 002). It resolves that handle's output via
+   * `(prdId, issueId)` so it is called from both the `o`-open (`viewAgentOutput`)
+   * and the in-modal `r` refresh (ADR 0031). It resolves that handle's output via
    * the reader, emulates the raw `claude logs` bytes to a coherent screen (ADR
    * 0030), applies the `requestId` + `agentOutputLiveRef` async guard, resets the
    * scroll to the top, and sets the modal — threading the same `(prdId, issueId)`
    * onto the modal state so a later refresh knows which handle to re-resolve. Lifted
-   * out of the `viewAgentOutput` handler verbatim so the async-guard, scroll-reset,
-   * and modal-set logic live in one place and cannot drift.
+   * out of the `viewAgentOutput` handler so the async-guard, scroll-reset, and
+   * modal-set logic live in one place and cannot drift between open and refresh.
+   *
+   * The one seam between the two callers is the async guard's modal-open expectation
+   * (`isRefresh` below): an open resolves onto a closed slot, a refresh onto the
+   * still-open same modal. The `claude logs` read stays synchronous for both — the
+   * refresh reuses the open path verbatim, making no seam async and adding no timer.
    *
    * A `live` card with no recorded handle (the verdict/sidecar race, or the Issue
    * vanished) yields no output, which — exactly as Kill does in the same race —
@@ -961,6 +975,13 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
    */
   function openAgentOutput(prdId: string, issueId: string): void {
     if (!agentOutputReader) return;
+    // Whether this call is a *refresh* of the already-open agent-output modal (`r`,
+    // ADR 0031) rather than a fresh `o`-open. Read synchronously off the frozen
+    // `modal` at call time — the `r` branch only runs while the agent-output modal is
+    // open, the `o`-open path only while it is closed. It flips the async guard's
+    // modal-open expectation below: an open must land on a *closed* slot, a refresh
+    // must land on the *still-open* same modal.
+    const isRefresh = modal?.kind === "agent-output";
     const output = agentOutputReader.readAgentOutput(prdId, issueId);
     if (!output) {
       // The card read `live` but readAgentOutput found no recorded handle (the
@@ -990,11 +1011,17 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
       (lines) => {
         const live = agentOutputLiveRef.current;
+        // An `o`-open must land on a still-*closed* slot (nothing else grabbed the
+        // screen while the flush was in flight); a refresh must land on the
+        // still-*open* same modal (an Esc/`o` close during the flush must not
+        // re-open it). From within the agent-output modal only `r`/`j`/`k`/`o`/`Esc`/
+        // `q` are live and none opens a *different* modal, so `modalOpen === true`
+        // during a refresh flush unambiguously means the same modal is still up.
         const stillRelevant =
           agentOutputRequestIdRef.current === requestId &&
           live.prdId === prdId &&
           live.issueId === issueId &&
-          !live.modalOpen;
+          (isRefresh ? live.modalOpen : !live.modalOpen);
         if (!stillRelevant) return;
         setDetailScroll(0); // always open at the top, never a stale position
         setModal({ kind: "agent-output", output, lines: [...lines], prdId, issueId });

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createAgentOutputReader } from "./agentOutputReader.js";
+import { createAgentOutputReader, logsFailureMessage } from "./agentOutputReader.js";
 
 describe("createAgentOutputReader (against a writable temp root)", () => {
   let root: string;
@@ -83,5 +83,26 @@ describe("createAgentOutputReader (against a writable temp root)", () => {
 
     // Nothing was seeded — the Issue does not exist on disk.
     expect(reader.readAgentOutput("auth", "001-login.md")).toBeUndefined();
+  });
+});
+
+describe("logsFailureMessage (the failed-read placeholders)", () => {
+  // A failed refresh replaces the screen with these placeholders, so — like the
+  // modal hint and the refresh gesture — they must instruct pressing `r` to retry,
+  // never the old "close and press o again" (Issue 002).
+  it("instructs pressing r (never o) on every failure mode", () => {
+    for (const code of ["ETIMEDOUT", "ENOBUFS", undefined]) {
+      const msg = logsFailureMessage(code);
+      expect(msg).toMatch(/\br\b/); // references the r keypress
+      expect(msg.toLowerCase()).toContain("press r");
+      expect(msg.toLowerCase()).not.toContain("press o");
+      expect(msg.toLowerCase()).not.toContain("o again");
+    }
+  });
+
+  it("distinguishes timeout, overflow, and unavailable", () => {
+    expect(logsFailureMessage("ETIMEDOUT")).toMatch(/timed out/i);
+    expect(logsFailureMessage("ENOBUFS")).toMatch(/too large/i);
+    expect(logsFailureMessage(undefined)).toMatch(/unavailable/i);
   });
 });
