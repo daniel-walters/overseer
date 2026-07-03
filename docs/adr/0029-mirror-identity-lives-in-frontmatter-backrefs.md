@@ -2,7 +2,9 @@
 
 ## Status
 
-accepted
+accepted — the backref mechanism stands; the PRD-level field is **renamed `jira_epic` →
+`jira_story`** by [ADR 0032](./0032-jira-mirror-maps-a-prd-to-a-story-with-subtasks.md) (the
+PRD now mirrors to a Story, not an Epic). The child `jira_key` is unchanged.
 
 ## Context
 
