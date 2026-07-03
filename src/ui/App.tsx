@@ -494,6 +494,18 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     readonly modalOpen: boolean;
   }>({ prdId: undefined, issueId: undefined, modalOpen: false });
   const agentOutputRequestIdRef = useRef(0);
+  // A refresh (`r`) must land on the *same* agent-output modal it was fired
+  // from — not merely "some modal, for these selected ids, happens to be open"
+  // (`agentOutputLiveRef` above answers the open-path question and is derived
+  // from the live *board selection*, which can drift under a background
+  // re-scan even while this modal's own ids stay fixed; it also goes true for
+  // any other modal, e.g. `v`'s detail view, opened after an Esc/`o` close).
+  // This ref mirrors the agent-output modal's own frozen identity directly —
+  // `undefined` whenever the open modal isn't `agent-output` — so a refresh's
+  // `.then` can check the *actual* still-open modal instead of a proxy for it.
+  const openAgentOutputModalRef = useRef<
+    { readonly prdId: string; readonly issueId: string } | undefined
+  >(undefined);
 
   // Resolve the stored grid coordinate against the live board into the card it
   // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
@@ -515,6 +527,10 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     issueId: selectedIssue?.id,
     modalOpen: modal !== undefined,
   };
+  openAgentOutputModalRef.current =
+    modal?.kind === "agent-output"
+      ? { prdId: modal.prdId, issueId: modal.issueId }
+      : undefined;
   // The lane shape for the level that currently owns input — what a `move`
   // carries so the pure reducer knows the grid's geometry.
   const activeShape = nav.level === "board" ? boardShape : issueShape;
@@ -964,10 +980,15 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
    * out of the `viewAgentOutput` handler so the async-guard, scroll-reset, and
    * modal-set logic live in one place and cannot drift between open and refresh.
    *
-   * The one seam between the two callers is the async guard's modal-open expectation
-   * (`isRefresh` below): an open resolves onto a closed slot, a refresh onto the
-   * still-open same modal. The `claude logs` read stays synchronous for both — the
-   * refresh reuses the open path verbatim, making no seam async and adding no timer.
+   * The one seam between the two callers is which ref the async guard checks
+   * (`isRefresh` below): an open must resolve onto a still-closed slot for the
+   * live-selected ids (`agentOutputLiveRef`); a refresh must resolve onto the
+   * exact same still-open modal it was fired from (`openAgentOutputModalRef`,
+   * checked directly rather than via the live board selection or a generic
+   * "some modal is open" flag — either of which a background re-scan or an
+   * intervening Esc-then-open-something-else could make land wrongly). The
+   * `claude logs` read stays synchronous for both — the refresh reuses the open
+   * path verbatim, making no seam async and adding no timer.
    *
    * A `live` card with no recorded handle (the verdict/sidecar race, or the Issue
    * vanished) yields no output, which — exactly as Kill does in the same race —
@@ -978,9 +999,10 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     // Whether this call is a *refresh* of the already-open agent-output modal (`r`,
     // ADR 0031) rather than a fresh `o`-open. Read synchronously off the frozen
     // `modal` at call time — the `r` branch only runs while the agent-output modal is
-    // open, the `o`-open path only while it is closed. It flips the async guard's
-    // modal-open expectation below: an open must land on a *closed* slot, a refresh
-    // must land on the *still-open* same modal.
+    // open, the `o`-open path only while it is closed. It selects which ref the
+    // async guard below checks: an open checks the live-selected ids stayed put and
+    // closed (`agentOutputLiveRef`); a refresh checks this exact modal is still the
+    // one open (`openAgentOutputModalRef`).
     const isRefresh = modal?.kind === "agent-output";
     const output = agentOutputReader.readAgentOutput(prdId, issueId);
     if (!output) {
@@ -1010,18 +1032,23 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     const requestId = ++agentOutputRequestIdRef.current;
     void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
       (lines) => {
-        const live = agentOutputLiveRef.current;
         // An `o`-open must land on a still-*closed* slot (nothing else grabbed the
-        // screen while the flush was in flight); a refresh must land on the
-        // still-*open* same modal (an Esc/`o` close during the flush must not
-        // re-open it). From within the agent-output modal only `r`/`j`/`k`/`o`/`Esc`/
-        // `q` are live and none opens a *different* modal, so `modalOpen === true`
-        // during a refresh flush unambiguously means the same modal is still up.
-        const stillRelevant =
-          agentOutputRequestIdRef.current === requestId &&
-          live.prdId === prdId &&
-          live.issueId === issueId &&
-          (isRefresh ? live.modalOpen : !live.modalOpen);
+        // screen while the flush was in flight) for the ids that were selected —
+        // `agentOutputLiveRef` (the live board selection) is the right proxy for
+        // that. A refresh must land on the exact *same* agent-output modal it was
+        // fired from — checked directly against `openAgentOutputModalRef`, not
+        // against the live board selection (which can drift under a background
+        // re-scan even though this modal's own ids never move) and not against
+        // "some modal is open" (which would also match a *different* modal, e.g.
+        // detail's `v`, opened after an Esc/`o` closed this one mid-flush).
+        const stillRelevant = isRefresh
+          ? agentOutputRequestIdRef.current === requestId &&
+            openAgentOutputModalRef.current?.prdId === prdId &&
+            openAgentOutputModalRef.current?.issueId === issueId
+          : agentOutputRequestIdRef.current === requestId &&
+            agentOutputLiveRef.current.prdId === prdId &&
+            agentOutputLiveRef.current.issueId === issueId &&
+            !agentOutputLiveRef.current.modalOpen;
         if (!stillRelevant) return;
         setDetailScroll(0); // always open at the top, never a stale position
         setModal({ kind: "agent-output", output, lines: [...lines], prdId, issueId });

@@ -1869,6 +1869,112 @@ describe("App agent output (o on a live card)", () => {
 
     expect(reader.readAgentOutput).not.toHaveBeenCalled();
   });
+
+  it("does not let a stale in-flight refresh clobber a different modal opened after it", async () => {
+    // The refresh's async guard must confirm the *same* agent-output modal is
+    // still open, not merely that *some* modal is open. If the user closes the
+    // agent-output modal (Esc) and opens the detail modal (v) while a refresh's
+    // emulator flush is still in flight, the stale refresh must not land on top
+    // of it when it finally resolves.
+    const reader = spyOutputReader({ title: "OAuth", output: "compiling…\n" });
+    const detailReader = {
+      readDetail: vi.fn(() => ({ title: "OAuth", body: "detail body" })),
+    };
+    let resolveRefresh: ((lines: readonly string[]) => void) | undefined;
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >()
+      .mockResolvedValueOnce(["compiling…"]) // the initial `o`-open resolves immediately
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveRefresh = resolve)));
+    const { stdin, lastFrame } = render(
+      <App
+        board={orphanBoard}
+        agentOutputReader={reader}
+        detailReader={detailReader}
+        renderTerminal={fakeRender}
+      />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("compiling…");
+
+    stdin.write("r"); // refresh starts; its flush is deferred, not yet resolved
+    await tick();
+    stdin.write(ESC); // closes the agent-output modal
+    await tick();
+    stdin.write("v"); // opens the detail modal on the same card
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("detail body");
+
+    resolveRefresh?.(["stale refresh"]); // the superseded refresh finally lands
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("detail body"); // the detail modal is untouched
+    expect(frame).not.toContain("stale refresh"); // the stale refresh never applied
+  });
+
+  it("does not silently drop a refresh when a background board re-scan moves the live selection", async () => {
+    // `agentOutputLiveRef` mirrors the *live board selection*, which is resolved
+    // positionally (ADR 0015) and can drift under a re-scan even while the
+    // modal's own captured ids never move. A refresh must be checked against
+    // the modal's own frozen identity, not the live selection, so a benign
+    // re-scan never causes a legitimate refresh to be discarded.
+    let current = "first snapshot\n";
+    const reader = {
+      readAgentOutput: vi.fn<
+        (prdId: string, issueId: string) => AgentOutput | undefined
+      >(() => ({ title: "OAuth", output: current })),
+    };
+    let resolveRefresh: ((lines: readonly string[]) => void) | undefined;
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >()
+      .mockResolvedValueOnce(["first snapshot"]) // the initial `o`-open resolves immediately
+      .mockImplementationOnce(() => new Promise((resolve) => (resolveRefresh = resolve)));
+    const { stdin, lastFrame, rerender } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin); // lands on 020-oauth, at row index 1
+    stdin.write("o");
+    await tick();
+
+    current = "second snapshot\n";
+    stdin.write("r"); // refresh starts; its flush is deferred
+    await tick();
+
+    // A background re-scan inserts a new Issue ahead of the selected row, so the
+    // *same* coordinate (row index 1) now resolves to a different card — even
+    // though the modal is still open for 020-oauth and input is fully captured.
+    const rescannedBoard: Board = {
+      prds: [
+        {
+          id: "auth",
+          title: "AuthPRD",
+          lane: "in-progress",
+          issues: [
+            { id: "005-new", title: "New", lane: "in-progress", liveness: "live" },
+            { id: "010-login", title: "Login", lane: "in-progress", liveness: "orphaned" },
+            { id: "020-oauth", title: "OAuth", lane: "in-progress", liveness: "live" },
+          ],
+        },
+      ],
+    };
+    rerender(
+      <App board={rescannedBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+    await tick();
+
+    resolveRefresh?.(["second snapshot"]);
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).toContain("second snapshot"); // the legitimate refresh still applied
+    expect(frame).not.toContain("first snapshot");
+  });
 });
 
 describe("App go to PR (g on a done PRD)", () => {
