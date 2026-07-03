@@ -96,6 +96,29 @@ describe("resolveProjectKey", () => {
     });
     expect(resolution.kind).toBe("ambiguous");
   });
+
+  it("degrades to ambiguous rather than throwing on unparseable listProjects output", () => {
+    // An acli hiccup (non-JSON stdout) must not crash the pure resolver — it
+    // reads as "no projects listed", same as the sibling parsers' "not json" cases.
+    const resolution = resolveProjectKey({
+      boardGet: JSON.stringify({ location: "X (Y)" }),
+      listProjects: "not json",
+    });
+    expect(resolution.kind).toBe("ambiguous");
+  });
+
+  it("degrades to ambiguous rather than throwing on unparseable board get output", () => {
+    // A multi-project board whose `board get` output is unparseable has no
+    // location to disambiguate with — same outcome as a missing location field.
+    const listProjects = JSON.stringify({
+      projects: [
+        { key: "CABB", name: "Culture Amp Bug Board" },
+        { key: "ESD", name: "Team Survey Design" },
+      ],
+    });
+    const resolution = resolveProjectKey({ boardGet: "not json", listProjects });
+    expect(resolution.kind).toBe("ambiguous");
+  });
 });
 
 describe("parseSearchStatuses", () => {
