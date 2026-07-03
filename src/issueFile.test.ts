@@ -11,7 +11,7 @@ import {
   writeStatus,
   writeHumanReview,
   parseJiraOptIn,
-  writeJiraEpic,
+  writeJiraStory,
   writeJiraKey,
 } from "./issueFile.js";
 
@@ -309,11 +309,11 @@ describe("parseJiraOptIn", () => {
   });
 });
 
-describe("writeJiraEpic", () => {
+describe("writeJiraStory", () => {
   let dir: string;
 
   beforeEach(() => {
-    dir = mkdtempSync(join(tmpdir(), "overseer-jira-epic-"));
+    dir = mkdtempSync(join(tmpdir(), "overseer-jira-story-"));
   });
 
   afterEach(() => {
@@ -326,7 +326,7 @@ describe("writeJiraEpic", () => {
     return path;
   }
 
-  it("writes the jira_epic backref, preserving the jira block and body", () => {
+  it("writes the jira_story backref, preserving the jira block and body", () => {
     const path = file(
       "prd.md",
       `---
@@ -339,40 +339,40 @@ The plan.
 `,
     );
 
-    writeJiraEpic(path, "PROJ-100");
+    writeJiraStory(path, "PROJ-100");
 
     const after = readFileSync(path, "utf8");
-    expect(after).toContain("jira_epic: PROJ-100");
+    expect(after).toContain("jira_story: PROJ-100");
     expect(after).toContain("title: Auth");
     // The opt-in block survives the write-back.
     expect(after).toContain("board:");
     expect(after).toContain("The plan.");
     // Reading it back yields the key we wrote.
-    expect(readPresentString(safeMatter(after).data, FIELD.jiraEpic)).toBe(
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraStory)).toBe(
       "PROJ-100",
     );
   });
 
-  it("overwrites an existing jira_epic value rather than adding a second", () => {
+  it("overwrites an existing jira_story value rather than adding a second", () => {
     const path = file(
       "prd.md",
       `---
 title: Auth
-jira_epic: PROJ-1
+jira_story: PROJ-1
 ---
 
 Body.
 `,
     );
 
-    writeJiraEpic(path, "PROJ-2");
+    writeJiraStory(path, "PROJ-2");
 
     const after = readFileSync(path, "utf8");
-    expect(readPresentString(safeMatter(after).data, FIELD.jiraEpic)).toBe(
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraStory)).toBe(
       "PROJ-2",
     );
-    // Exactly one jira_epic key.
-    expect(after.match(/jira_epic/g)).toHaveLength(1);
+    // Exactly one jira_story key.
+    expect(after.match(/jira_story/g)).toHaveLength(1);
   });
 });
 
