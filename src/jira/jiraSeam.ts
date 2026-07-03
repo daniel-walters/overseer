@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
  *
  * acli owns authentication (an OAuth/API-token session the user configures once),
  * so this seam handles **no credential** — Overseer never sees one. It exposes
- * epic/child creation, the JQL {@link JiraSeam.searchStatuses} that seeds the
+ * Story/Sub-task creation, the JQL {@link JiraSeam.searchStatuses} that seeds the
  * reconciler's diff-gate cache, and status transitions; sprint placement extends
  * the interface in a later slice.
  *
@@ -43,25 +43,28 @@ export interface JiraSeam {
    */
   resolveProject(board: string): Promise<string>;
   /**
-   * Create a JIRA **epic** for a PRD and resolve to its new key (e.g. `DS-100`).
-   * The epic is the PRD's mirrored feature-level rollup; its status is driven
-   * separately via {@link transition}. Rejects on any acli failure.
+   * Create a JIRA **Story** — the *feature card* — for a PRD and resolve to its new
+   * key (e.g. `DS-100`). The Story is the single board card the PRD mirrors to; its
+   * status is driven separately via {@link transition} (ADR 0032). Rejects on any
+   * acli failure.
    */
-  createEpic(input: CreateEpicInput): Promise<string>;
+  createStory(input: CreateStoryInput): Promise<string>;
   /**
-   * Create a JIRA **child issue** nested under a PRD's epic via JIRA Cloud's native
-   * `parent` field (ADR 0028, user story 26) and resolve to its new key. The
+   * Create a JIRA **Sub-task** nested under a PRD's Story via JIRA Cloud's native
+   * `parent` field (ADR 0032, user story 2) and resolve to its new key. The
    * reconciler creates one per Issue of an opted-in PRD (create-on-first-appearance,
-   * incl. backlog), only ever *after* the epic exists (epic-before-child ordering) —
-   * so a child is never parented to a not-yet-created epic. Its status is driven
-   * separately via {@link transition}, reusing the same generic ops as the epic.
-   * Rejects on any acli failure.
+   * incl. backlog), only ever *after* the Story exists (Story-before-Sub-task
+   * ordering) — so a Sub-task is never parented to a not-yet-created Story. A
+   * Sub-task is never placed independently: it follows its parent Story's
+   * backlog/sprint by JIRA's own rules. Its status is driven separately via
+   * {@link transition}, reusing the same generic ops as the Story. Rejects on any
+   * acli failure.
    */
   createChildIssue(input: CreateChildInput): Promise<string>;
   /**
    * Fetch the current named status of each given issue key in **one** JQL search —
    * the batched, board-open seed of the reconciler's last-known-bucket cache (ADR
-   * 0028). The reconciler collects every mirrored PRD's epic + child backref, seeds
+   * 0028). The reconciler collects every mirrored PRD's Story + Sub-task backref, seeds
    * the cache from this single call, then diffs each scan against the cache **in
    * memory** — so a steady-state scan that crosses no bucket makes zero JIRA calls.
    *
@@ -74,7 +77,7 @@ export interface JiraSeam {
    */
   searchStatuses(keys: readonly string[]): Promise<readonly JiraStatus[]>;
   /**
-   * Drive the issue to the named target status via acli (which resolves the legal
+   * Drive the work item to the named target status via acli (which resolves the legal
    * transition for the name). **Rejects** when the status is unreachable or absent
    * from the workflow — the reconciler catches that as a logged no-op, the
    * graceful degradation the mirror promises. Idempotence (not re-firing when
@@ -85,32 +88,33 @@ export interface JiraSeam {
   /**
    * Resolve the board's live **active sprint** id (JIRA Agile API via acli), or
    * `undefined` when the board has no active sprint — the reconciler treats the
-   * latter as a logged no-op that leaves the child in the backlog (user story 7).
-   * Used only for `target: sprint` PRDs, at child-create time. Rejects on an acli
+   * latter as a logged no-op that leaves the Story in the backlog (user story 7).
+   * Used only for `target: sprint` PRDs, at Story-create time. Rejects on an acli
    * failure (unauthed, bad board, network), which the reconciler catches as a
    * logged no-op just like {@link resolveProject}.
    */
   resolveActiveSprint(board: string): Promise<string | undefined>;
   /**
-   * Place a child issue into a sprint (JIRA Agile API via acli) — the sprint
-   * resolved by {@link resolveActiveSprint}. Called **once at create** for a
-   * `target: sprint` PRD's child and never again (placement is set once; the team
-   * owns subsequent sprint moves — user story 8). Never called for an epic, which
-   * is never sprinted. Rejects on any acli failure, which the reconciler catches
-   * as a logged no-op (the child simply stays where JIRA created it).
+   * Place a work item into a sprint (JIRA Agile API via acli) — the sprint
+   * resolved by {@link resolveActiveSprint}. Called **once at create** and never
+   * again (placement is set once; the team owns subsequent sprint moves — user
+   * story 8). Under the feature-card shape only the Story is ever placed and its
+   * Sub-tasks follow it by JIRA's own rules (ADR 0032). Rejects on any acli
+   * failure, which the reconciler catches as a logged no-op (the work item simply
+   * stays where JIRA created it).
    */
   assignToSprint(sprintId: string, key: string): Promise<void>;
 }
 
-/** The fields the mirror supplies when creating an epic. */
-export interface CreateEpicInput {
+/** The fields the mirror supplies when creating a Story. */
+export interface CreateStoryInput {
   /** The destination project key (from {@link JiraSeam.resolveProject} or an override). */
   readonly project: string;
-  /** The epic summary — the PRD's derived title. */
+  /** The Story summary — the PRD's derived title. */
   readonly summary: string;
   /**
-   * The epic description in plain text — the human-readable plan. Optional; a PRD
-   * with no body prose creates a summary-only epic.
+   * The Story description in plain text — the human-readable plan. Optional; a PRD
+   * with no body prose creates a summary-only Story.
    */
   readonly description?: string;
 }
@@ -123,23 +127,23 @@ export interface JiraStatus {
   readonly status: string | undefined;
 }
 
-/** The fields the mirror supplies when creating a child issue under an epic. */
+/** The fields the mirror supplies when creating a Sub-task under a Story. */
 export interface CreateChildInput {
   /**
-   * The destination project key — the epic's project, so the child lands beside it.
-   * The reconciler derives it from the epic key's prefix (a JIRA key is
-   * `PROJECT-NUMBER`), so a child under an already-linked epic needs no extra
+   * The destination project key — the Story's project, so the Sub-task lands beside
+   * it. The reconciler derives it from the Story key's prefix (a JIRA key is
+   * `PROJECT-NUMBER`), so a Sub-task under an already-linked Story needs no extra
    * board→project lookup.
    */
   readonly project: string;
-  /** The parent epic's key (native `parent` field) — the epic-before-child link. */
+  /** The parent Story's key (native `parent` field) — the Story-before-Sub-task link. */
   readonly parent: string;
-  /** The child summary — the Issue's `title`. */
+  /** The Sub-task summary — the Issue's `title`. */
   readonly summary: string;
   /**
-   * The child description in plain text — the Issue **body prose with frontmatter
+   * The Sub-task description in plain text — the Issue **body prose with frontmatter
    * stripped**, so no machine state leaks into the human-readable ticket. Optional;
-   * a body-less Issue creates a summary-only child.
+   * a body-less Issue creates a summary-only Sub-task.
    */
   readonly description?: string;
 }
@@ -337,11 +341,11 @@ export function parseSearchStatuses(json: string): JiraStatus[] {
 }
 
 /**
- * Recover the created epic's key from `acli jira workitem create --json` output.
- * Tolerant of the plausible shapes: a JSON object with a `key`, or a
- * single-element array of such objects. `undefined` when no key is found there,
- * so a malformed create is a logged no-op rather than a bogus backref written to
- * disk.
+ * Recover the created work item's key (a Story or a Sub-task) from `acli jira
+ * workitem create --json` output. Tolerant of the plausible shapes: a JSON object
+ * with a `key`, or a single-element array of such objects. `undefined` when no key
+ * is found there, so a malformed create is a logged no-op rather than a bogus
+ * backref written to disk.
  *
  * The regex fallback (scanning for a `PROJ-123`-shaped substring) applies **only**
  * when the output isn't JSON at all — a plain human-readable success line.
@@ -349,7 +353,7 @@ export function parseSearchStatuses(json: string): JiraStatus[] {
  * a *parsed* payload's raw text for a stray key-shaped substring would just as
  * happily match a key mentioned in an unrelated error message (e.g. "related to
  * DS-42, permission denied") and hand back that wrong key as if it were the
- * epic just created, silently mirroring the PRD to someone else's ticket.
+ * work item just created, silently mirroring the PRD to someone else's ticket.
  */
 export function parseCreatedKey(output: string): string | undefined {
   const parsed = tryParse(output);
@@ -463,13 +467,16 @@ export const realJiraSeam: JiraSeam = {
     return resolution.key;
   },
 
-  async createEpic(input: CreateEpicInput): Promise<string> {
+  async createStory(input: CreateStoryInput): Promise<string> {
+    // The PRD's feature card — a `Story` (not an Epic), the single board card the
+    // PRD mirrors to (ADR 0032). Board placement is emergent from the board's
+    // project-scoped filter, so creating it in the right project is sufficient.
     const args = [
       "jira",
       "workitem",
       "create",
       "--type",
-      "Epic",
+      "Story",
       "--project",
       input.project,
       "--summary",
@@ -482,21 +489,23 @@ export const realJiraSeam: JiraSeam = {
     const key = parseCreatedKey(await runAcli(args));
     if (key === undefined) {
       throw new Error(
-        `could not read the created epic key from acli (project ${input.project})`,
+        `could not read the created story key from acli (project ${input.project})`,
       );
     }
     return key;
   },
 
   async createChildIssue(input: CreateChildInput): Promise<string> {
-    // A standard `Task` parented to the epic via the native `parent` field (JIRA
-    // Cloud — user story 26). Same create shape as an epic, plus `--parent`.
+    // A native `Sub-task` parented to the Story via the native `parent` field (JIRA
+    // Cloud — ADR 0032, user story 2), so it nests under the feature card rather
+    // than getting its own board card. Same create shape as a Story, plus
+    // `--parent`; the `Sub-task` type is what makes JIRA nest it.
     const args = [
       "jira",
       "workitem",
       "create",
       "--type",
-      "Task",
+      "Sub-task",
       "--project",
       input.project,
       "--parent",
@@ -511,7 +520,7 @@ export const realJiraSeam: JiraSeam = {
     const key = parseCreatedKey(await runAcli(args));
     if (key === undefined) {
       throw new Error(
-        `could not read the created child key from acli (parent ${input.parent})`,
+        `could not read the created sub-task key from acli (parent ${input.parent})`,
       );
     }
     return key;

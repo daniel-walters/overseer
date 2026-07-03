@@ -12,7 +12,7 @@ import {
 } from "./pacedWriteQueue.js";
 import type {
   CreateChildInput,
-  CreateEpicInput,
+  CreateStoryInput,
   JiraSeam,
   JiraStatus,
 } from "./jiraSeam.js";
@@ -30,15 +30,15 @@ const ROOT = "/root";
 class FakeJiraSeam implements JiraSeam {
   /** board id → project key, seeding {@link resolveProject}. */
   readonly projectByBoard = new Map<string, string>();
-  /** key → current status name; every created/seeded epic *and* child lives here. */
+  /** key → current status name; every created/seeded story *and* child lives here. */
   readonly statusByKey = new Map<string, string>();
   /** Target status names the workflow can legally transition to; others throw. */
   readonly legalStatuses = new Set<string>();
-  /** The status a freshly-created epic or child lands in. */
+  /** The status a freshly-created story or child lands in. */
   initialStatus = "To Do";
-  /** When set, `createEpic` throws — a simulated acli failure. */
+  /** When set, `createStory` throws — a simulated acli failure. */
   failCreate = false;
-  /** When set, `createChildIssue` throws — a child-create failure isolated from the epic. */
+  /** When set, `createChildIssue` throws — a child-create failure isolated from the story. */
   failChildCreate = false;
   /** When set, `searchStatuses` throws — a simulated open-time cache-seed failure. */
   failSearch = false;
@@ -52,8 +52,8 @@ class FakeJiraSeam implements JiraSeam {
   readonly sprintByKey = new Map<string, string>();
   /** Ordered record of every seam call. */
   readonly calls: string[] = [];
-  /** The inputs `createEpic` was called with, for summary/project assertions. */
-  readonly created: CreateEpicInput[] = [];
+  /** The inputs `createStory` was called with, for summary/project assertions. */
+  readonly created: CreateStoryInput[] = [];
   /** The inputs `createChildIssue` was called with, for parent/summary/description assertions. */
   readonly childrenCreated: CreateChildInput[] = [];
   private seq = 0;
@@ -66,8 +66,8 @@ class FakeJiraSeam implements JiraSeam {
     return project;
   }
 
-  async createEpic(input: CreateEpicInput): Promise<string> {
-    this.calls.push(`createEpic:${input.project}`);
+  async createStory(input: CreateStoryInput): Promise<string> {
+    this.calls.push(`createStory:${input.project}`);
     if (this.failCreate) throw new Error("acli create failed");
     this.created.push(input);
     const key = `${input.project}-${++this.seq}`;
@@ -76,12 +76,12 @@ class FakeJiraSeam implements JiraSeam {
   }
 
   async createChildIssue(input: CreateChildInput): Promise<string> {
-    // Record the parent so epic-before-child ordering is assertable via `calls`.
+    // Record the parent so story-before-child ordering is assertable via `calls`.
     this.calls.push(`createChild:${input.parent}`);
     if (this.failChildCreate) throw new Error("acli child create failed");
     this.childrenCreated.push(input);
-    // A distinct key range from epics (100+) so a child never collides with an
-    // epic key in `statusByKey` and assertions read unambiguously.
+    // A distinct key range from stories (100+) so a child never collides with a
+    // story key in `statusByKey` and assertions read unambiguously.
     const key = `${input.project}-${100 + ++this.childSeq}`;
     this.statusByKey.set(key, this.initialStatus);
     return key;
@@ -130,7 +130,7 @@ function issue(id: string, lane: Lane = "backlog", title = id): Issue {
   return { id, title, lane };
 }
 
-/** A PRD; `issues` defaults empty for the epic-only tests that predate children. */
+/** A PRD; `issues` defaults empty for the story-only tests that predate children. */
 function prd(
   id: string,
   lane: PRD["lane"],
@@ -146,7 +146,7 @@ function board(...prds: PRD[]): Board {
 
 /**
  * Build a reconciler over an in-memory file store, returning the reconciler plus
- * handles to inspect/seed the store (the prd.md opt-in + epic backref, the Issue
+ * handles to inspect/seed the store (the prd.md opt-in + story backref, the Issue
  * files' status/body/child-backref) and the captured log lines.
  */
 function harness(
@@ -169,9 +169,9 @@ function harness(
     queue,
     defaultBoard,
     readMirror: (prdDir) => files.get(prdDir) ?? {},
-    writeEpic: (prdDir, key) => {
+    writeStory: (prdDir, key) => {
       const prev = files.get(prdDir) ?? {};
-      files.set(prdDir, { ...prev, epicKey: key });
+      files.set(prdDir, { ...prev, storyKey: key });
     },
     readIssueMirror: (issuePath) => issueFiles.get(issuePath) ?? {},
     writeIssueKey: (issuePath, key) => {
@@ -180,19 +180,19 @@ function harness(
     },
     log: (m) => logs.push(m),
   });
-  const epicKeyOf = (id: string) => files.get(join(ROOT, id))?.epicKey;
+  const storyKeyOf = (id: string) => files.get(join(ROOT, id))?.storyKey;
   const childKeyOf = (prdId: string, issueId: string) =>
     issueFiles.get(join(ROOT, prdId, issueId))?.childKey;
-  return { reconciler, set, setIssue, logs, epicKeyOf, childKeyOf };
+  return { reconciler, set, setIssue, logs, storyKeyOf, childKeyOf };
 }
 
 const optIn = (over: Partial<JiraOptIn> = {}): JiraOptIn => ({ ...over });
 
-describe("mirrorReconciler — epic create", () => {
-  it("creates one epic for an opted-in PRD with no backref and writes the key back", async () => {
+describe("mirrorReconciler — story create", () => {
+  it("creates one story for an opted-in PRD with no backref and writes the key back", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
-    const { reconciler, set, epicKeyOf } = harness(seam);
+    const { reconciler, set, storyKeyOf } = harness(seam);
     set("auth", { optIn: optIn({ board: "34" }) });
 
     const delta = await reconciler.reconcile(board(prd("auth", "backlog", "Auth")));
@@ -200,7 +200,7 @@ describe("mirrorReconciler — epic create", () => {
     expect(seam.created).toEqual([{ project: "DS", summary: "Auth" }]);
     expect(delta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
     // The created key is written back onto prd.md as the backref.
-    expect(epicKeyOf("auth")).toBe("DS-1");
+    expect(storyKeyOf("auth")).toBe("DS-1");
   });
 
   it("does nothing for a PRD with no jira block", async () => {
@@ -214,18 +214,18 @@ describe("mirrorReconciler — epic create", () => {
     expect(delta).toEqual({ created: [], transitioned: [], childrenCreated: [], childrenTransitioned: [], placed: [] });
   });
 
-  it("never creates a second epic when the backref is already present", async () => {
+  it("never creates a second story when the backref is already present", async () => {
     const seam = new FakeJiraSeam();
     seam.statusByKey.set("DS-9", "To Do");
-    const { reconciler, set, epicKeyOf } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    const { reconciler, set, storyKeyOf } = harness(seam);
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
 
     const delta = await reconciler.reconcile(board(prd("auth", "backlog")));
 
     expect(seam.created).toEqual([]);
     expect(delta.created).toEqual([]);
     // The existing backref is untouched.
-    expect(epicKeyOf("auth")).toBe("DS-9");
+    expect(storyKeyOf("auth")).toBe("DS-9");
     // No board→project lookup either — a linked PRD needs no board resolution.
     expect(seam.calls).not.toContain("resolveProject:34");
   });
@@ -239,7 +239,7 @@ describe("mirrorReconciler — epic create", () => {
 
     await reconciler.reconcile(board(prd("byBoard", "backlog"), prd("byOverride", "backlog")));
 
-    // Board-derived: resolveProject called, epic created in DS.
+    // Board-derived: resolveProject called, story created in DS.
     expect(seam.calls).toContain("resolveProject:34");
     // Override: project used directly, resolveProject NOT called for it.
     expect(seam.created.map((c) => c.project)).toEqual(["DS", "OVR"]);
@@ -289,14 +289,14 @@ describe("mirrorReconciler — epic create", () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     const logs: string[] = [];
-    // A writeEpic that throws, to simulate the backref write failing right
+    // A writeStory that throws, to simulate the backref write failing right
     // after a successful JIRA create.
     const failingReconciler = createMirrorReconciler({
       root: ROOT,
       seam,
       readMirror: (prdDir) =>
         prdDir === join(ROOT, "auth") ? { optIn: optIn({ board: "34" }) } : {},
-      writeEpic: () => {
+      writeStory: () => {
         throw new Error("disk full");
       },
       readIssueMirror: () => ({}),
@@ -306,22 +306,22 @@ describe("mirrorReconciler — epic create", () => {
 
     const delta = await failingReconciler.reconcile(board(prd("auth", "backlog")));
 
-    // The epic was created against JIRA, but never recorded in the delta or
+    // The story was created against JIRA, but never recorded in the delta or
     // the backref, since the write that would have made it idempotent failed.
     expect(seam.created).toEqual([{ project: "DS", summary: "auth" }]);
     expect(delta.created).toEqual([]);
     // The failure is distinguished from the generic no-op: it names the
-    // duplicate-epic risk so an operator can add the backref by hand.
-    expect(logs.join("\n")).toMatch(/duplicate epic/i);
+    // duplicate-story risk so an operator can add the backref by hand.
+    expect(logs.join("\n")).toMatch(/duplicate story/i);
   });
 });
 
 describe("mirrorReconciler — re-entrancy", () => {
-  it("no-ops a reconcile that arrives while one is already in flight, so it can't create a duplicate epic", async () => {
+  it("no-ops a reconcile that arrives while one is already in flight, so it can't create a duplicate story", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     // Block resolveProject until the second call is already in-flight, so the
-    // first pass's createEpic hasn't run (and the backref hasn't been written)
+    // first pass's createStory hasn't run (and the backref hasn't been written)
     // by the time the second reconcile() call is made — the race the guard closes.
     let releaseFirstCall: () => void = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -332,7 +332,7 @@ describe("mirrorReconciler — re-entrancy", () => {
       await gate;
       return originalResolveProject(board);
     };
-    const { reconciler, set, epicKeyOf } = harness(seam);
+    const { reconciler, set, storyKeyOf } = harness(seam);
     set("auth", { optIn: optIn({ board: "34" }) });
 
     const first = reconciler.reconcile(board(prd("auth", "backlog", "Auth")));
@@ -340,16 +340,16 @@ describe("mirrorReconciler — re-entrancy", () => {
     releaseFirstCall();
     const [firstDelta, secondDelta] = await Promise.all([first, second]);
 
-    // Only the in-flight pass creates the epic; the overlapping call is a no-op.
+    // Only the in-flight pass creates the story; the overlapping call is a no-op.
     expect(seam.created).toEqual([{ project: "DS", summary: "Auth" }]);
     expect(firstDelta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
     expect(secondDelta).toEqual({ created: [], transitioned: [], childrenCreated: [], childrenTransitioned: [], placed: [] });
-    expect(epicKeyOf("auth")).toBe("DS-1");
+    expect(storyKeyOf("auth")).toBe("DS-1");
   });
 });
 
-describe("mirrorReconciler — epic status self-heal", () => {
-  it("transitions a freshly-created epic to match a PRD already in progress", async () => {
+describe("mirrorReconciler — story status self-heal", () => {
+  it("transitions a freshly-created story to match a PRD already in progress", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.legalStatuses.add("In Progress");
@@ -363,7 +363,7 @@ describe("mirrorReconciler — epic status self-heal", () => {
     expect(seam.statusByKey.get("DS-1")).toBe("In Progress");
   });
 
-  it("leaves a backlog PRD's fresh epic in To Do (no needless transition)", async () => {
+  it("leaves a backlog PRD's fresh story in To Do (no needless transition)", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.legalStatuses.add("In Progress"); // available, but must not be used
@@ -376,12 +376,12 @@ describe("mirrorReconciler — epic status self-heal", () => {
     expect(seam.calls).not.toContain("transition:DS-1->To Do");
   });
 
-  it("self-heals a linked epic toward the board when a human moved it", async () => {
+  it("self-heals a linked story toward the board when a human moved it", async () => {
     const seam = new FakeJiraSeam();
     seam.statusByKey.set("DS-9", "To Do"); // someone dragged it back
     seam.legalStatuses.add("Done");
     const { reconciler, set } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
 
     const delta = await reconciler.reconcile(board(prd("auth", "done")));
 
@@ -389,12 +389,12 @@ describe("mirrorReconciler — epic status self-heal", () => {
     expect(seam.statusByKey.get("DS-9")).toBe("Done");
   });
 
-  it("does not transition an epic already at its target status", async () => {
+  it("does not transition a story already at its target status", async () => {
     const seam = new FakeJiraSeam();
     seam.statusByKey.set("DS-9", "In Progress");
     seam.legalStatuses.add("In Progress");
     const { reconciler, set } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
 
     const delta = await reconciler.reconcile(board(prd("auth", "in-progress")));
 
@@ -407,7 +407,7 @@ describe("mirrorReconciler — epic status self-heal", () => {
     seam.statusByKey.set("DS-9", "To Do");
     // "Done" is NOT a legal transition here ⇒ seam.transition throws.
     const { reconciler, set, logs } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
 
     const delta = await reconciler.reconcile(board(prd("auth", "done")));
 
@@ -419,10 +419,10 @@ describe("mirrorReconciler — epic status self-heal", () => {
 
   it("still reconciles a PRD's children when the open-time cache seed fails", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "To Do"); // linked epic
+    seam.statusByKey.set("DS-9", "To Do"); // linked story
     seam.failSearch = true; // the batched cache seed throws
     const { reconciler, set, setIssue, logs } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "backlog" });
 
     const delta = await reconciler.reconcile(
@@ -431,20 +431,20 @@ describe("mirrorReconciler — epic status self-heal", () => {
 
     // A seed failure is its own logged no-op that leaves the cache empty — it must
     // not take down the pass or drop the child that reconciles just below it. The
-    // child is still created under the linked epic (create is cache-independent).
+    // child is still created under the linked story (create is cache-independent).
     expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
     expect(logs.join("\n")).toMatch(/cache seed failed/i);
   });
 
   it("retries the open-time cache seed on the next scan after a transient failure, rather than stranding the cache empty forever", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "In Progress"); // linked epic, already at target
+    seam.statusByKey.set("DS-9", "In Progress"); // linked story, already at target
     seam.failSearch = true; // scan 1: the batched cache seed throws
     const { reconciler, set } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     const b = board(prd("auth", "in-progress", "Auth"));
 
-    // Scan 1: the seed fails, so the epic (a cache-miss) is diff-gate-bypassed and
+    // Scan 1: the seed fails, so the story (a cache-miss) is diff-gate-bypassed and
     // a real transition is attempted — same as the seed never having run.
     const first = await reconciler.reconcile(b);
     expect(seam.calls.filter((c) => c.startsWith("search:"))).toEqual([
@@ -487,7 +487,7 @@ describe("mirrorReconciler — epic status self-heal", () => {
     const callsAfterFirst = seam.calls.length;
 
     // The write-back fires a re-scan → a second reconcile. With the backref now
-    // present and the epic already at target, it makes NO new JIRA write.
+    // present and the story already at target, it makes NO new JIRA write.
     const second = await reconciler.reconcile(b);
 
     expect(second.created).toEqual([]);
@@ -499,7 +499,7 @@ describe("mirrorReconciler — epic status self-heal", () => {
 });
 
 describe("mirrorReconciler — child create", () => {
-  it("creates a child under the epic for each Issue (incl. backlog), writing the key back and using the body prose as the description", async () => {
+  it("creates a child under the story for each Issue (incl. backlog), writing the key back and using the body prose as the description", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     const { reconciler, set, setIssue, childKeyOf } = harness(seam);
@@ -522,7 +522,7 @@ describe("mirrorReconciler — child create", () => {
       ),
     );
 
-    // A child per Issue — including a backlog one — parented to the fresh epic.
+    // A child per Issue — including a backlog one — parented to the fresh story.
     // Summary is the Issue title; description is the body prose (no frontmatter).
     expect(seam.childrenCreated).toEqual([
       {
@@ -564,7 +564,7 @@ describe("mirrorReconciler — child create", () => {
     ]);
   });
 
-  it("creates the epic before any child, parenting children to it (epic-before-child ordering)", async () => {
+  it("creates the story before any child, parenting children to it (story-before-child ordering)", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     const { reconciler, set, setIssue } = harness(seam);
@@ -575,18 +575,18 @@ describe("mirrorReconciler — child create", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    const epicAt = seam.calls.indexOf("createEpic:DS");
+    const storyAt = seam.calls.indexOf("createStory:DS");
     const childAt = seam.calls.indexOf("createChild:DS-1");
-    expect(epicAt).toBeGreaterThanOrEqual(0);
-    expect(childAt).toBeGreaterThan(epicAt);
-    // The child is parented to the epic that was created first.
+    expect(storyAt).toBeGreaterThanOrEqual(0);
+    expect(childAt).toBeGreaterThan(storyAt);
+    // The child is parented to the story that was created first.
     expect(seam.childrenCreated[0]!.parent).toBe("DS-1");
   });
 
-  it("never creates a child before its epic exists — a failed epic create suppresses all its children", async () => {
+  it("never creates a child before its story exists — a failed story create suppresses all its children", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
-    seam.failCreate = true; // the epic create throws
+    seam.failCreate = true; // the story create throws
     const { reconciler, set, setIssue } = harness(seam);
     set("auth", { optIn: optIn({ board: "34" }) });
     setIssue("auth", "001.md", { status: "backlog" });
@@ -595,7 +595,7 @@ describe("mirrorReconciler — child create", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // No epic ⇒ no child could be parented: not a single createChild call.
+    // No story ⇒ no child could be parented: not a single createChild call.
     expect(seam.childrenCreated).toEqual([]);
     expect(delta.childrenCreated).toEqual([]);
     expect(seam.calls.filter((c) => c.startsWith("createChild"))).toEqual([]);
@@ -619,10 +619,10 @@ describe("mirrorReconciler — child create", () => {
 
   it("never re-creates a child when the jira_key backref is already present", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "To Do"); // the linked epic
+    seam.statusByKey.set("DS-9", "To Do"); // the linked story
     seam.statusByKey.set("DS-50", "To Do"); // the linked child
     const { reconciler, set, setIssue, childKeyOf } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "backlog", childKey: "DS-50" });
 
     const delta = await reconciler.reconcile(
@@ -639,7 +639,7 @@ describe("mirrorReconciler — child create", () => {
     seam.statusByKey.set("DS-9", "To Do");
     seam.statusByKey.set("DS-50", "To Do");
     const { reconciler, set, setIssue, childKeyOf } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     // The file was renumbered 001-login.md → 005-login.md; its jira_key travels
     // with the file content and is matched on the backref's presence, not the path.
     setIssue("auth", "005-login.md", { status: "backlog", childKey: "DS-50" });
@@ -662,7 +662,7 @@ describe("mirrorReconciler — child create", () => {
       seam,
       readMirror: (prdDir) =>
         prdDir === join(ROOT, "auth") ? { optIn: optIn({ board: "34" }) } : {},
-      writeEpic: () => {}, // the epic backref writes fine
+      writeStory: () => {}, // the story backref writes fine
       readIssueMirror: () => ({ status: "backlog" }),
       writeIssueKey: () => {
         throw new Error("disk full");
@@ -677,16 +677,16 @@ describe("mirrorReconciler — child create", () => {
     // The child was created against JIRA but never recorded (no idempotent backref).
     expect(seam.childrenCreated).toHaveLength(1);
     expect(delta.childrenCreated).toEqual([]);
-    expect(logs.join("\n")).toMatch(/duplicate child/i);
+    expect(logs.join("\n")).toMatch(/duplicate sub-task/i);
   });
 
   it("keeps a freshly-created child's create in the delta even when its self-heal transition is unavailable", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "In Progress"); // epic already at target
+    seam.statusByKey.set("DS-9", "In Progress"); // story already at target
     seam.projectByBoard.set("34", "DS");
     // "In Review" is NOT a legal transition ⇒ the child's self-heal throws.
     const { reconciler, set, setIssue, childKeyOf, logs } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "in-review" }); // fresh child, review-ish
 
     const delta = await reconciler.reconcile(
@@ -707,7 +707,7 @@ describe("mirrorReconciler — child create", () => {
 });
 
 describe("mirrorReconciler — sprint/backlog placement", () => {
-  it("places a newly-created child into the board's active sprint when target is sprint", async () => {
+  it("places a newly-created Story into the board's active sprint when target is sprint", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.activeSprintByBoard.set("34", "S1");
@@ -719,16 +719,15 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The child lands in the board's live active sprint — recorded in the delta
-    // and driven through the seam.
-    expect(delta.placed).toEqual([
-      { issue: "001.md", key: "DS-101", sprint: "S1" },
-    ]);
-    expect(seam.sprintByKey.get("DS-101")).toBe("S1");
-    expect(seam.calls).toContain("assignToSprint:S1->DS-101");
+    // The Story — the feature card — lands in the board's live active sprint,
+    // recorded in the delta and driven through the seam. Its Sub-tasks follow it
+    // by JIRA's own rules (ADR 0032), so only the Story (DS-1) is ever placed.
+    expect(delta.placed).toEqual([{ prd: "auth", key: "DS-1", sprint: "S1" }]);
+    expect(seam.sprintByKey.get("DS-1")).toBe("S1");
+    expect(seam.calls).toContain("assignToSprint:S1->DS-1");
   });
 
-  it("leaves a target: backlog child in the backlog — no sprint resolve, no assign", async () => {
+  it("leaves a target: backlog Story in the backlog — no sprint resolve, no assign", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.activeSprintByBoard.set("34", "S1"); // available, but must not be used
@@ -740,9 +739,9 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The child is created, but never placed: backlog needs no action, so the
+    // The Story is created, but never placed: backlog needs no action, so the
     // sprint is never even resolved (user story 19: no needless JIRA calls).
-    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    expect(delta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
     expect(delta.placed).toEqual([]);
     expect(seam.calls.some((c) => c.startsWith("resolveActiveSprint"))).toBe(false);
     expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
@@ -765,26 +764,26 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
     expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
   });
 
-  it("places only at create — a later reconcile never re-places a linked child", async () => {
+  it("places only at create — a later reconcile never re-places a linked Story", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "To Do"); // linked epic
+    seam.statusByKey.set("DS-9", "To Do"); // linked story
     seam.statusByKey.set("DS-50", "To Do"); // linked child, already created earlier
     seam.activeSprintByBoard.set("34", "S1");
     const { reconciler, set, setIssue } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34", target: "sprint" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34", target: "sprint" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "backlog", childKey: "DS-50" });
 
     const delta = await reconciler.reconcile(
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The child already exists (backref present), so placement — set once at
+    // The Story already exists (backref present), so placement — set once at
     // create — is never re-evaluated: the team owns sprint moves thereafter.
     expect(delta.placed).toEqual([]);
     expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
   });
 
-  it("never sprints the epic — only children are placed", async () => {
+  it("places only the Story — a Sub-task is never sprinted independently", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.activeSprintByBoard.set("34", "S1");
@@ -796,14 +795,14 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The only assignment is the child's (DS-101); the epic (DS-1) is never
-    // placed into a sprint.
+    // The only assignment is the Story's (DS-1); the Sub-task (DS-101) follows its
+    // parent by JIRA's own rules and is never placed directly (ADR 0032).
     const assigns = seam.calls.filter((c) => c.startsWith("assignToSprint"));
-    expect(assigns).toEqual(["assignToSprint:S1->DS-101"]);
-    expect(seam.sprintByKey.has("DS-1")).toBe(false);
+    expect(assigns).toEqual(["assignToSprint:S1->DS-1"]);
+    expect(seam.sprintByKey.has("DS-101")).toBe(false);
   });
 
-  it("resolves the active sprint once per PRD, however many children it places", async () => {
+  it("resolves the active sprint once per PRD, placing only the Story however many Sub-tasks it has", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.activeSprintByBoard.set("34", "S1");
@@ -821,12 +820,9 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       ),
     );
 
-    // Both children land in the sprint, but the board's active sprint is read
-    // just once for the whole PRD (memoized) — not once per child.
-    expect(delta.placed).toEqual([
-      { issue: "001.md", key: "DS-101", sprint: "S1" },
-      { issue: "002.md", key: "DS-102", sprint: "S1" },
-    ]);
+    // Only the Story is placed (its two Sub-tasks follow it), and the board's active
+    // sprint is read just once for the PRD — never once per Sub-task.
+    expect(delta.placed).toEqual([{ prd: "auth", key: "DS-1", sprint: "S1" }]);
     expect(seam.calls.filter((c) => c === "resolveActiveSprint:34")).toHaveLength(1);
   });
 
@@ -848,13 +844,13 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       ),
     );
 
-    // Both PRDs' children land in the sprint, but the shared board's active
+    // Both PRDs' Stories land in the sprint, but the shared board's active
     // sprint is read just once for the whole pass — not once per PRD.
     expect(delta.placed.map((p) => p.sprint)).toEqual(["S1", "S1"]);
     expect(seam.calls.filter((c) => c === "resolveActiveSprint:34")).toHaveLength(1);
   });
 
-  it("degrades to a logged no-op when the board has no active sprint — child stays in backlog", async () => {
+  it("degrades to a logged no-op when the board has no active sprint — Story stays in backlog", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     // No active sprint seeded for board 34 ⇒ resolveActiveSprint returns undefined.
@@ -866,19 +862,19 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The child is still created; it simply isn't placed — a logged no-op.
-    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
+    // The Story is still created; it simply isn't placed — a logged no-op.
+    expect(delta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
     expect(delta.placed).toEqual([]);
     expect(seam.calls.some((c) => c.startsWith("assignToSprint"))).toBe(false);
     expect(logs.join("\n")).toMatch(/no active sprint/i);
   });
 
-  it("keeps a child's create when its sprint assignment fails — a logged no-op, never a throw", async () => {
+  it("keeps the Story's create when its sprint assignment fails — a logged no-op, never a throw", async () => {
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
     seam.activeSprintByBoard.set("34", "S1");
     seam.failAssignToSprint = true; // the assign throws (e.g. the acli sprint gap)
-    const { reconciler, set, setIssue, childKeyOf, logs } = harness(seam);
+    const { reconciler, set, setIssue, storyKeyOf, logs } = harness(seam);
     set("auth", { optIn: optIn({ board: "34", target: "sprint" }) });
     setIssue("auth", "001.md", { status: "backlog" });
 
@@ -886,12 +882,12 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
       board(prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")])),
     );
 
-    // The child genuinely exists and its backref is written; a failed placement
+    // The Story genuinely exists and its backref is written; a failed placement
     // must not erase that or crash the pass — it's just a logged no-op.
-    expect(delta.childrenCreated).toEqual([{ issue: "001.md", key: "DS-101" }]);
-    expect(childKeyOf("auth", "001.md")).toBe("DS-101");
+    expect(delta.created).toEqual([{ prd: "auth", key: "DS-1" }]);
+    expect(storyKeyOf("auth")).toBe("DS-1");
     expect(delta.placed).toEqual([]);
-    expect(seam.sprintByKey.has("DS-101")).toBe(false);
+    expect(seam.sprintByKey.has("DS-1")).toBe(false);
     expect(logs.join("\n")).toMatch(/could not be placed/i);
   });
 });
@@ -899,11 +895,11 @@ describe("mirrorReconciler — sprint/backlog placement", () => {
 describe("mirrorReconciler — child status self-heal", () => {
   it("self-heals a child toward the bucket its authored status maps to", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "In Progress"); // epic already at target
+    seam.statusByKey.set("DS-9", "In Progress"); // story already at target
     seam.statusByKey.set("DS-50", "To Do"); // child needs to move
     seam.legalStatuses.add("In Review");
     const { reconciler, set, setIssue } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "in-review", childKey: "DS-50" });
 
     const delta = await reconciler.reconcile(
@@ -912,7 +908,7 @@ describe("mirrorReconciler — child status self-heal", () => {
 
     expect(delta.childrenTransitioned).toEqual([{ key: "DS-50", to: "In Review" }]);
     expect(seam.statusByKey.get("DS-50")).toBe("In Review");
-    // The epic was already at its target, so only the child moved.
+    // The story was already at its target, so only the child moved.
     expect(delta.transitioned).toEqual([]);
   });
 
@@ -922,7 +918,7 @@ describe("mirrorReconciler — child status self-heal", () => {
     seam.statusByKey.set("DS-50", "In Progress");
     seam.legalStatuses.add("In Progress");
     const { reconciler, set, setIssue } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "in-progress", childKey: "DS-50" });
 
     const delta = await reconciler.reconcile(
@@ -939,7 +935,7 @@ describe("mirrorReconciler — child status self-heal", () => {
     seam.statusByKey.set("DS-50", "To Do");
     // "In Review" is NOT legal here ⇒ seam.transition throws.
     const { reconciler, set, setIssue, logs } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     // human-review is the low-noise fold: it must appear simply as In Review.
     setIssue("auth", "001.md", { status: "human-review", childKey: "DS-50" });
 
@@ -977,7 +973,7 @@ describe("mirrorReconciler — child status self-heal", () => {
 
   it("never crosses an Overseer overlay to JIRA — an out-of-vocabulary status is a logged no-op, never a transition", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "In Progress"); // linked epic
+    seam.statusByKey.set("DS-9", "In Progress"); // linked story
     seam.statusByKey.set("DS-50", "In Progress"); // linked child
     // Every workflow status is available, so a transition would succeed *if* one
     // were ever attempted — proving the no-op is the mapping's choice, not a failure.
@@ -985,7 +981,7 @@ describe("mirrorReconciler — child status self-heal", () => {
       seam.legalStatuses.add(s);
     }
     const { reconciler, set, setIssue, logs } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     // An operational signal the board might carry (an orphan/bad-status overlay is
     // never one of the ten authored statuses) maps to no JIRA bucket.
     setIssue("auth", "001.md", { status: "orphaned", childKey: "DS-50" });
@@ -1012,7 +1008,7 @@ describe("mirrorReconciler — child status self-heal", () => {
       prd("auth", "backlog", "Auth", [issue("001.md", "backlog", "One")]),
     );
 
-    // First pass creates the epic + child (writing both backrefs).
+    // First pass creates the story + child (writing both backrefs).
     await reconciler.reconcile(b);
     const callsAfterFirst = seam.calls.length;
 
@@ -1032,12 +1028,12 @@ describe("mirrorReconciler — child status self-heal", () => {
 describe("mirrorReconciler — diff-gated sync (cache + open-time seed)", () => {
   it("makes zero writes when no bucket crosses, and after the open-time seed zero reads", async () => {
     const seam = new FakeJiraSeam();
-    // A fully-linked PRD whose epic and child already sit at their target status
+    // A fully-linked PRD whose story and child already sit at their target status
     // in JIRA — nothing on the board has crossed a bucket.
-    seam.statusByKey.set("DS-9", "In Progress"); // epic at target
+    seam.statusByKey.set("DS-9", "In Progress"); // story at target
     seam.statusByKey.set("DS-50", "In Progress"); // child at target
     const { reconciler, set, setIssue } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     setIssue("auth", "001.md", { status: "in-progress", childKey: "DS-50" });
     const b = board(
       prd("auth", "in-progress", "Auth", [issue("001.md", "in-progress")]),
@@ -1070,11 +1066,11 @@ describe("mirrorReconciler — diff-gated sync (cache + open-time seed)", () => 
 
   it("transitions an Issue's child on the scan after the board advances it, then diff-gates the next scan to nothing", async () => {
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "In Progress"); // epic already at target
+    seam.statusByKey.set("DS-9", "In Progress"); // story already at target
     seam.statusByKey.set("DS-50", "In Progress"); // child starts in progress
     seam.legalStatuses.add("In Review");
     const { reconciler, set, setIssue } = harness(seam);
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
 
     // Scan 1: the Issue is still in-progress on the board — nothing crosses.
     setIssue("auth", "001.md", { status: "in-progress", childKey: "DS-50" });
@@ -1131,17 +1127,17 @@ async function flush(): Promise<void> {
 describe("mirrorReconciler — paced write queue", () => {
   it("drains a populated PRD's backfill creates a bounded burst per tick, not all at once", async () => {
     // Backfill scenario (acceptance): a jira block added to an in-flight PRD whose
-    // epic already exists — so this pass creates a child per Issue at once. Six
+    // story already exists — so this pass creates a child per Issue at once. Six
     // Issues, a burst of two, means three drain ticks rather than one six-wide spike.
     const clock = manualClock();
     const seam = new FakeJiraSeam();
-    seam.statusByKey.set("DS-9", "To Do"); // the already-linked epic
+    seam.statusByKey.set("DS-9", "To Do"); // the already-linked story
     const { reconciler, set, setIssue, childKeyOf } = harness(
       seam,
       undefined,
       createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
     );
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     const issues = Array.from({ length: 6 }, (_v, i) => `00${i}.md`);
     for (const id of issues) setIssue("auth", id, { status: "backlog" });
 
@@ -1175,7 +1171,7 @@ describe("mirrorReconciler — paced write queue", () => {
     const clock = manualClock();
     const seam = new FakeJiraSeam();
     seam.legalStatuses.add("In Progress");
-    seam.statusByKey.set("DS-9", "In Progress"); // epic already at its target
+    seam.statusByKey.set("DS-9", "In Progress"); // story already at its target
     const ids = Array.from({ length: 6 }, (_v, i) => `10${i}.md`);
     const childKeys = ids.map((_id, i) => `DS-${50 + i}`);
     for (const key of childKeys) seam.statusByKey.set(key, "To Do");
@@ -1184,7 +1180,7 @@ describe("mirrorReconciler — paced write queue", () => {
       undefined,
       createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
     );
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     ids.forEach((id, i) =>
       setIssue("auth", id, { status: "in-progress", childKey: childKeys[i] }),
     );
@@ -1220,9 +1216,9 @@ describe("mirrorReconciler — paced write queue", () => {
     expect(delta.childrenTransitioned.map((t) => t.key)).toEqual(childKeys);
   });
 
-  it("keeps epic-before-child ordering when the creates flow through the queue", async () => {
-    // Even paced, a child create can never precede its epic's: the reconciler awaits
-    // the epic create (its own queued write) before submitting any child create.
+  it("keeps story-before-child ordering when the creates flow through the queue", async () => {
+    // Even paced, a child create can never precede its story's: the reconciler awaits
+    // the story create (its own queued write) before submitting any child create.
     const clock = manualClock();
     const seam = new FakeJiraSeam();
     seam.projectByBoard.set("34", "DS");
@@ -1238,18 +1234,18 @@ describe("mirrorReconciler — paced write queue", () => {
     const pass = reconciler.reconcile(
       board(prd("auth", "backlog", "Auth", ids.map((id) => issue(id)))),
     );
-    // Drain enough ticks for the epic (tick 1) then all children (following ticks).
+    // Drain enough ticks for the story (tick 1) then all children (following ticks).
     for (let i = 0; i < 4; i += 1) {
       await flush();
       clock.tick();
     }
     await pass;
 
-    const epicAt = seam.calls.indexOf("createEpic:DS");
+    const storyAt = seam.calls.indexOf("createStory:DS");
     const firstChildAt = seam.calls.findIndex((c) => c.startsWith("createChild:"));
-    expect(epicAt).toBeGreaterThanOrEqual(0);
-    expect(firstChildAt).toBeGreaterThan(epicAt);
-    // Every child was parented to the one epic that was created first.
+    expect(storyAt).toBeGreaterThanOrEqual(0);
+    expect(firstChildAt).toBeGreaterThan(storyAt);
+    // Every child was parented to the one story that was created first.
     for (const child of seam.childrenCreated) expect(child.parent).toBe("DS-1");
   });
 
@@ -1265,7 +1261,7 @@ describe("mirrorReconciler — paced write queue", () => {
       undefined,
       createPacedWriteQueue({ burst: 2, intervalMs: 1000, sleep: clock.sleep }),
     );
-    set("auth", { optIn: optIn({ board: "34" }), epicKey: "DS-9" });
+    set("auth", { optIn: optIn({ board: "34" }), storyKey: "DS-9" });
     const ids = ["001.md", "002.md", "003.md", "004.md"];
     for (const id of ids) setIssue("auth", id, { status: "backlog" });
 

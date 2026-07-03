@@ -49,21 +49,26 @@ export const FIELD = {
    */
   jira: "jira",
   /**
-   * The mirror-written epic backref on `prd.md` (ADR 0029): the JIRA key of the
-   * epic this PRD is mirrored to. Its presence makes create idempotent —
-   * update-or-noop, never a second epic. Written via {@link writeJiraEpic}, read
-   * back with {@link readPresentString}. The one bookkeeping key the mirror writes
-   * to `prd.md`; it touches no Issue content or status.
+   * The mirror-written Story backref on `prd.md` (ADR 0029, ADR 0032): the JIRA
+   * key of the **Story** (the feature card) this PRD is mirrored to. Its presence
+   * makes create idempotent — update-or-noop, never a second Story. Written via
+   * {@link writeJiraStory}, read back with {@link readPresentString}. The one
+   * bookkeeping key the mirror writes to `prd.md`; it touches no Issue content or
+   * status. Renamed from `jira_epic` when the shape moved from Epic to Story
+   * (ADR 0032) — the field now names a Story, so the old name would lie; a
+   * pre-existing `jira_epic` under the old epic shape is simply left unread.
    */
-  jiraEpic: "jira_epic",
+  jiraStory: "jira_story",
   /**
-   * The mirror-written child backref on an Issue file (ADR 0029): the JIRA key of
-   * the child issue this Issue is mirrored to, nested under its PRD's
-   * {@link jiraEpic}. Its presence makes child create idempotent — matched on the
-   * backref, not the file path, so renaming/renumbering the Issue file neither
-   * orphans nor duplicates the ticket. Written via {@link writeJiraKey}, read back
-   * with {@link readPresentString}. Like {@link jiraEpic} it is the mirror's sole,
-   * write-once reach into the Issue file, touching no content or `status`.
+   * The mirror-written Sub-task backref on an Issue file (ADR 0029): the JIRA key
+   * of the **Sub-task** this Issue is mirrored to, nested under its PRD's
+   * {@link jiraStory}. Its presence makes Sub-task create idempotent — matched on
+   * the backref, not the file path, so renaming/renumbering the Issue file neither
+   * orphans nor duplicates the ticket. Type-neutral (it names a key, not a type),
+   * so it is unchanged by the Epic→Story shape change (ADR 0032). Written via
+   * {@link writeJiraKey}, read back with {@link readPresentString}. Like
+   * {@link jiraStory} it is the mirror's sole, write-once reach into the Issue
+   * file, touching no content or `status`.
    */
   jiraKey: "jira_key",
 } as const;
@@ -293,28 +298,29 @@ function coerceBoardId(raw: unknown): string | undefined {
 }
 
 /**
- * Write the mirror-owned `jira_epic` backref onto `prd.md` in a single write,
- * recording the JIRA key of the epic the PRD is mirrored to (ADR 0029). Like
- * {@link writeHumanReview} it goes through the `gray-matter` write path — adding
- * (or overwriting) exactly this one bookkeeping key while round-tripping every
- * other frontmatter key (the authored `jira` opt-in block, `title`) and the
- * markdown body untouched. It touches no Issue content or `status`: this is the
- * mirror's sole, write-once-per-PRD reach into the canonical files (ADR 0028's
- * one exception). A present backref is what makes create idempotent, so writing
- * the same key twice is a harmless overwrite, never a second key.
+ * Write the mirror-owned `jira_story` backref onto `prd.md` in a single write,
+ * recording the JIRA key of the **Story** the PRD is mirrored to (ADR 0029, ADR
+ * 0032). Like {@link writeHumanReview} it goes through the `gray-matter` write
+ * path — adding (or overwriting) exactly this one bookkeeping key while
+ * round-tripping every other frontmatter key (the authored `jira` opt-in block,
+ * `title`) and the markdown body untouched. It touches no Issue content or
+ * `status`: this is the mirror's sole, write-once-per-PRD reach into the canonical
+ * files (ADR 0028's one exception). A present backref is what makes create
+ * idempotent, so writing the same key twice is a harmless overwrite, never a
+ * second key.
  */
-export function writeJiraEpic(path: string, epicKey: string): void {
+export function writeJiraStory(path: string, storyKey: string): void {
   const { data, content } = matter(readFileSync(path, "utf8"));
   writeFileSync(
     path,
-    matter.stringify(content, { ...data, [FIELD.jiraEpic]: epicKey }),
+    matter.stringify(content, { ...data, [FIELD.jiraStory]: storyKey }),
   );
 }
 
 /**
  * Write the mirror-owned `jira_key` backref onto an Issue file in a single write,
- * recording the JIRA key of the child issue this Issue is mirrored to (ADR 0029).
- * The Issue-file twin of {@link writeJiraEpic}: it goes through the `gray-matter`
+ * recording the JIRA key of the Sub-task this Issue is mirrored to (ADR 0029).
+ * The Issue-file twin of {@link writeJiraStory}: it goes through the `gray-matter`
  * write path, adding (or overwriting) exactly this one bookkeeping key while
  * round-tripping every other frontmatter key (`title`, `status`, `blocked_by`, …)
  * and the markdown body untouched. It writes no Issue content or `status` — the
