@@ -433,17 +433,27 @@ function tryParse(text: string): unknown {
  */
 export const realJiraSeam: JiraSeam = {
   async resolveProject(board: string): Promise<string> {
-    // Two reads: the board's project set (what it filters over) and its location
-    // (its home project). Resolution is the pure {@link resolveProjectKey} over
-    // both payloads — a single-project board resolves trivially, a multi-project
-    // filter board resolves to the location-matched project (never blindly the
-    // first-listed). The author-supplied `project` override is handled upstream in
-    // the reconciler (which skips this lookup entirely when it is set), so no
-    // override is threaded here.
-    const [boardGet, listProjects] = await Promise.all([
-      runAcli(["jira", "board", "get", "--id", board, "--json"]),
-      runAcli(["jira", "board", "list-projects", "--id", board, "--json"]),
+    // The board's project set (what it filters over) always needs reading. Its
+    // location (home project) only matters to disambiguate a *multi*-project
+    // filter board — a single-project board resolves trivially without it — so
+    // `board get` is fetched lazily, only when there's more than one listed
+    // project. This keeps the common single-project case's failure surface to
+    // just the one acli call it actually needs, rather than making it depend on
+    // a `board get` call it never consults. The author-supplied `project`
+    // override is handled upstream in the reconciler (which skips this lookup
+    // entirely when it is set), so no override is threaded here.
+    const listProjects = await runAcli([
+      "jira",
+      "board",
+      "list-projects",
+      "--id",
+      board,
+      "--json",
     ]);
+    const boardGet =
+      parseBoardProjects(listProjects).length > 1
+        ? await runAcli(["jira", "board", "get", "--id", board, "--json"])
+        : "{}";
     const resolution = resolveProjectKey({ boardGet, listProjects });
     if (resolution.kind !== "resolved") {
       throw new Error(
