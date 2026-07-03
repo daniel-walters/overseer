@@ -325,6 +325,15 @@ type ActiveModal =
        * verbatim, exactly as the detail modal renders its pre-rendered `lines`.
        */
       readonly lines: readonly string[];
+      /**
+       * The source PRD id and Issue id the modal was opened for, captured at open
+       * time. Not rendered — carried so a later in-place refresh (`r`, Issue 002)
+       * knows which recorded handle to re-resolve without re-deriving the selection
+       * (which a live re-scan could have moved out from under the open modal). The
+       * `o`-open path threads the same `(prdId, issueId)` it read the output for.
+       */
+      readonly prdId: string;
+      readonly issueId: string;
     };
 
 /**
@@ -809,55 +818,11 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
         selectedPrd &&
         selectedIssue?.liveness === "live"
       ) {
-        const output = agentOutputReader.readAgentOutput(selectedPrd.id, selectedIssue.id);
-        if (output) {
-          // The reader hands back the raw `claude logs` bytes verbatim; the readable
-          // screen is reconstructed by emulating them against a grid sized to the
-          // modal (ADR 0030). `@xterm/headless` flushes on a callback, so this is the
-          // one modal open that must await before it can populate state — hence the
-          // async `.then`. The board keeps rendering meanwhile; the modal appears
-          // once the (bounded, short) flush resolves. `columns`/`rows` are read here
-          // from the current window size, the same dimensions the render sizes the
-          // scroll window to, so the emulated grid and the windowed view agree.
-          //
-          // The flush is awaited, so the keypress and the resolution are not the
-          // same instant: the user may navigate away, press `o` again, or open a
-          // different modal in between. `requestId` + `agentOutputLiveRef` (kept
-          // fresh every render, unlike this closure) let the `.then` tell whether
-          // its request is still the relevant one before it ever touches state —
-          // an older, superseded, or now-irrelevant resolution is dropped instead
-          // of silently hijacking whatever is on screen by the time it lands.
-          const requestId = ++agentOutputRequestIdRef.current;
-          const requestedPrdId = selectedPrd.id;
-          const requestedIssueId = selectedIssue.id;
-          void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
-            (lines) => {
-              const live = agentOutputLiveRef.current;
-              const stillRelevant =
-                agentOutputRequestIdRef.current === requestId &&
-                live.prdId === requestedPrdId &&
-                live.issueId === requestedIssueId &&
-                !live.modalOpen;
-              if (!stillRelevant) return;
-              setDetailScroll(0); // always open at the top, never a stale position
-              setModal({ kind: "agent-output", output, lines: [...lines] });
-            },
-            () => {
-              // The emulator rejected unexpectedly (e.g. a malformed byte stream
-              // throwing inside the write). Degrade to the same legible-notice
-              // pattern as the "no recorded agent" race below rather than leaving
-              // `o` a silent, permanent no-op.
-              if (agentOutputRequestIdRef.current !== requestId) return;
-              setNotice(`${requestedIssueId} agent output could not be rendered — re-check the board.`);
-            },
-          );
-        } else {
-          // The card read `live` but readAgentOutput found no recorded handle (the
-          // verdict/sidecar race, or the Issue vanished). Without this notice the
-          // keypress would do nothing at all — indistinguishable from o being
-          // broken — so say plainly there's nothing to read, like Kill.
-          setNotice(`${selectedIssue.id} has no recorded agent to read — re-check the board.`);
-        }
+        // The whole read → emulate → guard → reset-scroll → set-modal sequence lives
+        // in `openAgentOutput`, keyed by the selected card's `(prdId, issueId)`, so
+        // the `o`-open and the upcoming `r` refresh (Issue 002) share one path and
+        // its async guard can never drift between them.
+        openAgentOutput(selectedPrd.id, selectedIssue.id);
       }
     },
     showHelp: () => setShowHelp(true),
@@ -978,6 +943,72 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     const bind = matchKeybind({ input, key }, nav.level, ctx);
     bind?.action(handlers, { input, key });
   });
+
+  /**
+   * The shared open/refresh path for the agent-output modal, keyed by
+   * `(prdId, issueId)` so it can be called from more than one place (the `o`-open
+   * today; the `r` refresh next, Issue 002). It resolves that handle's output via
+   * the reader, emulates the raw `claude logs` bytes to a coherent screen (ADR
+   * 0030), applies the `requestId` + `agentOutputLiveRef` async guard, resets the
+   * scroll to the top, and sets the modal — threading the same `(prdId, issueId)`
+   * onto the modal state so a later refresh knows which handle to re-resolve. Lifted
+   * out of the `viewAgentOutput` handler verbatim so the async-guard, scroll-reset,
+   * and modal-set logic live in one place and cannot drift.
+   *
+   * A `live` card with no recorded handle (the verdict/sidecar race, or the Issue
+   * vanished) yields no output, which — exactly as Kill does in the same race —
+   * flashes a legible status-line notice rather than doing nothing visible.
+   */
+  function openAgentOutput(prdId: string, issueId: string): void {
+    if (!agentOutputReader) return;
+    const output = agentOutputReader.readAgentOutput(prdId, issueId);
+    if (!output) {
+      // The card read `live` but readAgentOutput found no recorded handle (the
+      // verdict/sidecar race, or the Issue vanished). Without this notice the
+      // keypress would do nothing at all — indistinguishable from o being
+      // broken — so say plainly there's nothing to read, like Kill.
+      setNotice(`${issueId} has no recorded agent to read — re-check the board.`);
+      return;
+    }
+    // The reader hands back the raw `claude logs` bytes verbatim; the readable
+    // screen is reconstructed by emulating them against a grid sized to the
+    // modal (ADR 0030). `@xterm/headless` flushes on a callback, so this is the
+    // one modal open that must await before it can populate state — hence the
+    // async `.then`. The board keeps rendering meanwhile; the modal appears
+    // once the (bounded, short) flush resolves. `agentOutputCols`/`agentOutputRows`
+    // come from the current window size, the same dimensions the render sizes the
+    // scroll window to, so the emulated grid and the windowed view agree.
+    //
+    // The flush is awaited, so the keypress and the resolution are not the
+    // same instant: the user may navigate away, press `o` again, or open a
+    // different modal in between. `requestId` + `agentOutputLiveRef` (kept
+    // fresh every render, unlike this closure) let the `.then` tell whether
+    // its request is still the relevant one before it ever touches state —
+    // an older, superseded, or now-irrelevant resolution is dropped instead
+    // of silently hijacking whatever is on screen by the time it lands.
+    const requestId = ++agentOutputRequestIdRef.current;
+    void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
+      (lines) => {
+        const live = agentOutputLiveRef.current;
+        const stillRelevant =
+          agentOutputRequestIdRef.current === requestId &&
+          live.prdId === prdId &&
+          live.issueId === issueId &&
+          !live.modalOpen;
+        if (!stillRelevant) return;
+        setDetailScroll(0); // always open at the top, never a stale position
+        setModal({ kind: "agent-output", output, lines: [...lines], prdId, issueId });
+      },
+      () => {
+        // The emulator rejected unexpectedly (e.g. a malformed byte stream
+        // throwing inside the write). Degrade to the same legible-notice
+        // pattern as the "no recorded agent" race above rather than leaving
+        // `o` a silent, permanent no-op.
+        if (agentOutputRequestIdRef.current !== requestId) return;
+        setNotice(`${issueId} agent output could not be rendered — re-check the board.`);
+      },
+    );
+  }
 
   /** Act on the frozen modal capture: dispatch a frontier, review or audit an Issue. */
   function confirmModal(): void {
