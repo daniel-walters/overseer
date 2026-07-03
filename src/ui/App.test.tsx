@@ -1975,6 +1975,65 @@ describe("App agent output (o on a live card)", () => {
     expect(frame).toContain("second snapshot"); // the legitimate refresh still applied
     expect(frame).not.toContain("first snapshot");
   });
+
+  it("closes the modal and surfaces the notice when a refresh finds no recorded handle", async () => {
+    // The agent-output modal takes over the whole screen and renders ahead of the
+    // notice line, so leaving it open here would bury the "no recorded agent"
+    // notice under the untouched stale snapshot — indistinguishable from r doing
+    // nothing at all. Closing surfaces it, exactly as the `o`-open version of this
+    // same race already does (there, no modal is open yet to bury it under).
+    let handleGone = false;
+    const reader = {
+      readAgentOutput: vi.fn<
+        (prdId: string, issueId: string) => AgentOutput | undefined
+      >(() => (handleGone ? undefined : { title: "OAuth", output: "compiling…\n" })),
+    };
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("to close"); // modal open
+
+    handleGone = true; // the sidecar entry vanished between reads
+    stdin.write("r");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("to close"); // the modal closed, not left stale
+    expect(frame).toContain("no recorded agent"); // the notice is now visible
+  });
+
+  it("replaces the screen with a retry placeholder when a refresh's emulator rejects", async () => {
+    // ADR 0031: a failed read (timeout / overflow / emulator reject) replaces the
+    // screen with a legible "press r to retry" placeholder rather than leaving the
+    // prior, now-stale snapshot on screen with only a fleeting status-line notice
+    // that the early-return render path for this modal would never even show.
+    const reader = spyOutputReader({ title: "OAuth", output: "compiling…\n" });
+    const fakeRender = vi.fn<
+      (bytes: string, cols: number, rows: number) => Promise<readonly string[]>
+    >()
+      .mockResolvedValueOnce(["compiling…"]) // the initial `o`-open resolves fine
+      .mockRejectedValueOnce(new Error("emulator exploded")); // the refresh's flush rejects
+    const { stdin, lastFrame } = render(
+      <App board={orphanBoard} agentOutputReader={reader} renderTerminal={fakeRender} />,
+    );
+
+    await selectLiveCard(stdin);
+    stdin.write("o");
+    await tick();
+    expect(stripAnsi(lastFrame() ?? "")).toContain("compiling…");
+
+    stdin.write("r");
+    await tick();
+
+    const frame = stripAnsi(lastFrame() ?? "");
+    expect(frame).not.toContain("compiling…"); // the stale snapshot is gone
+    expect(frame).toContain("press r to retry"); // the retry placeholder replaced it
+    expect(frame).toContain("to close"); // still the same modal, not closed
+  });
 });
 
 describe("App go to PR (g on a done PRD)", () => {
