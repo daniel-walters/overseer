@@ -33,9 +33,13 @@ const execFileAsync = promisify(execFile);
 export interface JiraSeam {
   /**
    * Resolve the destination project *key* from a board id — the board→project
-   * location lookup (ADR 0028), so a PRD need only name its `board` in the common
-   * case. Resolves to the board's first associated project's key. Rejects if the
-   * board has no project or acli fails.
+   * **home/location** lookup (ADR 0028, ADR 0032), so a PRD need only name its
+   * `board` in the common case. A single-project board resolves to its one project;
+   * a multi-project filter board resolves to the project named by the board's
+   * *location*, cross-referenced against the board's project list for a validated
+   * key (never blindly the first-listed project — see {@link resolveProjectKey}).
+   * Rejects when the project can't be resolved (an ambiguous board with no override,
+   * or an acli failure), which the reconciler absorbs as a logged no-op.
    */
   resolveProject(board: string): Promise<string>;
   /**
@@ -152,19 +156,157 @@ const ACLI_TIMEOUT_MS = 15000;
 const ACLI_MAX_BUFFER = 8 * 1024 * 1024;
 
 /**
- * The `projects` array key in `acli jira board list-projects --json` output.
- * Parse the first project's `key`, or `undefined` when the board lists none or
- * the output is unparseable/shapeless. Total over bad input so a `resolveProject`
- * caller degrades honestly rather than crashing on an acli hiccup.
+ * The outcome of resolving a board to its destination project (ADR 0028, ADR 0032):
+ * either a validated project `key`, or an `ambiguous` verdict carrying a
+ * human-readable `reason` for the mirror log. The reconciler treats `ambiguous`
+ * exactly as it treats any other resolution failure — a logged no-op — so the
+ * mirror's low-noise failure behavior is unchanged.
  */
-export function parseBoardProject(json: string): string | undefined {
+export type ProjectResolution =
+  | { readonly kind: "resolved"; readonly key: string }
+  | { readonly kind: "ambiguous"; readonly reason: string };
+
+/**
+ * Resolve a board's destination project *key* from the two acli JSON payloads —
+ * `acli jira board list-projects` (the authoritative `{key, name}` set the board
+ * filters over) and `acli jira board get` (the board's `location`, its home
+ * project) — plus an optional author-supplied `project` override. A **pure**
+ * function over those strings with no I/O, so the board→project derivation that
+ * once mis-targeted a multi-project board is unit-testable in isolation (ADR 0032).
+ *
+ * The rules, in precedence order:
+ * - An `override` present (non-blank) → that project, always winning. It is the
+ *   deliberate fallback for a board whose home project genuinely can't be resolved
+ *   (user story 8), so it never even consults the payloads.
+ * - Exactly one project listed → that project (the common single-project board,
+ *   zero-config — user story 7), regardless of location.
+ * - Multiple listed → the entry whose key or name matches the board's `location`,
+ *   cross-referenced against the list for a *validated* key (never blindly the
+ *   first-listed project — the bug that sent board 681's PRD to the co-listed
+ *   `CABB` bug project instead of `ESD`).
+ * - Otherwise (no projects, or multiple with no location match and no override) →
+ *   `ambiguous`, which the reconciler logs as a no-op.
+ */
+export function resolveProjectKey(input: {
+  readonly boardGet: string;
+  readonly listProjects: string;
+  readonly override?: string;
+}): ProjectResolution {
+  // An override always wins — before the payloads are even consulted — so it is a
+  // robust fallback for a board whose home project can't be resolved (user story 8).
+  const override = input.override?.trim();
+  if (override !== undefined && override !== "") {
+    return { kind: "resolved", key: override };
+  }
+  const projects = parseBoardProjects(input.listProjects);
+  const [sole] = projects;
+  if (projects.length === 1 && sole !== undefined) {
+    return { kind: "resolved", key: sole.key };
+  }
+  if (projects.length === 0) {
+    return { kind: "ambiguous", reason: "board lists no projects" };
+  }
+  // Multiple projects (a filter board): pick the one the board's location names,
+  // cross-referenced against the list for a validated key — never the first listed.
+  const location = parseBoardLocation(input.boardGet);
+  const matched = matchLocation(projects, location);
+  const [soleMatch] = matched;
+  if (matched.length === 1 && soleMatch !== undefined) {
+    return { kind: "resolved", key: soleMatch.key };
+  }
+  const listed = projects.map((p) => p.key).join(", ");
+  return {
+    kind: "ambiguous",
+    reason:
+      location === undefined
+        ? `board lists multiple projects (${listed}) and has no location to disambiguate — supply a project override`
+        : `board location "${location}" matched ${matched.length} of the listed projects (${listed}) — supply a project override`,
+  };
+}
+
+/**
+ * The listed projects the board's `location` names — the location cross-referenced
+ * against the authoritative project set for a *validated* key. JIRA renders a
+ * project-location board as `"<Project Name> (<KEY>)"`, so the trailing
+ * parenthetical key is the strongest, most precise signal; failing that, the
+ * location naming a project's key or full name outright also matches. Returns every
+ * matching project (usually one), so the caller can treat zero or several as
+ * ambiguous rather than guessing.
+ */
+function matchLocation(
+  projects: readonly BoardProject[],
+  location: string | undefined,
+): BoardProject[] {
+  const loc = location?.trim();
+  if (loc === undefined || loc === "") return [];
+  // Strongest signal: a trailing "(KEY)" whose key a listed project carries exactly.
+  const parenKey = loc.match(/\(([^)]+)\)\s*$/)?.[1]?.trim();
+  if (parenKey !== undefined && parenKey !== "") {
+    const byKey = projects.filter((p) => eqIgnoreCase(p.key, parenKey));
+    if (byKey.length > 0) return byKey;
+  }
+  // Otherwise: the location names a project's key, or contains its full name.
+  const lower = loc.toLowerCase();
+  return projects.filter(
+    (p) =>
+      eqIgnoreCase(p.key, loc) ||
+      (p.name !== "" && lower.includes(p.name.toLowerCase())),
+  );
+}
+
+/** Case-insensitive string equality. */
+function eqIgnoreCase(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The board's home-project `location` string from `acli jira board get --json`
+ * (e.g. `"Team Survey Design (ESD)"`), or `undefined` when the field is absent or
+ * the output is unparseable/shapeless — so a board with no readable location falls
+ * through to the ambiguous verdict rather than crashing.
+ */
+function parseBoardLocation(json: string): string | undefined {
   const parsed = tryParse(json);
   if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
     return undefined;
   }
+  const location = (parsed as { location?: unknown }).location;
+  return typeof location === "string" && location.trim() !== ""
+    ? location
+    : undefined;
+}
+
+/**
+ * The `projects` array of `acli jira board list-projects --json` as `{key, name}`
+ * pairs — the authoritative project set a board filters over. Skips entries with no
+ * usable string `key`, and yields `[]` for unparseable/shapeless output, so the
+ * pure resolver degrades honestly rather than crashing on an acli hiccup.
+ */
+function parseBoardProjects(json: string): BoardProject[] {
+  const parsed = tryParse(json);
+  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
+    return [];
+  }
   const projects = (parsed as { projects?: unknown }).projects;
-  if (!Array.isArray(projects)) return undefined;
-  return firstKey(projects);
+  if (!Array.isArray(projects)) return [];
+  const rows: BoardProject[] = [];
+  for (const item of projects) {
+    if (item === null || typeof item !== "object") continue;
+    const key = (item as { key?: unknown }).key;
+    if (typeof key !== "string" || key.trim() === "") continue;
+    const name = (item as { name?: unknown }).name;
+    rows.push({
+      key: key.trim(),
+      name: typeof name === "string" ? name.trim() : "",
+    });
+  }
+  return rows;
+}
+
+/** One project a board filters over: its JIRA `key` and display `name`. */
+interface BoardProject {
+  readonly key: string;
+  readonly name: string;
 }
 
 /**
@@ -291,19 +433,24 @@ function tryParse(text: string): unknown {
  */
 export const realJiraSeam: JiraSeam = {
   async resolveProject(board: string): Promise<string> {
-    const out = await runAcli([
-      "jira",
-      "board",
-      "list-projects",
-      "--id",
-      board,
-      "--json",
+    // Two reads: the board's project set (what it filters over) and its location
+    // (its home project). Resolution is the pure {@link resolveProjectKey} over
+    // both payloads — a single-project board resolves trivially, a multi-project
+    // filter board resolves to the location-matched project (never blindly the
+    // first-listed). The author-supplied `project` override is handled upstream in
+    // the reconciler (which skips this lookup entirely when it is set), so no
+    // override is threaded here.
+    const [boardGet, listProjects] = await Promise.all([
+      runAcli(["jira", "board", "get", "--id", board, "--json"]),
+      runAcli(["jira", "board", "list-projects", "--id", board, "--json"]),
     ]);
-    const project = parseBoardProject(out);
-    if (project === undefined) {
-      throw new Error(`no project found for JIRA board ${board}`);
+    const resolution = resolveProjectKey({ boardGet, listProjects });
+    if (resolution.kind !== "resolved") {
+      throw new Error(
+        `could not resolve a project for JIRA board ${board}: ${resolution.reason}`,
+      );
     }
-    return project;
+    return resolution.key;
   },
 
   async createEpic(input: CreateEpicInput): Promise<string> {

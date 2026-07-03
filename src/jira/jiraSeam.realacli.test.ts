@@ -6,7 +6,7 @@ import { realJiraSeam } from "./jiraSeam.js";
  * Integration test for {@link realJiraSeam} against a **real acli + live JIRA** —
  * the one place the acli subprocess boundary is validated end-to-end (the model is
  * `stackGitSeam.realgit.test.ts`), as the Issue's testing plan requires. The pure
- * parsers ({@link import("./jiraSeam.js").parseBoardProject} etc.) and the
+ * pure resolver ({@link import("./jiraSeam.js").resolveProjectKey} etc.) and the
  * reconciler are unit-tested with fakes; this proves the production seam actually
  * drives acli's create → transition → search round-trip against JIRA.
  *
