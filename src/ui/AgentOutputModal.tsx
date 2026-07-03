@@ -65,8 +65,8 @@ interface AgentOutputModalProps {
  *
  * Empty (or whitespace-only) output shows a quiet `(no output yet)` placeholder rather
  * than a blank modal — the agent spawned but has printed nothing yet (mirroring the
- * detail modal's `(no body)`). The dismiss hint reads as a *close/scroll* hint, not a
- * live tail: the output is a frozen snapshot, and close-and-reopen is the refresh.
+ * detail modal's `(no body)`). The hint reads as a *scroll/refresh/close* hint, not a
+ * live tail: the output is a frozen snapshot, and `r` refreshes it in place (ADR 0031).
  */
 export function AgentOutputModal({
   output,
@@ -111,7 +111,7 @@ export function AgentOutputModal({
       </Box>
 
       <Box marginTop={1}>
-        <Text dimColor>j / k / arrows to scroll · o / Esc to close · q to quit</Text>
+        <Text dimColor>j / k / arrows to scroll · r to refresh · o / Esc to close · q to quit</Text>
       </Box>
     </Box>
   );

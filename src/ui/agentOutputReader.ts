@@ -111,6 +111,24 @@ const LOGS_TIMEOUT_MS = 10_000;
 const LOGS_MAX_BUFFER = 8 * 1024 * 1024;
 
 /**
+ * Map a failed `claude logs` read to the legible placeholder the modal shows in
+ * place of a screen. Pure over the caught error's `code` so it is unit-testable
+ * without a real subprocess. Each message instructs pressing **`r`** to retry —
+ * the in-modal refresh gesture (ADR 0031) — because a failed refresh *replaces*
+ * the screen with this placeholder, and `r` re-runs the read (not the old
+ * close-and-press-`o`-again round-trip).
+ */
+export function logsFailureMessage(code: string | undefined): string {
+  if (code === "ETIMEDOUT") {
+    return "(output read timed out — press r to retry)";
+  }
+  if (code === "ENOBUFS") {
+    return "(output too large to display — press r to retry)";
+  }
+  return "(output unavailable — claude CLI may not be on PATH; press r to retry)";
+}
+
+/**
  * The production {@link LogsSeam}: shell out to `claude logs <handle>` and return
  * its stdout. `claude logs` exits 0 even for a gone handle (printing its "No job
  * matching" message to stdout), so the common path is the clean return. Both stdout
@@ -118,8 +136,8 @@ const LOGS_MAX_BUFFER = 8 * 1024 * 1024;
  * buffer the TUI is managing.
  *
  * A throw — a non-zero exit, a timeout, a buffer overflow, or `claude` missing from
- * PATH — degrades to a legible error message rather than crashing the read or
- * showing a misleading `(no output yet)` placeholder. Bounded by
+ * PATH — degrades to a legible {@link logsFailureMessage} rather than crashing the
+ * read or showing a misleading `(no output yet)` placeholder. Bounded by
  * {@link LOGS_TIMEOUT_MS} and {@link LOGS_MAX_BUFFER} because it runs synchronously
  * on the input path.
  */
@@ -137,12 +155,6 @@ export const realLogs: LogsSeam = (handle) => {
     const code = err instanceof Error && "code" in err
       ? (err as NodeJS.ErrnoException).code
       : undefined;
-    if (code === "ETIMEDOUT") {
-      return "(output read timed out — close and press o again to retry)";
-    }
-    if (code === "ENOBUFS") {
-      return "(output too large to display — close and press o again)";
-    }
-    return "(output unavailable — claude CLI may not be on PATH)";
+    return logsFailureMessage(code);
   }
 };
