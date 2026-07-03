@@ -1,29 +1,123 @@
 import { describe, it, expect } from "vitest";
 import {
-  parseBoardProject,
+  resolveProjectKey,
   parseSearchStatuses,
   parseCreatedKey,
   parseActiveSprintId,
 } from "./jiraSeam.js";
 
-describe("parseBoardProject", () => {
-  it("reads the first project's key from `board list-projects --json`", () => {
-    // The real acli shape (acli 1.3.x): a `projects` array of project objects.
-    const json = JSON.stringify({
+describe("resolveProjectKey", () => {
+  it("resolves a single-project board to its one project", () => {
+    // The common, zero-config case: a board that lists exactly one project
+    // resolves to it regardless of location (user story 7).
+    const listProjects = JSON.stringify({
       isLast: true,
       projects: [{ id: "10500", key: "DS", name: "Data Sourcery" }],
       total: 1,
     });
-    expect(parseBoardProject(json)).toBe("DS");
+    const boardGet = JSON.stringify({ id: 34, location: "Data Sourcery (DS)" });
+    expect(resolveProjectKey({ boardGet, listProjects })).toEqual({
+      kind: "resolved",
+      key: "DS",
+    });
   });
 
-  it("returns undefined for an empty project list", () => {
-    expect(parseBoardProject(JSON.stringify({ projects: [] }))).toBeUndefined();
+  it("lets an explicit override win over the board's own projects", () => {
+    // The author's `project` override always wins — even against a board that
+    // would otherwise resolve to something else (user story 8): the override is
+    // the deliberate fallback when the home project can't be derived.
+    const listProjects = JSON.stringify({
+      projects: [
+        { key: "CABB", name: "Culture Amp Bug Board" },
+        { key: "ESD", name: "Team Survey Design" },
+      ],
+    });
+    const boardGet = JSON.stringify({ location: "Team Survey Design (ESD)" });
+    expect(
+      resolveProjectKey({ boardGet, listProjects, override: "OVR" }),
+    ).toEqual({ kind: "resolved", key: "OVR" });
   });
 
-  it("returns undefined for unparseable or shapeless output", () => {
-    expect(parseBoardProject("not json")).toBeUndefined();
-    expect(parseBoardProject(JSON.stringify({ total: 0 }))).toBeUndefined();
+  it("resolves a multi-project board to the location's project, not the first listed (board 681 regression)", () => {
+    // The real board 681 payloads: a multi-project filter board that lists the
+    // `CABB` bug project *before* `ESD`, with a location naming Survey Design (ESD).
+    // The old `list-projects[0]` shortcut picked `CABB` and the mirror silently
+    // mis-targeted; resolution must cross-reference the location and land on `ESD`.
+    const listProjects = JSON.stringify({
+      isLast: true,
+      maxResults: 50,
+      projects: [
+        { id: "11380", key: "CABB", name: "Culture Amp Bug Board" },
+        { id: "11285", key: "ESD", name: "Team Survey Design" },
+      ],
+      startAt: 0,
+      total: 2,
+    });
+    const boardGet = JSON.stringify({
+      id: 681,
+      location: "Team Survey Design (ESD)",
+      name: "🚀 Survey Design Delivery 2026",
+      type: "scrum",
+    });
+    expect(resolveProjectKey({ boardGet, listProjects })).toEqual({
+      kind: "resolved",
+      key: "ESD",
+    });
+  });
+
+  it("returns ambiguous when a multi-project board's location matches no listed project and there is no override", () => {
+    // A genuinely unresolvable board: several projects, a location that names none
+    // of them, no override. The reconciler treats this as a logged no-op (never a
+    // wrong-project create), so the author must supply a `project` override.
+    const listProjects = JSON.stringify({
+      projects: [
+        { key: "CABB", name: "Culture Amp Bug Board" },
+        { key: "ESD", name: "Team Survey Design" },
+      ],
+    });
+    const boardGet = JSON.stringify({ location: "Some Other Team (XYZ)" });
+    const resolution = resolveProjectKey({ boardGet, listProjects });
+    expect(resolution.kind).toBe("ambiguous");
+  });
+
+  it("returns ambiguous for a multi-project board with no readable location", () => {
+    // No location field to disambiguate the filter board's projects, no override.
+    const listProjects = JSON.stringify({
+      projects: [{ key: "CABB" }, { key: "ESD" }],
+    });
+    const resolution = resolveProjectKey({ boardGet: "{}", listProjects });
+    expect(resolution.kind).toBe("ambiguous");
+  });
+
+  it("returns ambiguous for a board that lists no projects", () => {
+    const resolution = resolveProjectKey({
+      boardGet: JSON.stringify({ location: "X (Y)" }),
+      listProjects: JSON.stringify({ projects: [] }),
+    });
+    expect(resolution.kind).toBe("ambiguous");
+  });
+
+  it("degrades to ambiguous rather than throwing on unparseable listProjects output", () => {
+    // An acli hiccup (non-JSON stdout) must not crash the pure resolver — it
+    // reads as "no projects listed", same as the sibling parsers' "not json" cases.
+    const resolution = resolveProjectKey({
+      boardGet: JSON.stringify({ location: "X (Y)" }),
+      listProjects: "not json",
+    });
+    expect(resolution.kind).toBe("ambiguous");
+  });
+
+  it("degrades to ambiguous rather than throwing on unparseable board get output", () => {
+    // A multi-project board whose `board get` output is unparseable has no
+    // location to disambiguate with — same outcome as a missing location field.
+    const listProjects = JSON.stringify({
+      projects: [
+        { key: "CABB", name: "Culture Amp Bug Board" },
+        { key: "ESD", name: "Team Survey Design" },
+      ],
+    });
+    const resolution = resolveProjectKey({ boardGet: "not json", listProjects });
+    expect(resolution.kind).toBe("ambiguous");
   });
 });
 
