@@ -13,7 +13,7 @@ const execFileAsync = promisify(execFile);
  *
  * acli owns authentication (an OAuth/API-token session the user configures once),
  * so this seam handles **no credential** — Overseer never sees one. It exposes
- * epic/child creation, the JQL {@link JiraSeam.searchStatuses} that seeds the
+ * Story/Sub-task creation, the JQL {@link JiraSeam.searchStatuses} that seeds the
  * reconciler's diff-gate cache, and status transitions; sprint placement extends
  * the interface in a later slice.
  *
@@ -33,31 +33,38 @@ const execFileAsync = promisify(execFile);
 export interface JiraSeam {
   /**
    * Resolve the destination project *key* from a board id — the board→project
-   * location lookup (ADR 0028), so a PRD need only name its `board` in the common
-   * case. Resolves to the board's first associated project's key. Rejects if the
-   * board has no project or acli fails.
+   * **home/location** lookup (ADR 0028, ADR 0032), so a PRD need only name its
+   * `board` in the common case. A single-project board resolves to its one project;
+   * a multi-project filter board resolves to the project named by the board's
+   * *location*, cross-referenced against the board's project list for a validated
+   * key (never blindly the first-listed project — see {@link resolveProjectKey}).
+   * Rejects when the project can't be resolved (an ambiguous board with no override,
+   * or an acli failure), which the reconciler absorbs as a logged no-op.
    */
   resolveProject(board: string): Promise<string>;
   /**
-   * Create a JIRA **epic** for a PRD and resolve to its new key (e.g. `DS-100`).
-   * The epic is the PRD's mirrored feature-level rollup; its status is driven
-   * separately via {@link transition}. Rejects on any acli failure.
+   * Create a JIRA **Story** — the *feature card* — for a PRD and resolve to its new
+   * key (e.g. `DS-100`). The Story is the single board card the PRD mirrors to; its
+   * status is driven separately via {@link transition} (ADR 0032). Rejects on any
+   * acli failure.
    */
-  createEpic(input: CreateEpicInput): Promise<string>;
+  createStory(input: CreateStoryInput): Promise<string>;
   /**
-   * Create a JIRA **child issue** nested under a PRD's epic via JIRA Cloud's native
-   * `parent` field (ADR 0028, user story 26) and resolve to its new key. The
+   * Create a JIRA **Sub-task** nested under a PRD's Story via JIRA Cloud's native
+   * `parent` field (ADR 0032, user story 2) and resolve to its new key. The
    * reconciler creates one per Issue of an opted-in PRD (create-on-first-appearance,
-   * incl. backlog), only ever *after* the epic exists (epic-before-child ordering) —
-   * so a child is never parented to a not-yet-created epic. Its status is driven
-   * separately via {@link transition}, reusing the same generic ops as the epic.
-   * Rejects on any acli failure.
+   * incl. backlog), only ever *after* the Story exists (Story-before-Sub-task
+   * ordering) — so a Sub-task is never parented to a not-yet-created Story. A
+   * Sub-task is never placed independently: it follows its parent Story's
+   * backlog/sprint by JIRA's own rules. Its status is driven separately via
+   * {@link transition}, reusing the same generic ops as the Story. Rejects on any
+   * acli failure.
    */
   createChildIssue(input: CreateChildInput): Promise<string>;
   /**
    * Fetch the current named status of each given issue key in **one** JQL search —
    * the batched, board-open seed of the reconciler's last-known-bucket cache (ADR
-   * 0028). The reconciler collects every mirrored PRD's epic + child backref, seeds
+   * 0028). The reconciler collects every mirrored PRD's Story + Sub-task backref, seeds
    * the cache from this single call, then diffs each scan against the cache **in
    * memory** — so a steady-state scan that crosses no bucket makes zero JIRA calls.
    *
@@ -70,7 +77,7 @@ export interface JiraSeam {
    */
   searchStatuses(keys: readonly string[]): Promise<readonly JiraStatus[]>;
   /**
-   * Drive the issue to the named target status via acli (which resolves the legal
+   * Drive the work item to the named target status via acli (which resolves the legal
    * transition for the name). **Rejects** when the status is unreachable or absent
    * from the workflow — the reconciler catches that as a logged no-op, the
    * graceful degradation the mirror promises. Idempotence (not re-firing when
@@ -81,32 +88,33 @@ export interface JiraSeam {
   /**
    * Resolve the board's live **active sprint** id (JIRA Agile API via acli), or
    * `undefined` when the board has no active sprint — the reconciler treats the
-   * latter as a logged no-op that leaves the child in the backlog (user story 7).
-   * Used only for `target: sprint` PRDs, at child-create time. Rejects on an acli
+   * latter as a logged no-op that leaves the Story in the backlog (user story 7).
+   * Used only for `target: sprint` PRDs, at Story-create time. Rejects on an acli
    * failure (unauthed, bad board, network), which the reconciler catches as a
    * logged no-op just like {@link resolveProject}.
    */
   resolveActiveSprint(board: string): Promise<string | undefined>;
   /**
-   * Place a child issue into a sprint (JIRA Agile API via acli) — the sprint
-   * resolved by {@link resolveActiveSprint}. Called **once at create** for a
-   * `target: sprint` PRD's child and never again (placement is set once; the team
-   * owns subsequent sprint moves — user story 8). Never called for an epic, which
-   * is never sprinted. Rejects on any acli failure, which the reconciler catches
-   * as a logged no-op (the child simply stays where JIRA created it).
+   * Place a work item into a sprint (JIRA Agile API via acli) — the sprint
+   * resolved by {@link resolveActiveSprint}. Called **once at create** and never
+   * again (placement is set once; the team owns subsequent sprint moves — user
+   * story 8). Under the feature-card shape only the Story is ever placed and its
+   * Sub-tasks follow it by JIRA's own rules (ADR 0032). Rejects on any acli
+   * failure, which the reconciler catches as a logged no-op (the work item simply
+   * stays where JIRA created it).
    */
   assignToSprint(sprintId: string, key: string): Promise<void>;
 }
 
-/** The fields the mirror supplies when creating an epic. */
-export interface CreateEpicInput {
+/** The fields the mirror supplies when creating a Story. */
+export interface CreateStoryInput {
   /** The destination project key (from {@link JiraSeam.resolveProject} or an override). */
   readonly project: string;
-  /** The epic summary — the PRD's derived title. */
+  /** The Story summary — the PRD's derived title. */
   readonly summary: string;
   /**
-   * The epic description in plain text — the human-readable plan. Optional; a PRD
-   * with no body prose creates a summary-only epic.
+   * The Story description in plain text — the human-readable plan. Optional; a PRD
+   * with no body prose creates a summary-only Story.
    */
   readonly description?: string;
 }
@@ -119,23 +127,23 @@ export interface JiraStatus {
   readonly status: string | undefined;
 }
 
-/** The fields the mirror supplies when creating a child issue under an epic. */
+/** The fields the mirror supplies when creating a Sub-task under a Story. */
 export interface CreateChildInput {
   /**
-   * The destination project key — the epic's project, so the child lands beside it.
-   * The reconciler derives it from the epic key's prefix (a JIRA key is
-   * `PROJECT-NUMBER`), so a child under an already-linked epic needs no extra
+   * The destination project key — the Story's project, so the Sub-task lands beside
+   * it. The reconciler derives it from the Story key's prefix (a JIRA key is
+   * `PROJECT-NUMBER`), so a Sub-task under an already-linked Story needs no extra
    * board→project lookup.
    */
   readonly project: string;
-  /** The parent epic's key (native `parent` field) — the epic-before-child link. */
+  /** The parent Story's key (native `parent` field) — the Story-before-Sub-task link. */
   readonly parent: string;
-  /** The child summary — the Issue's `title`. */
+  /** The Sub-task summary — the Issue's `title`. */
   readonly summary: string;
   /**
-   * The child description in plain text — the Issue **body prose with frontmatter
+   * The Sub-task description in plain text — the Issue **body prose with frontmatter
    * stripped**, so no machine state leaks into the human-readable ticket. Optional;
-   * a body-less Issue creates a summary-only child.
+   * a body-less Issue creates a summary-only Sub-task.
    */
   readonly description?: string;
 }
@@ -152,19 +160,157 @@ const ACLI_TIMEOUT_MS = 15000;
 const ACLI_MAX_BUFFER = 8 * 1024 * 1024;
 
 /**
- * The `projects` array key in `acli jira board list-projects --json` output.
- * Parse the first project's `key`, or `undefined` when the board lists none or
- * the output is unparseable/shapeless. Total over bad input so a `resolveProject`
- * caller degrades honestly rather than crashing on an acli hiccup.
+ * The outcome of resolving a board to its destination project (ADR 0028, ADR 0032):
+ * either a validated project `key`, or an `ambiguous` verdict carrying a
+ * human-readable `reason` for the mirror log. The reconciler treats `ambiguous`
+ * exactly as it treats any other resolution failure — a logged no-op — so the
+ * mirror's low-noise failure behavior is unchanged.
  */
-export function parseBoardProject(json: string): string | undefined {
+export type ProjectResolution =
+  | { readonly kind: "resolved"; readonly key: string }
+  | { readonly kind: "ambiguous"; readonly reason: string };
+
+/**
+ * Resolve a board's destination project *key* from the two acli JSON payloads —
+ * `acli jira board list-projects` (the authoritative `{key, name}` set the board
+ * filters over) and `acli jira board get` (the board's `location`, its home
+ * project) — plus an optional author-supplied `project` override. A **pure**
+ * function over those strings with no I/O, so the board→project derivation that
+ * once mis-targeted a multi-project board is unit-testable in isolation (ADR 0032).
+ *
+ * The rules, in precedence order:
+ * - An `override` present (non-blank) → that project, always winning. It is the
+ *   deliberate fallback for a board whose home project genuinely can't be resolved
+ *   (user story 8), so it never even consults the payloads.
+ * - Exactly one project listed → that project (the common single-project board,
+ *   zero-config — user story 7), regardless of location.
+ * - Multiple listed → the entry whose key or name matches the board's `location`,
+ *   cross-referenced against the list for a *validated* key (never blindly the
+ *   first-listed project — the bug that sent board 681's PRD to the co-listed
+ *   `CABB` bug project instead of `ESD`).
+ * - Otherwise (no projects, or multiple with no location match and no override) →
+ *   `ambiguous`, which the reconciler logs as a no-op.
+ */
+export function resolveProjectKey(input: {
+  readonly boardGet: string;
+  readonly listProjects: string;
+  readonly override?: string;
+}): ProjectResolution {
+  // An override always wins — before the payloads are even consulted — so it is a
+  // robust fallback for a board whose home project can't be resolved (user story 8).
+  const override = input.override?.trim();
+  if (override !== undefined && override !== "") {
+    return { kind: "resolved", key: override };
+  }
+  const projects = parseBoardProjects(input.listProjects);
+  const [sole] = projects;
+  if (projects.length === 1 && sole !== undefined) {
+    return { kind: "resolved", key: sole.key };
+  }
+  if (projects.length === 0) {
+    return { kind: "ambiguous", reason: "board lists no projects" };
+  }
+  // Multiple projects (a filter board): pick the one the board's location names,
+  // cross-referenced against the list for a validated key — never the first listed.
+  const location = parseBoardLocation(input.boardGet);
+  const matched = matchLocation(projects, location);
+  const [soleMatch] = matched;
+  if (matched.length === 1 && soleMatch !== undefined) {
+    return { kind: "resolved", key: soleMatch.key };
+  }
+  const listed = projects.map((p) => p.key).join(", ");
+  return {
+    kind: "ambiguous",
+    reason:
+      location === undefined
+        ? `board lists multiple projects (${listed}) and has no location to disambiguate — supply a project override`
+        : `board location "${location}" matched ${matched.length} of the listed projects (${listed}) — supply a project override`,
+  };
+}
+
+/**
+ * The listed projects the board's `location` names — the location cross-referenced
+ * against the authoritative project set for a *validated* key. JIRA renders a
+ * project-location board as `"<Project Name> (<KEY>)"`, so the trailing
+ * parenthetical key is the strongest, most precise signal; failing that, the
+ * location naming a project's key or full name outright also matches. Returns every
+ * matching project (usually one), so the caller can treat zero or several as
+ * ambiguous rather than guessing.
+ */
+function matchLocation(
+  projects: readonly BoardProject[],
+  location: string | undefined,
+): BoardProject[] {
+  const loc = location?.trim();
+  if (loc === undefined || loc === "") return [];
+  // Strongest signal: a trailing "(KEY)" whose key a listed project carries exactly.
+  const parenKey = loc.match(/\(([^)]+)\)\s*$/)?.[1]?.trim();
+  if (parenKey !== undefined && parenKey !== "") {
+    const byKey = projects.filter((p) => eqIgnoreCase(p.key, parenKey));
+    if (byKey.length > 0) return byKey;
+  }
+  // Otherwise: the location names a project's key, or contains its full name.
+  const lower = loc.toLowerCase();
+  return projects.filter(
+    (p) =>
+      eqIgnoreCase(p.key, loc) ||
+      (p.name !== "" && lower.includes(p.name.toLowerCase())),
+  );
+}
+
+/** Case-insensitive string equality. */
+function eqIgnoreCase(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
+/**
+ * The board's home-project `location` string from `acli jira board get --json`
+ * (e.g. `"Team Survey Design (ESD)"`), or `undefined` when the field is absent or
+ * the output is unparseable/shapeless — so a board with no readable location falls
+ * through to the ambiguous verdict rather than crashing.
+ */
+function parseBoardLocation(json: string): string | undefined {
   const parsed = tryParse(json);
   if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
     return undefined;
   }
+  const location = (parsed as { location?: unknown }).location;
+  return typeof location === "string" && location.trim() !== ""
+    ? location
+    : undefined;
+}
+
+/**
+ * The `projects` array of `acli jira board list-projects --json` as `{key, name}`
+ * pairs — the authoritative project set a board filters over. Skips entries with no
+ * usable string `key`, and yields `[]` for unparseable/shapeless output, so the
+ * pure resolver degrades honestly rather than crashing on an acli hiccup.
+ */
+function parseBoardProjects(json: string): BoardProject[] {
+  const parsed = tryParse(json);
+  if (parsed === undefined || typeof parsed !== "object" || parsed === null) {
+    return [];
+  }
   const projects = (parsed as { projects?: unknown }).projects;
-  if (!Array.isArray(projects)) return undefined;
-  return firstKey(projects);
+  if (!Array.isArray(projects)) return [];
+  const rows: BoardProject[] = [];
+  for (const item of projects) {
+    if (item === null || typeof item !== "object") continue;
+    const key = (item as { key?: unknown }).key;
+    if (typeof key !== "string" || key.trim() === "") continue;
+    const name = (item as { name?: unknown }).name;
+    rows.push({
+      key: key.trim(),
+      name: typeof name === "string" ? name.trim() : "",
+    });
+  }
+  return rows;
+}
+
+/** One project a board filters over: its JIRA `key` and display `name`. */
+interface BoardProject {
+  readonly key: string;
+  readonly name: string;
 }
 
 /**
@@ -195,11 +341,11 @@ export function parseSearchStatuses(json: string): JiraStatus[] {
 }
 
 /**
- * Recover the created epic's key from `acli jira workitem create --json` output.
- * Tolerant of the plausible shapes: a JSON object with a `key`, or a
- * single-element array of such objects. `undefined` when no key is found there,
- * so a malformed create is a logged no-op rather than a bogus backref written to
- * disk.
+ * Recover the created work item's key (a Story or a Sub-task) from `acli jira
+ * workitem create --json` output. Tolerant of the plausible shapes: a JSON object
+ * with a `key`, or a single-element array of such objects. `undefined` when no key
+ * is found there, so a malformed create is a logged no-op rather than a bogus
+ * backref written to disk.
  *
  * The regex fallback (scanning for a `PROJ-123`-shaped substring) applies **only**
  * when the output isn't JSON at all — a plain human-readable success line.
@@ -207,7 +353,7 @@ export function parseSearchStatuses(json: string): JiraStatus[] {
  * a *parsed* payload's raw text for a stray key-shaped substring would just as
  * happily match a key mentioned in an unrelated error message (e.g. "related to
  * DS-42, permission denied") and hand back that wrong key as if it were the
- * epic just created, silently mirroring the PRD to someone else's ticket.
+ * work item just created, silently mirroring the PRD to someone else's ticket.
  */
 export function parseCreatedKey(output: string): string | undefined {
   const parsed = tryParse(output);
@@ -291,7 +437,16 @@ function tryParse(text: string): unknown {
  */
 export const realJiraSeam: JiraSeam = {
   async resolveProject(board: string): Promise<string> {
-    const out = await runAcli([
+    // The board's project set (what it filters over) always needs reading. Its
+    // location (home project) only matters to disambiguate a *multi*-project
+    // filter board — a single-project board resolves trivially without it — so
+    // `board get` is fetched lazily, only when there's more than one listed
+    // project. This keeps the common single-project case's failure surface to
+    // just the one acli call it actually needs, rather than making it depend on
+    // a `board get` call it never consults. The author-supplied `project`
+    // override is handled upstream in the reconciler (which skips this lookup
+    // entirely when it is set), so no override is threaded here.
+    const listProjects = await runAcli([
       "jira",
       "board",
       "list-projects",
@@ -299,20 +454,29 @@ export const realJiraSeam: JiraSeam = {
       board,
       "--json",
     ]);
-    const project = parseBoardProject(out);
-    if (project === undefined) {
-      throw new Error(`no project found for JIRA board ${board}`);
+    const boardGet =
+      parseBoardProjects(listProjects).length > 1
+        ? await runAcli(["jira", "board", "get", "--id", board, "--json"])
+        : "{}";
+    const resolution = resolveProjectKey({ boardGet, listProjects });
+    if (resolution.kind !== "resolved") {
+      throw new Error(
+        `could not resolve a project for JIRA board ${board}: ${resolution.reason}`,
+      );
     }
-    return project;
+    return resolution.key;
   },
 
-  async createEpic(input: CreateEpicInput): Promise<string> {
+  async createStory(input: CreateStoryInput): Promise<string> {
+    // The PRD's feature card — a `Story` (not an Epic), the single board card the
+    // PRD mirrors to (ADR 0032). Board placement is emergent from the board's
+    // project-scoped filter, so creating it in the right project is sufficient.
     const args = [
       "jira",
       "workitem",
       "create",
       "--type",
-      "Epic",
+      "Story",
       "--project",
       input.project,
       "--summary",
@@ -325,21 +489,23 @@ export const realJiraSeam: JiraSeam = {
     const key = parseCreatedKey(await runAcli(args));
     if (key === undefined) {
       throw new Error(
-        `could not read the created epic key from acli (project ${input.project})`,
+        `could not read the created story key from acli (project ${input.project})`,
       );
     }
     return key;
   },
 
   async createChildIssue(input: CreateChildInput): Promise<string> {
-    // A standard `Task` parented to the epic via the native `parent` field (JIRA
-    // Cloud — user story 26). Same create shape as an epic, plus `--parent`.
+    // A native `Sub-task` parented to the Story via the native `parent` field (JIRA
+    // Cloud — ADR 0032, user story 2), so it nests under the feature card rather
+    // than getting its own board card. Same create shape as a Story, plus
+    // `--parent`; the `Sub-task` type is what makes JIRA nest it.
     const args = [
       "jira",
       "workitem",
       "create",
       "--type",
-      "Task",
+      "Sub-task",
       "--project",
       input.project,
       "--parent",
@@ -354,7 +520,7 @@ export const realJiraSeam: JiraSeam = {
     const key = parseCreatedKey(await runAcli(args));
     if (key === undefined) {
       throw new Error(
-        `could not read the created child key from acli (parent ${input.parent})`,
+        `could not read the created sub-task key from acli (parent ${input.parent})`,
       );
     }
     return key;

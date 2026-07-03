@@ -2,7 +2,10 @@
 
 ## Status
 
-accepted
+accepted — but the **shape** (a PRD → Epic with child Tasks) is superseded by
+[ADR 0032](./0032-jira-mirror-maps-a-prd-to-a-story-with-subtasks.md), which mirrors a PRD as
+a **Story with native Sub-tasks**. The outbound-only, opt-in, log-only-failure decision below
+stands unchanged.
 
 ## Context
 

@@ -1,34 +1,34 @@
 import { describe, it, expect } from "vitest";
 import {
-  DEFAULT_EPIC_STATUS_NAMES,
+  DEFAULT_STORY_STATUS_NAMES,
   DEFAULT_ISSUE_STATUS_NAMES,
-  epicTargetStatus,
+  storyTargetStatus,
   issueTargetStatus,
   statusEquals,
-  type EpicStatusNames,
+  type StoryStatusNames,
   type IssueStatusNames,
 } from "./statusMapping.js";
 
-describe("epicTargetStatus", () => {
-  it("maps each PRD lane to its default named epic status", () => {
-    expect(epicTargetStatus("backlog")).toBe("To Do");
-    expect(epicTargetStatus("in-progress")).toBe("In Progress");
-    expect(epicTargetStatus("done")).toBe("Done");
+describe("storyTargetStatus", () => {
+  it("maps each PRD lane to its default named story status", () => {
+    expect(storyTargetStatus("backlog")).toBe("To Do");
+    expect(storyTargetStatus("in-progress")).toBe("In Progress");
+    expect(storyTargetStatus("done")).toBe("Done");
   });
 
   it("honours a per-board status-name override", () => {
-    const names: EpicStatusNames = {
+    const names: StoryStatusNames = {
       backlog: "Backlog",
       inProgress: "Building",
       done: "Shipped",
     };
-    expect(epicTargetStatus("backlog", names)).toBe("Backlog");
-    expect(epicTargetStatus("in-progress", names)).toBe("Building");
-    expect(epicTargetStatus("done", names)).toBe("Shipped");
+    expect(storyTargetStatus("backlog", names)).toBe("Backlog");
+    expect(storyTargetStatus("in-progress", names)).toBe("Building");
+    expect(storyTargetStatus("done", names)).toBe("Shipped");
   });
 
   it("exposes the conventional JIRA names as the default map", () => {
-    expect(DEFAULT_EPIC_STATUS_NAMES).toEqual({
+    expect(DEFAULT_STORY_STATUS_NAMES).toEqual({
       backlog: "To Do",
       inProgress: "In Progress",
       done: "Done",
