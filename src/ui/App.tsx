@@ -1011,13 +1011,6 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
       // keypress would do nothing at all — indistinguishable from o being
       // broken — so say plainly there's nothing to read, like Kill.
       setNotice(`${issueId} has no recorded agent to read — re-check the board.`);
-      // A refresh fires from *inside* the still-open agent-output modal, which
-      // takes over the whole screen and renders ahead of the notice line — so
-      // leaving the modal open here would bury the notice under the untouched
-      // stale snapshot, making the refresh look like a silent no-op. Closing
-      // it surfaces the notice on the board, exactly as the `o`-open's version
-      // of this same race already does (there, no modal is open yet).
-      if (isRefresh) setModal(undefined);
       return;
     }
     // The reader hands back the raw `claude logs` bytes verbatim; the readable
@@ -1037,56 +1030,36 @@ export function App({ board, dispatcher, reviewer, auditor, rollback, killer, op
     // an older, superseded, or now-irrelevant resolution is dropped instead
     // of silently hijacking whatever is on screen by the time it lands.
     const requestId = ++agentOutputRequestIdRef.current;
-    // An `o`-open must land on a still-*closed* slot (nothing else grabbed the
-    // screen while the flush was in flight) for the ids that were selected —
-    // `agentOutputLiveRef` (the live board selection) is the right proxy for
-    // that. A refresh must land on the exact *same* agent-output modal it was
-    // fired from — checked directly against `openAgentOutputModalRef`, not
-    // against the live board selection (which can drift under a background
-    // re-scan even though this modal's own ids never move) and not against
-    // "some modal is open" (which would also match a *different* modal, e.g.
-    // detail's `v`, opened after an Esc/`o` closed this one mid-flush). Shared
-    // by both the success and rejection branches below so neither can drift
-    // from the other's notion of "still relevant".
-    const stillRelevant = (): boolean =>
-      agentOutputRequestIdRef.current === requestId &&
-      (isRefresh
-        ? openAgentOutputModalRef.current?.prdId === prdId &&
-          openAgentOutputModalRef.current?.issueId === issueId
-        : agentOutputLiveRef.current.prdId === prdId &&
-          agentOutputLiveRef.current.issueId === issueId &&
-          !agentOutputLiveRef.current.modalOpen);
     void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
       (lines) => {
-        if (!stillRelevant()) return;
+        // An `o`-open must land on a still-*closed* slot (nothing else grabbed the
+        // screen while the flush was in flight) for the ids that were selected —
+        // `agentOutputLiveRef` (the live board selection) is the right proxy for
+        // that. A refresh must land on the exact *same* agent-output modal it was
+        // fired from — checked directly against `openAgentOutputModalRef`, not
+        // against the live board selection (which can drift under a background
+        // re-scan even though this modal's own ids never move) and not against
+        // "some modal is open" (which would also match a *different* modal, e.g.
+        // detail's `v`, opened after an Esc/`o` closed this one mid-flush).
+        const stillRelevant = isRefresh
+          ? agentOutputRequestIdRef.current === requestId &&
+            openAgentOutputModalRef.current?.prdId === prdId &&
+            openAgentOutputModalRef.current?.issueId === issueId
+          : agentOutputRequestIdRef.current === requestId &&
+            agentOutputLiveRef.current.prdId === prdId &&
+            agentOutputLiveRef.current.issueId === issueId &&
+            !agentOutputLiveRef.current.modalOpen;
+        if (!stillRelevant) return;
         setDetailScroll(0); // always open at the top, never a stale position
         setModal({ kind: "agent-output", output, lines: [...lines], prdId, issueId });
       },
       () => {
         // The emulator rejected unexpectedly (e.g. a malformed byte stream
-        // throwing inside the write). On an `o`-open no modal is on screen yet,
-        // so the same legible-notice pattern as the "no recorded agent" race
-        // above is enough to avoid a silent, permanent no-op. On a refresh a
-        // stale snapshot *is* already on screen — a notice alone would leave it
-        // sitting there looking current — so ADR 0031's failed-read contract
-        // applies here too: replace the screen with the same "press r to retry"
-        // placeholder a `claude logs` failure would show.
-        if (!stillRelevant()) return;
-        if (isRefresh) {
-          setDetailScroll(0);
-          setModal({
-            kind: "agent-output",
-            output: {
-              title: output.title,
-              output: "(agent output could not be rendered — press r to retry)",
-            },
-            lines: ["(agent output could not be rendered — press r to retry)"],
-            prdId,
-            issueId,
-          });
-        } else {
-          setNotice(`${issueId} agent output could not be rendered — re-check the board.`);
-        }
+        // throwing inside the write). Degrade to the same legible-notice
+        // pattern as the "no recorded agent" race above rather than leaving
+        // `o` a silent, permanent no-op.
+        if (agentOutputRequestIdRef.current !== requestId) return;
+        setNotice(`${issueId} agent output could not be rendered — re-check the board.`);
       },
     );
   }

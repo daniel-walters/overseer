@@ -285,9 +285,9 @@ function runBoard(): void {
   // recent terminal output once via `claude logs <handle>`, against the same
   // recorded handle the kill switch joins (the agent sidecar, via `readHandles`).
   // The read twin of `K` over one card's handle — a pure read seam (no spawn, no
-  // write, no status change). The output is read on demand and frozen until `r`
-  // refreshes it in place (ADR 0031), so it always reflects the handle's current
-  // scrollback as of the last open or refresh. A vanished Issue/handle makes the keypress a
+  // write, no status change). The output is read on demand and frozen for the
+  // modal's lifetime (close-and-reopen is the refresh), so it always reflects the
+  // handle's current scrollback. A vanished Issue/handle makes the keypress a
   // harmless no-op; a `live` card with no recorded handle flashes a status-line
   // notice, exactly as Kill does in the same race.
   const agentOutputReader = createAgentOutputReader(root, readHandles, realLogs);
