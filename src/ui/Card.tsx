@@ -5,6 +5,14 @@ import { REASON_MARKER } from "../model.js";
 
 interface CardProps {
   title: string;
+  /**
+   * The card's identity — an Issue filename (`007-session-tokens.md`) or a PRD
+   * directory name (`auth-system`). Only its leading `NNN` sort prefix is
+   * surfaced, as the dim id line under the title (see {@link taskNumber}); a PRD
+   * dir name has no such prefix, so a PRD card renders no id line. Optional so
+   * the prop is additive — a card handed no id (older callers, tests) is unchanged.
+   */
+  id?: string;
   /** Routing badge, present only while the card is in the ready column. */
   readyFor?: ReadyFor;
   /** Escalation marker, present only while the card is in human-review. */
@@ -97,6 +105,17 @@ const BADGE: Record<ReadyFor, string> = {
   human: "🧑",
   agent: "🤖",
 };
+
+/**
+ * The task number Overseer refers to an Issue by — the leading `NNN` sort prefix
+ * of its filename (`007-session-tokens.md` ⇒ `007`), padding preserved so the id
+ * reads exactly as it does in conversation and in `blocked_by` references. Returns
+ * `undefined` when the id has no numeric prefix — a PRD carries a directory-name
+ * id (`auth-system`), so a PRD card surfaces no number and renders no id line.
+ */
+function taskNumber(id: string | undefined): string | undefined {
+  return id?.match(/^\d+/)?.[0];
+}
 
 /**
  * The liveness marker, mirroring the human-review reason marker's treatment: a
@@ -219,6 +238,7 @@ const REVIEW_PASS_COLOR = "cyan";
 /** A single kanban card. At board level it is a PRD; when zoomed, an Issue. */
 export function Card({
   title,
+  id,
   readyFor,
   humanReviewReason,
   liveness,
@@ -255,6 +275,18 @@ export function Card({
         {readyFor ? `${BADGE[readyFor]} ` : ""}
         {title}
       </Text>
+      {taskNumber(id) && (
+        // The task number on its own dim line directly under the title — the id
+        // Overseer refers to the Issue by (`007`), so a card can be named aloud
+        // without zooming. Dim and prefixed `#` keeps it clearly secondary
+        // metadata, never mistaken for the coloured status markers below; it
+        // truncates like every other line so a narrow card never overflows. Only
+        // rendered when the id carries a numeric prefix, so a PRD card (whose id
+        // is a directory name) shows no line.
+        <Text wrap="truncate-end" dimColor>
+          {`#${taskNumber(id)}`}
+        </Text>
+      )}
       {humanReviewReason && !suppressed && (
         // The marker rides its own line so it never crowds the title out of the
         // narrow card under truncation — the title still identifies the card. The

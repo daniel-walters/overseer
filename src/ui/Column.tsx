@@ -114,6 +114,7 @@ export function Column({
       {visible.map((card) => (
         <Card
           key={card.id}
+          id={card.id}
           title={card.title}
           readyFor={card.readyFor}
           humanReviewReason={card.humanReviewReason}
