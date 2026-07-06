@@ -2,6 +2,7 @@
   "name": "overseer",
   "version": "0.1.0",
   "description": "A TUI that reads PRDs and Issues from disk and renders them as a live-updating kanban board.",
+  "license": "MIT",
   "type": "module",
   "bin": {
     "overseer": "./dist/cli.js"

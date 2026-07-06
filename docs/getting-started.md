@@ -46,8 +46,11 @@ node dist/cli.js init   # or `pnpm start init` to run from source
    session.
 2. **Bootstraps a config** if you don't already have one: it writes
    `~/.config/overseer/config.toml` pointing at a default board **root** of
-   `~/overseer-board`, and creates that directory. It never overwrites an existing
-   config.
+   `~/overseer-board`, and creates that directory. The scaffolded config also
+   ships the recommended **Agent runtime** split (implementor `opus`/`high`,
+   reviewer `sonnet`/`medium`) and the **review loop** defaults (`cap = 3`,
+   `effort = "medium"`), so a fresh board is tuned out of the box — edit or remove
+   those tables to change them. It never overwrites an existing config.
 
 The **root** is the directory Overseer watches. It is *not* a code repo — it's the
 home of your PRD and Issue markdown. The code your PRDs are *about* lives in

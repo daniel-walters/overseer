@@ -74,6 +74,41 @@ describe("Card selection treatment", () => {
   });
 });
 
+describe("Card task-number id line", () => {
+  it("shows the Issue's NNN task number under the title", () => {
+    const frame = frameOf(
+      <Card id="007-session-tokens.md" title="Session tokens" />,
+    );
+
+    expect(frame).toContain("#007");
+    expect(frame).toContain("Session tokens");
+  });
+
+  it("preserves the leading-zero padding of the task number", () => {
+    // The id reads exactly as Overseer refers to it in conversation and in
+    // blocked_by references — `001`, not `1`.
+    const frame = frameOf(<Card id="001-password-hashing.md" title="Hashing" />);
+
+    expect(frame).toContain("#001");
+  });
+
+  it("shows no id line for a PRD whose id is a directory name", () => {
+    // A PRD carries a directory-name id with no numeric prefix, so it surfaces no
+    // task number and renders no id line.
+    const frame = frameOf(<Card id="auth-system" title="Auth system" />);
+
+    expect(frame).not.toContain("#");
+    expect(frame).toContain("Auth system");
+  });
+
+  it("shows no id line on a card handed no id", () => {
+    const frame = frameOf(<Card title="Plain" />);
+
+    expect(frame).not.toContain("#");
+    expect(frame).toContain("Plain");
+  });
+});
+
 describe("Card human-review reason marker", () => {
   it("marks a card escalated for a deviation with a deviation marker", () => {
     const frame = frameOf(<Card title="Login" humanReviewReason="deviation" />);

@@ -78,6 +78,8 @@ everywhere below that says `overseer`, substitute one of those.
 `init` is the one-step onboarding: it installs Overseer's bundled agent skills
 into your global Claude skills directory and, if you have no config yet, writes one
 pointing at a default board root of `~/overseer-board` (creating that directory).
+The scaffolded config also ships the recommended **Agent runtime** split and
+**review loop** defaults (see below), so a fresh board is tuned out of the box.
 It never overwrites an existing config.
 
 Then run `overseer doctor` to confirm your environment is ready — it checks Node,
