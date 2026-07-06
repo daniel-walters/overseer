@@ -60,6 +60,19 @@ export interface CardDetail {
    * carries no note (then no header renders, regardless of the reason).
    */
   readonly humanReviewNote?: string;
+  /**
+   * The free-text `review_tolerated` reason — *what* was tolerated at a
+   * clean-with-tolerated merge (ADR 0027) — rendered as its own header block in
+   * the detail view so a human viewing the Issue sees the findings that were waved
+   * through, not just the board's presence-only `◌ tolerated` marker. Unlike
+   * {@link humanReviewNote}, it is sourced from the *file* here (via
+   * `readDispatchIssue`), because the parsed model only carries the boolean
+   * {@link import("../model.js").Issue.tolerated}, never the reason text. Read
+   * whenever present — not gated on the `done` lane the board marker uses — so the
+   * audit-trail copy on a `human-review` Issue is visible too. Absent on a PRD's
+   * `prd.md` and on any Issue with a blank/missing field (then no header renders).
+   */
+  readonly reviewTolerated?: string;
 }
 
 /**
@@ -89,9 +102,12 @@ export function createDetailReader(root: string): DetailReader {
           const { prdTitle, prdBody } = readPrdMeta(prdDir);
           return { title: prdTitle, body: prdBody };
         }
-        // Zoomed: the selected Issue's file.
+        // Zoomed: the selected Issue's file. `reviewTolerated` comes straight off
+        // the file here (the model carries only the boolean marker), surfacing the
+        // waved-through findings text in the detail view; `readPresentString` in
+        // the dispatch reader already normalised a blank field to `undefined`.
         const issue = readDispatchIssue(prdDir, issueId);
-        return { title: issue.title, body: issue.body };
+        return { title: issue.title, body: issue.body, reviewTolerated: issue.reviewTolerated };
       } catch {
         // The PRD dir, its `prd.md`, or the Issue file vanished from the watched
         // root between the last scan and this keypress — a harmless no-op.

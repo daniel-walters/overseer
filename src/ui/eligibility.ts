@@ -79,6 +79,18 @@ export interface BindContext {
    * human-triggered status flip with no spawn behind it (CONTEXT.md → mark done).
    */
   readonly issueReadyForHuman: boolean;
+  /**
+   * `c` — the selected Issue is a waiting `ready-for-audit` card. Both
+   * `ready-for-audit` (awaiting) and `in-audit` (active) fold into the single
+   * `audit` lane (model.ts), distinguished only by the liveness overlay (ADR
+   * 0026): a `ready-for-audit` card carries **no** liveness, while an `in-audit`
+   * one always does (`live` / `orphaned` / `unknown`). So this keys off lane +
+   * the *absence* of liveness rather than a (non-existent) `ready-for-audit`
+   * lane — mirroring how {@link issueReadyForHuman} keys off lane + the `readyFor`
+   * badge. The manual audit crank (PRD: Auditor Edge), inert on a running auditor
+   * (`K`/`o` own that) and on every other lane.
+   */
+  readonly issueReadyForAudit: boolean;
   /** `R` — the selected Issue's liveness verdict is `orphaned`. */
   readonly issueOrphan: boolean;
   /** `K` — the selected Issue's liveness verdict is `live`. */
@@ -120,6 +132,11 @@ export function computeBindContext(inputs: BindInputs): BindContext {
     issueReadyForReview: selectedIssue?.lane === "ready-for-review",
     issueReadyForHuman:
       selectedIssue?.lane === "ready" && selectedIssue.readyFor === "human",
+    // A waiting `ready-for-audit` card: in the shared `audit` lane with no liveness
+    // overlay (an `in-audit` auditor always carries one — ADR 0026). The absence of
+    // liveness is the discriminator, so a running/orphaned auditor never lights `c`.
+    issueReadyForAudit:
+      selectedIssue?.lane === "audit" && selectedIssue.liveness === undefined,
     issueOrphan: selectedIssue?.liveness === "orphaned",
     issueLive: selectedIssue?.liveness === "live",
     // Reason-agnostic: the scanner sets `approvable` only on a human-review card

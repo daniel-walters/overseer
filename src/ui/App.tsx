@@ -4,13 +4,19 @@ import { BoardView } from "./Board.js";
 import { IssueBoard } from "./IssueBoard.js";
 import { DispatchPreview } from "./DispatchPreview.js";
 import { ReviewPreview } from "./ReviewPreview.js";
+import { AuditPreview } from "./AuditPreview.js";
 import { HelpModal } from "./HelpModal.js";
 import { DetailModal, DETAIL_MODAL_CHROME_ROWS, DETAIL_MODAL_CHROME_COLS } from "./DetailModal.js";
-import { AgentOutputModal, AGENT_OUTPUT_MODAL_CHROME_ROWS } from "./AgentOutputModal.js";
+import {
+  AgentOutputModal,
+  AGENT_OUTPUT_MODAL_CHROME_ROWS,
+  AGENT_OUTPUT_MODAL_CHROME_COLS,
+} from "./AgentOutputModal.js";
 import { renderDetailLines } from "./markdown.js";
 import { scrollDetail } from "./detailScroll.js";
 import type { CardDetail } from "./detailReader.js";
 import type { AgentOutput } from "./agentOutputReader.js";
+import { renderTerminal as defaultRenderTerminal, type TerminalRenderer } from "./renderTerminal.js";
 import { navReduce, initialNav, selectedCoord } from "./navigation.js";
 import { laneShape, cardAtCoord } from "./lanes.js";
 import { laneHeight } from "./laneHeight.js";
@@ -30,6 +36,7 @@ import type { Board } from "../model.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import type { DispatchResult } from "../dispatch/dispatch.js";
 import type { ReviewPreview as ReviewPreviewData } from "../review/reviewReader.js";
+import type { AuditPreview as AuditPreviewData } from "../audit/auditReader.js";
 import type {
   RedispatchPreview as RedispatchPreviewData,
   RollbackOutcome,
@@ -105,6 +112,26 @@ export interface Reviewer {
     issueId: string,
   ) => ReviewPreviewData | undefined;
   readonly review: (preview: ReviewPreviewData) => void;
+}
+
+/**
+ * The audit seams the App drives at the Issue level — the manual audit crank
+ * (`c`), the audit counterpart to {@link Reviewer} (PRD: Auditor Edge, ADR 0026).
+ * A deliberate per-Issue act on one Issue's recorded worktree, just like `r`.
+ *
+ * - `readAudit` resolves the selected Issue and classifies its auditability for
+ *   the preview (`undefined` if it vanished from the watched root).
+ * - `audit` runs the audit over a previewed Issue (flip `ready-for-audit →
+ *   in-audit`, then spawn the auditor — the *same* flip-before-spawn the Reactor's
+ *   audit pass does) — a no-op for an ineligible Issue. It never reviews, merges,
+ *   or writes a terminal status.
+ */
+export interface Auditor {
+  readonly readAudit: (
+    prdId: string,
+    issueId: string,
+  ) => AuditPreviewData | undefined;
+  readonly audit: (preview: AuditPreviewData) => void;
 }
 
 /**
@@ -279,6 +306,7 @@ export interface AgentOutputReader {
 type ActiveModal =
   | { readonly kind: "dispatch"; readonly prdTitle: string; readonly frontier: readonly FrontierEntry[] }
   | { readonly kind: "review"; readonly preview: ReviewPreviewData }
+  | { readonly kind: "audit"; readonly preview: AuditPreviewData }
   | { readonly kind: "redispatch"; readonly preview: RedispatchPreviewData }
   | { readonly kind: "kill"; readonly preview: KillPreviewData }
   | { readonly kind: "open-pr"; readonly preview: OpenPrPreviewData }
@@ -286,7 +314,27 @@ type ActiveModal =
   | { readonly kind: "mark-done"; readonly preview: MarkDonePreviewData }
   | { readonly kind: "approve"; readonly preview: ApprovePreviewData }
   | { readonly kind: "detail"; readonly detail: CardDetail }
-  | { readonly kind: "agent-output"; readonly output: AgentOutput };
+  | {
+      readonly kind: "agent-output";
+      readonly output: AgentOutput;
+      /**
+       * The agent output already resolved to screen lines: the App runs the raw
+       * `claude logs` bytes through the terminal emulator (ADR 0030) on the async
+       * `o`-open path — a flush that must be awaited, so it can't live in the
+       * synchronous render — and freezes the result here. The modal renders these
+       * verbatim, exactly as the detail modal renders its pre-rendered `lines`.
+       */
+      readonly lines: readonly string[];
+      /**
+       * The source PRD id and Issue id the modal was opened for, captured at open
+       * time. Not rendered — carried so a later in-place refresh (`r`, Issue 002)
+       * knows which recorded handle to re-resolve without re-deriving the selection
+       * (which a live re-scan could have moved out from under the open modal). The
+       * `o`-open path threads the same `(prdId, issueId)` it read the output for.
+       */
+      readonly prdId: string;
+      readonly issueId: string;
+    };
 
 /**
  * The auto-run switch the App reflects and drives — the user-facing name for the
@@ -318,6 +366,8 @@ interface AppProps {
   dispatcher?: Dispatcher;
   /** Wired in production; absent in tests that don't exercise review. */
   reviewer?: Reviewer;
+  /** Wired in production; absent in tests that don't exercise the manual audit crank. */
+  auditor?: Auditor;
   /** Wired in production; absent in tests that don't exercise orphan recovery. */
   rollback?: Rollback;
   /** Wired in production; absent in tests that don't exercise the kill switch. */
@@ -334,6 +384,13 @@ interface AppProps {
   detailReader?: DetailReader;
   /** Wired in production; absent in tests that don't exercise the agent-output modal. */
   agentOutputReader?: AgentOutputReader;
+  /**
+   * The bytes→screen transform the `o`-open path runs the raw `claude logs` output
+   * through (ADR 0030), sized to the modal's inner width and available rows. Defaults
+   * to the real `@xterm/headless`-backed {@link renderTerminal}; injected as a fake in
+   * App tests so the async open path is covered without a real emulator flush.
+   */
+  renderTerminal?: TerminalRenderer;
   /** Wired in production; absent in tests that don't exercise auto-run. */
   autoRun?: AutoRun;
   /** Wired in production; absent in tests that don't exercise `go to PR`. */
@@ -374,7 +431,7 @@ interface AppProps {
  * backing out of a zoom first; `d` (board level) opens the dispatch preview, `r`
  * (Issue level) opens the review preview, Enter/`y` confirms, `Esc` cancels.
  */
-export function App({ board, dispatcher, reviewer, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
+export function App({ board, dispatcher, reviewer, auditor, rollback, killer, openPr, deleter, markDone, approve, detailReader, agentOutputReader, renderTerminal = defaultRenderTerminal, autoRun, urlOpener, refresh, activity, reviewCap }: AppProps) {
   const { exit } = useApp();
   // The terminal dimensions, reactive to resize (SIGWINCH). The board renders on
   // the alternate screen (cli.tsx) sized to fill the viewport, so the root box is
@@ -422,6 +479,34 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // the synchronous `dispatch` action it gates, so there is no stale-read window.
   const frontierRef = useRef<readonly FrontierEntry[]>([]);
 
+  // The `o`-open path's async guard (ADR 0030): `renderTerminal` awaits an emulator
+  // flush, so between the keypress and the `.then` the user may have navigated to a
+  // different card, pressed `o` again, or opened an unrelated modal. `agentOutputLiveRef`
+  // mirrors the *current* selection and whether any modal is open (refreshed every
+  // render, unlike the handler's own closure which is frozen at keypress time) and
+  // `agentOutputRequestIdRef` is a monotonic counter so only the most recently started
+  // request may still apply its result — an older, superseded, or now-irrelevant
+  // resolution is discarded rather than silently hijacking whatever is on screen by
+  // the time it lands.
+  const agentOutputLiveRef = useRef<{
+    readonly prdId: string | undefined;
+    readonly issueId: string | undefined;
+    readonly modalOpen: boolean;
+  }>({ prdId: undefined, issueId: undefined, modalOpen: false });
+  const agentOutputRequestIdRef = useRef(0);
+  // A refresh (`r`) must land on the *same* agent-output modal it was fired
+  // from — not merely "some modal, for these selected ids, happens to be open"
+  // (`agentOutputLiveRef` above answers the open-path question and is derived
+  // from the live *board selection*, which can drift under a background
+  // re-scan even while this modal's own ids stay fixed; it also goes true for
+  // any other modal, e.g. `v`'s detail view, opened after an Esc/`o` close).
+  // This ref mirrors the agent-output modal's own frozen identity directly —
+  // `undefined` whenever the open modal isn't `agent-output` — so a refresh's
+  // `.then` can check the *actual* still-open modal instead of a proxy for it.
+  const openAgentOutputModalRef = useRef<
+    { readonly prdId: string; readonly issueId: string } | undefined
+  >(undefined);
+
   // Resolve the stored grid coordinate against the live board into the card it
   // selects (ADR 0015). The lane shape — the per-lane card counts — is derived
   // here on the render side and threaded into both the reducer's `move` action
@@ -435,6 +520,17 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   const issueShape = laneShape(issues, ISSUE_LANES);
   const issueSel = selectedCoord(nav.issues, issueShape);
   const selectedIssue = cardAtCoord(issues, ISSUE_LANES, issueSel);
+  // Refreshed every render so the async `o`-open path above can compare "what was
+  // selected/open when the request started" against "what is selected/open now".
+  agentOutputLiveRef.current = {
+    prdId: selectedPrd?.id,
+    issueId: selectedIssue?.id,
+    modalOpen: modal !== undefined,
+  };
+  openAgentOutputModalRef.current =
+    modal?.kind === "agent-output"
+      ? { prdId: modal.prdId, issueId: modal.issueId }
+      : undefined;
   // The lane shape for the level that currently owns input — what a `move`
   // carries so the pure reducer knows the grid's geometry.
   const activeShape = nav.level === "board" ? boardShape : issueShape;
@@ -497,13 +593,14 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   // The agent-output modal's region height and its current scroll window — the
   // raw-output twin of the detail block above, sharing the same `detailScroll`
   // offset and `scrollDetail` primitive so its keypress clamp and the modal's window
-  // can't disagree. The output is raw scrollback windowed line-by-line, never
-  // markdown-rendered or hard-wrapped (a wrap would mangle the agent's own layout),
-  // so the lines come straight off the output split on `\n` — the same split the
-  // modal renders from. Only meaningful while an agent-output modal is open.
+  // can't disagree. The lines are the emulator-resolved screen the `o`-open path
+  // already computed and froze on the modal (ADR 0030) — the render is synchronous,
+  // so it reads the frozen result rather than re-running the (async) emulator flush.
+  // The grid was sized to this same width/height, so what the modal windows matches
+  // what the emulator drew. Only meaningful while an agent-output modal is open.
   const agentOutputRows = Math.max(1, rows - AGENT_OUTPUT_MODAL_CHROME_ROWS);
-  const agentOutputLines =
-    modal?.kind === "agent-output" ? modal.output.output.replace(/\n+$/, "").split("\n") : [];
+  const agentOutputCols = Math.max(1, columns - AGENT_OUTPUT_MODAL_CHROME_COLS);
+  const agentOutputLines = modal?.kind === "agent-output" ? modal.lines : [];
   const agentOutputMaxOffset = scrollDetail(
     agentOutputLines,
     detailScroll,
@@ -540,6 +637,20 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         // A vanished Issue (raced a deletion) yields no preview — open nothing.
         if (preview) {
           setModal({ kind: "review", preview });
+          dispatch({ type: "open-review" });
+        }
+      }
+    },
+    audit: () => {
+      // The manual audit crank, Issue-level only (the registry gates the level
+      // and the `ready-for-audit` eligibility). `readAudit` freezes the Issue and
+      // its PRD context on the modal; a vanished Issue (raced a deletion) yields
+      // no preview — open nothing. Confirm runs the same flip-before-spawn the
+      // Reactor's audit pass does (ADR 0026).
+      if (auditor && selectedPrd && selectedIssue) {
+        const preview = auditor.readAudit(selectedPrd.id, selectedIssue.id);
+        if (preview) {
+          setModal({ kind: "audit", preview });
           dispatch({ type: "open-review" });
         }
       }
@@ -723,17 +834,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
         selectedPrd &&
         selectedIssue?.liveness === "live"
       ) {
-        const output = agentOutputReader.readAgentOutput(selectedPrd.id, selectedIssue.id);
-        if (output) {
-          setDetailScroll(0); // always open at the top, never a stale position
-          setModal({ kind: "agent-output", output });
-        } else {
-          // The card read `live` but readAgentOutput found no recorded handle (the
-          // verdict/sidecar race, or the Issue vanished). Without this notice the
-          // keypress would do nothing at all — indistinguishable from o being
-          // broken — so say plainly there's nothing to read, like Kill.
-          setNotice(`${selectedIssue.id} has no recorded agent to read — re-check the board.`);
-        }
+        // The whole read → emulate → guard → reset-scroll → set-modal sequence lives
+        // in `openAgentOutput`, keyed by the selected card's `(prdId, issueId)`, so
+        // the `o`-open and the upcoming `r` refresh (Issue 002) share one path and
+        // its async guard can never drift between them.
+        openAgentOutput(selectedPrd.id, selectedIssue.id);
       }
     },
     showHelp: () => setShowHelp(true),
@@ -789,15 +894,24 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     // modal's contract: `o` or Esc close it (restoring the prior selection/zoom),
     // `q` closes it and quits. `j`/`k` and the down/up arrows scroll the output,
     // clamped to `[0, agentOutputMaxOffset]` (a snapshot that fits has `maxOffset` 0,
-    // so the keys are inert). Everything else is swallowed. It is a read-only viewer
-    // of a frozen snapshot — nothing to confirm, no tail — so closing is just
-    // clearing the frozen capture; close-and-reopen is the refresh gesture.
+    // so the keys are inert). `r` refreshes the snapshot in place (ADR 0031): it
+    // re-runs the *same* read the open did over the modal's captured source ids and
+    // replaces the screen with the current one (scroll reset to the top) — a manual,
+    // on-demand refresh, not a live tail. Because the modal owns input here (this
+    // branch `return`s before the board keybind registry runs), `r` never collides
+    // with the board-level review binding. Everything else is swallowed.
     if (modal?.kind === "agent-output") {
       if (input === "o" || key.escape) {
         setModal(undefined);
       } else if (input === "q") {
         setModal(undefined);
         exit();
+      } else if (input === "r") {
+        // Reuse the shared open/refresh path verbatim, keyed by the source ids the
+        // modal froze at open — the synchronous `claude logs` read stays synchronous,
+        // no seam is made async, and the async-guard/scroll-reset/modal-set logic is
+        // the same code the `o`-open runs (Issue 002).
+        openAgentOutput(modal.prdId, modal.issueId);
       } else if (input === "j" || key.downArrow) {
         setDetailScroll((o) => Math.min(o + 1, agentOutputMaxOffset));
       } else if (input === "k" || key.upArrow) {
@@ -855,7 +969,129 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     bind?.action(handlers, { input, key });
   });
 
-  /** Act on the frozen modal capture: dispatch a frontier, or review an Issue. */
+  /**
+   * The shared open/refresh path for the agent-output modal, keyed by
+   * `(prdId, issueId)` so it is called from both the `o`-open (`viewAgentOutput`)
+   * and the in-modal `r` refresh (ADR 0031). It resolves that handle's output via
+   * the reader, emulates the raw `claude logs` bytes to a coherent screen (ADR
+   * 0030), applies the `requestId` + `agentOutputLiveRef` async guard, resets the
+   * scroll to the top, and sets the modal — threading the same `(prdId, issueId)`
+   * onto the modal state so a later refresh knows which handle to re-resolve. Lifted
+   * out of the `viewAgentOutput` handler so the async-guard, scroll-reset, and
+   * modal-set logic live in one place and cannot drift between open and refresh.
+   *
+   * The one seam between the two callers is which ref the async guard checks
+   * (`isRefresh` below): an open must resolve onto a still-closed slot for the
+   * live-selected ids (`agentOutputLiveRef`); a refresh must resolve onto the
+   * exact same still-open modal it was fired from (`openAgentOutputModalRef`,
+   * checked directly rather than via the live board selection or a generic
+   * "some modal is open" flag — either of which a background re-scan or an
+   * intervening Esc-then-open-something-else could make land wrongly). The
+   * `claude logs` read stays synchronous for both — the refresh reuses the open
+   * path verbatim, making no seam async and adding no timer.
+   *
+   * A `live` card with no recorded handle (the verdict/sidecar race, or the Issue
+   * vanished) yields no output, which — exactly as Kill does in the same race —
+   * flashes a legible status-line notice rather than doing nothing visible.
+   */
+  function openAgentOutput(prdId: string, issueId: string): void {
+    if (!agentOutputReader) return;
+    // Whether this call is a *refresh* of the already-open agent-output modal (`r`,
+    // ADR 0031) rather than a fresh `o`-open. Read synchronously off the frozen
+    // `modal` at call time — the `r` branch only runs while the agent-output modal is
+    // open, the `o`-open path only while it is closed. It selects which ref the
+    // async guard below checks: an open checks the live-selected ids stayed put and
+    // closed (`agentOutputLiveRef`); a refresh checks this exact modal is still the
+    // one open (`openAgentOutputModalRef`).
+    const isRefresh = modal?.kind === "agent-output";
+    const output = agentOutputReader.readAgentOutput(prdId, issueId);
+    if (!output) {
+      // The card read `live` but readAgentOutput found no recorded handle (the
+      // verdict/sidecar race, or the Issue vanished). Without this notice the
+      // keypress would do nothing at all — indistinguishable from o being
+      // broken — so say plainly there's nothing to read, like Kill.
+      setNotice(`${issueId} has no recorded agent to read — re-check the board.`);
+      // A refresh fires from *inside* the still-open agent-output modal, which
+      // takes over the whole screen and renders ahead of the notice line — so
+      // leaving the modal open here would bury the notice under the untouched,
+      // now-stale snapshot, making the refresh look like a silent no-op.
+      // Closing it surfaces the notice on the board, exactly as the `o`-open's
+      // version of this same race already does (there, no modal is open yet).
+      if (isRefresh) setModal(undefined);
+      return;
+    }
+    // The reader hands back the raw `claude logs` bytes verbatim; the readable
+    // screen is reconstructed by emulating them against a grid sized to the
+    // modal (ADR 0030). `@xterm/headless` flushes on a callback, so this is the
+    // one modal open that must await before it can populate state — hence the
+    // async `.then`. The board keeps rendering meanwhile; the modal appears
+    // once the (bounded, short) flush resolves. `agentOutputCols`/`agentOutputRows`
+    // come from the current window size, the same dimensions the render sizes the
+    // scroll window to, so the emulated grid and the windowed view agree.
+    //
+    // The flush is awaited, so the keypress and the resolution are not the
+    // same instant: the user may navigate away, press `o` again, or open a
+    // different modal in between. `requestId` + `agentOutputLiveRef` (kept
+    // fresh every render, unlike this closure) let the `.then` tell whether
+    // its request is still the relevant one before it ever touches state —
+    // an older, superseded, or now-irrelevant resolution is dropped instead
+    // of silently hijacking whatever is on screen by the time it lands.
+    const requestId = ++agentOutputRequestIdRef.current;
+    // An `o`-open must land on a still-*closed* slot (nothing else grabbed the
+    // screen while the flush was in flight) for the ids that were selected —
+    // `agentOutputLiveRef` (the live board selection) is the right proxy for
+    // that. A refresh must land on the exact *same* agent-output modal it was
+    // fired from — checked directly against `openAgentOutputModalRef`, not
+    // against the live board selection (which can drift under a background
+    // re-scan even though this modal's own ids never move) and not against
+    // "some modal is open" (which would also match a *different* modal, e.g.
+    // detail's `v`, opened after an Esc/`o` closed this one mid-flush). Shared
+    // by both the success and rejection branches below so neither can drift
+    // from the other's notion of "still relevant".
+    const stillRelevant = (): boolean =>
+      agentOutputRequestIdRef.current === requestId &&
+      (isRefresh
+        ? openAgentOutputModalRef.current?.prdId === prdId &&
+          openAgentOutputModalRef.current?.issueId === issueId
+        : agentOutputLiveRef.current.prdId === prdId &&
+          agentOutputLiveRef.current.issueId === issueId &&
+          !agentOutputLiveRef.current.modalOpen);
+    void renderTerminal(output.output, agentOutputCols, agentOutputRows).then(
+      (lines) => {
+        if (!stillRelevant()) return;
+        setDetailScroll(0); // always open at the top, never a stale position
+        setModal({ kind: "agent-output", output, lines: [...lines], prdId, issueId });
+      },
+      () => {
+        // The emulator rejected unexpectedly (e.g. a malformed byte stream
+        // throwing inside the write). On an `o`-open no modal is on screen yet,
+        // so the same legible-notice pattern as the "no recorded agent" race
+        // above is enough to avoid a silent, permanent no-op. On a refresh a
+        // stale snapshot *is* already on screen — a notice alone would leave it
+        // sitting there looking current, and the modal's early-return render
+        // path means the notice would never even become visible — so ADR
+        // 0031's failed-read contract applies here too: replace the screen
+        // with the same "press r to retry" placeholder a `claude logs` failure
+        // would show.
+        if (!stillRelevant()) return;
+        if (isRefresh) {
+          const placeholder = "(agent output could not be rendered — press r to retry)";
+          setDetailScroll(0);
+          setModal({
+            kind: "agent-output",
+            output: { title: output.title, output: placeholder },
+            lines: [placeholder],
+            prdId,
+            issueId,
+          });
+        } else {
+          setNotice(`${issueId} agent output could not be rendered — re-check the board.`);
+        }
+      },
+    );
+  }
+
+  /** Act on the frozen modal capture: dispatch a frontier, review or audit an Issue. */
   function confirmModal(): void {
     if (modal?.kind === "dispatch") {
       // The spawn edge runs synchronously and each `claude --bg` cold-start takes
@@ -890,6 +1126,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
       // An ineligible Issue's preview is a read-only skip notice: confirm spawns
       // nothing, it just dismisses (the reviewer would no-op anyway).
       reviewer?.review(modal.preview);
+    } else if (modal?.kind === "audit" && modal.preview.eligibility.auditable) {
+      // The manual audit crank: confirm flips `ready-for-audit → in-audit` and
+      // spawns the auditor (ADR 0026). An ineligible Issue's preview is a read-only
+      // skip notice — confirm spawns nothing (the auditor would no-op anyway).
+      auditor?.audit(modal.preview);
     } else if (modal?.kind === "redispatch") {
       // Roll the orphan back onto its frontier; the normal spawn edge re-picks
       // it up. No spawn happens here. `rollback` re-reads the Issue from disk, so
@@ -1007,6 +1248,9 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
   if (modal?.kind === "review") {
     return <ReviewPreview preview={modal.preview} />;
   }
+  if (modal?.kind === "audit") {
+    return <AuditPreview preview={modal.preview} />;
+  }
   if (modal?.kind === "redispatch") {
     return <RedispatchPreview preview={modal.preview} />;
   }
@@ -1039,10 +1283,11 @@ export function App({ board, dispatcher, reviewer, rollback, killer, openPr, del
     );
   }
   if (modal?.kind === "agent-output") {
-    // The raw-output view — a full-screen takeover like the detail modal, rendered
+    // The agent-output view — a full-screen takeover like the detail modal, rendered
     // from the frozen capture (read once on open) so a re-scan that removes the card
     // cannot blank it mid-read. Shares the detail modal's scroll offset + primitive,
-    // not its markdown render: agent output is raw scrollback, shown as-is (ADR 0023).
+    // not its markdown render: agent output is the emulator-resolved screen (ADR 0030),
+    // frozen on the modal by the async `o`-open path.
     return (
       <AgentOutputModal
         output={modal.output}

@@ -157,7 +157,7 @@ describe("createDispatcher", () => {
       expect(prompt).toContain("/repos/backend"); // target repo
       expect(prompt).toContain("checkout-flow"); // slugified PRD dir = feature branch
       expect(prompt).toContain("Let a user pay for the items in their cart"); // PRD body
-      expect(prompt).toContain("ready-for-review"); // the completion instruction
+      expect(prompt).toContain("ready-for-audit"); // the completion instruction (ADR 0026)
       expect(prompt).toContain("002-payment-intent.md"); // the Issue file path
     });
 

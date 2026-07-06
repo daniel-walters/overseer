@@ -13,6 +13,15 @@ import { scrollDetail } from "./detailScroll.js";
  */
 export const AGENT_OUTPUT_MODAL_CHROME_ROWS = 8;
 
+/**
+ * The columns the modal spends on horizontal chrome rather than output: the round
+ * border (left + right = 2) and the `paddingX={1}` either side (2). The {@link App}
+ * subtracts this from the terminal width to get the modal's inner width, then sizes
+ * the terminal-emulator grid to it (ADR 0030) so the reconstructed screen fits the
+ * box — the raw-output twin of `DETAIL_MODAL_CHROME_COLS`.
+ */
+export const AGENT_OUTPUT_MODAL_CHROME_COLS = 4;
+
 interface AgentOutputModalProps {
   /** The resolved agent output to display: its Issue title and raw `claude logs` stdout. */
   readonly output: AgentOutput;
@@ -41,23 +50,23 @@ interface AgentOutputModalProps {
  * The full-screen agent-output modal: the selected `live` Issue's recent terminal
  * output, opened by `o` (CONTEXT.md → Agent output, ADR 0023). A sibling of the `v`
  * {@link import("./DetailModal.js").DetailModal} that shares its scroll primitive but
- * **not** its markdown render: agent output is raw terminal scrollback, shown as-is,
- * never run through the marked-terminal renderer (ADR 0014) that would mangle it.
- * Pure presentation — the open/close/scroll keypress handling lives in {@link App},
- * mirroring the detail modal's dismissal contract; this only renders the
- * {@link AgentOutput} a `readAgentOutput` (the output seam) already resolved, windowed
- * at the scroll offset the App tracks.
+ * **not** its markdown render. Pure presentation — the open/close/scroll keypress
+ * handling lives in {@link App}, mirroring the detail modal's dismissal contract, and
+ * so does the bytes→screen transform: the App runs the raw `claude logs` output
+ * through a headless terminal emulator (ADR 0030) and hands this modal the resolved
+ * screen `lines`, exactly as it hands the detail modal its pre-rendered `lines`. This
+ * only windows those supplied lines at the scroll offset the App tracks.
  *
- * The output is split into lines on `\n` and windowed through {@link scrollDetail}:
- * only the slice that fits `viewportRows` renders, and overflow affordances ("more
- * above"/"more below") signal unread content so the user knows to scroll. ANSI in the
- * output passes through as-is (the terminal interprets it), matching what the agent's
- * own terminal shows.
+ * The lines are windowed through {@link scrollDetail}: only the slice that fits
+ * `viewportRows` renders, and overflow affordances ("more above"/"more below") signal
+ * unread content so the user knows to scroll. Because the App already emulated the
+ * TTY-replay bytes into a coherent screen, the cursor-movement escapes and in-place
+ * redraws are gone before they reach this Ink box — no longer fighting its layout.
  *
  * Empty (or whitespace-only) output shows a quiet `(no output yet)` placeholder rather
  * than a blank modal — the agent spawned but has printed nothing yet (mirroring the
- * detail modal's `(no body)`). The dismiss hint reads as a *close/scroll* hint, not a
- * live tail: the output is a frozen snapshot, and close-and-reopen is the refresh.
+ * detail modal's `(no body)`). The hint reads as a *scroll/refresh/close* hint, not a
+ * live tail: the output is a frozen snapshot, and `r` refreshes it in place (ADR 0031).
  */
 export function AgentOutputModal({
   output,
@@ -102,7 +111,7 @@ export function AgentOutputModal({
       </Box>
 
       <Box marginTop={1}>
-        <Text dimColor>j / k / arrows to scroll · o / Esc to close · q to quit</Text>
+        <Text dimColor>j / k / arrows to scroll · r to refresh · o / Esc to close · q to quit</Text>
       </Box>
     </Box>
   );

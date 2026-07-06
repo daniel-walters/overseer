@@ -27,15 +27,20 @@ export type ReadyFor = "human" | "agent";
  * of them; a typo can't silently diverge one copy from another and strand a card
  * in backlog flagged `malformedStatus`.
  *
- * Note the fold the map encodes: `ready-for-human` and `ready-for-agent` both
- * land in the single `ready` lane (distinguished only by the badge), so the
- * eight authored statuses collapse to seven columns.
+ * Note the two folds the map encodes: `ready-for-human` and `ready-for-agent`
+ * both land in the single `ready` lane (distinguished only by the badge), and
+ * `ready-for-audit` (awaiting) and `in-audit` (active) both land in the single
+ * `audit` lane — the active/waiting distinction carried by the liveness overlay,
+ * not a column each (ADR 0026). So the ten authored statuses collapse to eight
+ * columns.
  */
 const STATUS_PLACEMENT = {
   backlog: { lane: "backlog" },
   "ready-for-human": { lane: "ready", readyFor: "human" },
   "ready-for-agent": { lane: "ready", readyFor: "agent" },
   "in-progress": { lane: "in-progress" },
+  "ready-for-audit": { lane: "audit" },
+  "in-audit": { lane: "audit" },
   "ready-for-review": { lane: "ready-for-review" },
   "in-review": { lane: "in-review" },
   "human-review": { lane: "human-review" },
@@ -59,15 +64,18 @@ export type AuthoredStatus = keyof typeof STATUS_PLACEMENT;
 export type Lane = (typeof STATUS_PLACEMENT)[AuthoredStatus]["lane"];
 
 /**
- * The Issue-level lanes in render order, left to right: the seven fixed columns.
+ * The Issue-level lanes in render order, left to right: the eight fixed columns.
  * There is no Unsorted column — a missing/unknown status folds into `backlog`
- * flagged `malformedStatus` (CONTEXT.md, ADR 0003). Used by the PRD-zoom (Issue)
- * kanban.
+ * flagged `malformedStatus` (CONTEXT.md, ADR 0003). The `audit` column sits
+ * between `in-progress` and `ready-for-review`, folding the awaiting
+ * `ready-for-audit` and active `in-audit` statuses (ADR 0026). Used by the
+ * PRD-zoom (Issue) kanban.
  */
 export const ISSUE_LANES: readonly Lane[] = [
   "backlog",
   "ready",
   "in-progress",
+  "audit",
   "ready-for-review",
   "in-review",
   "human-review",
@@ -147,9 +155,12 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
 /**
  * Derive a PRD's board-level **stalled** overlay: `true` iff the PRD has agent
  * work that nobody is coming for — ≥1 unblocked `ready-for-agent` Issue (all its
- * `blocked_by` blockers are `done`) **and** no Issue currently in flight
- * (`in-progress` / `in-review`). It answers "this PRD has dispatchable work but
- * nothing is running" so the board can flag it without zooming in.
+ * `blocked_by` blockers are `done`) **and** no Issue in the audit lane or actively
+ * running (`in-progress` / audit-lane / `in-review`). The `audit` lane suppresses
+ * the flag for both `in-audit` (agent running) and `ready-for-audit` (pending
+ * handoff): work already queued in the audit phase means the pipeline is making
+ * progress, so the PRD is not stalled. It answers "this PRD has dispatchable work but
+ * nothing is running and nothing is queued downstream" so the board can flag it.
  *
  * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdLane},
  * recomputed each scan and never written to `prd.md` (ADR 0002 / 0003). It reads
@@ -160,7 +171,7 @@ export function derivePrdNeedsReview(issues: readonly Issue[]): boolean {
  */
 export function derivePrdStalled(issues: readonly Issue[]): boolean {
   const inFlight = issues.some(
-    (i) => i.lane === "in-progress" || i.lane === "in-review",
+    (i) => i.lane === "in-progress" || i.lane === "audit" || i.lane === "in-review",
   );
   if (inFlight) return false;
   const doneIds = new Set(issues.filter((i) => i.lane === "done").map((i) => i.id));
@@ -172,9 +183,31 @@ export function derivePrdStalled(issues: readonly Issue[]): boolean {
   );
 }
 
+/**
+ * Derive a PRD's board-level **tolerated** overlay: `true` iff ≥1 of its Issues
+ * carries the {@link Issue.tolerated} marker — a `done` Issue that merged with
+ * tolerated findings waved through (review-tolerance PRD, ADR 0027). It rolls the
+ * Issue-level fact up to the PRD card so the board answers "which PRDs carried
+ * tolerated findings?" without zooming.
+ *
+ * Because {@link Issue.tolerated} is set only on a `done` Issue carrying a
+ * non-blank `review_tolerated`, the done-lane gate lives at the Issue level and
+ * this roll-up simply observes it — a `human-review` Issue carrying the field
+ * (audit trail there) never sets `tolerated`, so it can't promote the PRD marker.
+ *
+ * Pure and presence-only like {@link derivePrdNeedsReview} / {@link derivePrdStalled},
+ * recomputed each scan and never written to `prd.md` (ADR 0002 / 0003). Purely
+ * **informational** — unlike needs-review it is never a call to action, so it is
+ * not gated on any session state and co-renders freely with the other markers.
+ */
+export function derivePrdTolerated(issues: readonly Issue[]): boolean {
+  return issues.some((i) => i.tolerated);
+}
+
 /** The lanes that promote a PRD to in-progress (in-progress or later). */
 const IN_PROGRESS_OR_LATER = new Set<Lane>([
   "in-progress",
+  "audit",
   "ready-for-review",
   "in-review",
   "human-review",
@@ -186,6 +219,7 @@ export const LANE_LABELS: Readonly<Record<Lane, string>> = {
   backlog: "Backlog",
   ready: "Ready",
   "in-progress": "In Progress",
+  audit: "Audit",
   "ready-for-review": "Ready for Review",
   "in-review": "In Review",
   "human-review": "Human Review",
@@ -207,11 +241,13 @@ export const HUMAN_REVIEW_REASONS = [
 ] as const;
 
 /**
- * The sole `review_verdict` value (ADR 0019): a review pass found zero findings.
- * The pass agent writes it to the Issue frontmatter and leaves `status:
- * in-review`; Overseer reads it to know the clean merge → `done` resolve may run.
- * It is the one bit Overseer cannot derive — `deviation`, `conflict`, and
- * `non-convergence` it already has from elsewhere — so `clean` is the only value.
+ * The sole `review_verdict` value (ADR 0019): a review pass found no *blocking*
+ * findings (ADR 0027 — tolerable findings may remain and are disclosed via
+ * `review_tolerated`). The pass agent writes it to the Issue frontmatter and
+ * leaves `status: in-review`; Overseer reads it to know the clean merge → `done`
+ * resolve may run. It is the one bit Overseer cannot derive — `deviation`,
+ * `conflict`, and `non-convergence` it already has from elsewhere — so `clean`
+ * is the only value.
  */
 export const REVIEW_VERDICT_CLEAN = "clean";
 
@@ -239,6 +275,18 @@ export const REASON_MARKER: Record<HumanReviewReason, string> = {
   "non-convergence": "↻ non-convergence",
   conflict: "✗ conflict",
 };
+
+/**
+ * The tolerated marker: a `done` Issue (or a PRD rolling one up) that merged with
+ * tolerated findings waved through (ADR 0027). Neutral/cyan `◌` family — a
+ * recorded fact, never a call to action. Lives here beside {@link REASON_MARKER}
+ * for the same reason: two presentation surfaces share it — the card's terse
+ * marker (`Card.tsx`) and the detail view's header heading (`markdown.ts`, above
+ * the free-text `review_tolerated` reason) — so the marker string cannot drift
+ * between them, and the markdown layer reads it without dragging in the React
+ * component. The colour reinforcement stays in the component.
+ */
+export const TOLERATED_MARKER = "◌ tolerated";
 
 /**
  * The liveness overlay on an Issue card: whether the agent Overseer spawned for
@@ -346,11 +394,14 @@ export interface Issue {
    */
   readonly approvable?: boolean;
   /**
-   * The derived liveness overlay, set only on an `in-progress` / `in-review`
-   * card — `live` if its handle is in the registry, `orphaned` if a trustworthy
-   * query shows the handle is gone, `unknown` otherwise. Absent on every other
-   * lane (and when no lookup is wired in), so a never-dispatched card is distinct
-   * from a dead one.
+   * The derived liveness overlay, set only on an active-agent card
+   * (`in-progress` / `in-audit` / `in-review`) — `live` if its handle is in the
+   * registry, `orphaned` if a trustworthy query shows the handle is gone, `unknown`
+   * otherwise. Absent on every other status (and when no lookup is wired in), so a
+   * never-dispatched card is distinct from a dead one. The gate is per-status, not
+   * per-lane: the `audit` lane folds `in-audit` (active, carries liveness) and
+   * `ready-for-audit` (waiting, no liveness) — the overlay is the signal that
+   * distinguishes them on the shared column (ADR 0026).
    */
   readonly liveness?: Liveness;
   /**
@@ -400,6 +451,20 @@ export interface Issue {
    * recomputed on each board open, never written to the Issue file (ADR 0002).
    */
   readonly reviewPass?: number;
+  /**
+   * `true` on a **`done`** Issue whose frontmatter carries a non-blank
+   * `review_tolerated` — a clean-with-tolerated merge that waved tolerable
+   * findings through (review-tolerance PRD, ADR 0027), surfaced as the neutral
+   * "merged with tolerated findings" card marker (the `◌ stalled` family — cyan,
+   * informational, never a call to action). **Gated on the `done` lane**: the same
+   * field on a `human-review` Issue (a deviating Issue whose review converged
+   * clean-with-tolerated) is audit trail there, not a marker, so this is unset on
+   * every non-`done` card. Read straight from the Issue file each scan (the marker
+   * is the rendering of a recorded fact, not a derived overlay), and only `true`
+   * ever stamps the field. Lane-disjoint from the mid-loop `N/cap` review-progress
+   * marker (in-review vs done).
+   */
+  readonly tolerated?: boolean;
 }
 
 export interface PRD {
@@ -452,6 +517,17 @@ export interface PRD {
    * applied at render time where session state is known, not here. Presence-only.
    */
   readonly stalled?: boolean;
+  /**
+   * The tolerated overlay: `true` on a PRD with ≥1 Issue that merged with
+   * tolerated findings ({@link derivePrdTolerated}) — a third Issue→PRD roll-up
+   * alongside {@link needsReview} and {@link stalled}. Set at scan time purely
+   * from the Issues; a derived overlay recomputed each scan and never read from or
+   * written to `prd.md` (ADR 0002 / 0003). Purely **informational** (the neutral
+   * `◌` family, never a call to action), so — unlike {@link stalled} — it needs no
+   * session-state render gate and co-renders freely with the other PRD markers.
+   * Presence-only.
+   */
+  readonly tolerated?: boolean;
 }
 
 export interface Board {

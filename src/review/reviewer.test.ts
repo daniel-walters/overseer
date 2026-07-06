@@ -124,11 +124,13 @@ describe("createReviewer", () => {
       expect(deps.handles[0]?.reviewPass).toBe(3);
     });
 
-    it("escalates to human-review with non-convergence at the cap instead of spawning", () => {
+    it("escalates to human-review at the cap instead of spawning, deviation taking precedence", () => {
       // The cap is Reactor/keybind-enforced from the count (ADR 0018): a manual
       // `r` on an Issue already at the cap (3 passes recorded, cap 3) must NOT
-      // spawn a 4th pass — it escalates to human-review with `non-convergence`,
-      // the same gate the auto path applies.
+      // spawn a 4th pass — it escalates to human-review, the same gate the auto
+      // path applies. The 004 fixture carries an auditor-recorded deviation, so
+      // deviation takes precedence over non-convergence (ADR 0026): the surfaced
+      // reason is `deviation`, never `non-convergence`.
       const deps = recordingDeps({ readReviewPass: () => 3 });
       const reviewer = createReviewer(root, deps);
 
@@ -142,7 +144,31 @@ describe("createReviewer", () => {
         "utf8",
       );
       expect(after).toContain("status: human-review");
+      expect(after).toContain("human_review_reason: deviation");
+      expect(after).not.toContain("human_review_reason: non-convergence");
+    });
+
+    it("escalates a non-deviating Issue to human-review with reason non-convergence at the cap", () => {
+      // Complement to the deviation-precedence test above: an Issue with no
+      // auditor-recorded deviation must still surface non-convergence, not
+      // deviation. Exercises the driveReviewPass → escalateNonConvergence wiring
+      // for the no-deviation branch end-to-end (ADR 0026).
+      const deps = recordingDeps({ readReviewPass: () => 3 });
+      const reviewer = createReviewer(root, deps);
+
+      // 005 has no deviation field — non-convergence is the only possible reason.
+      const preview = reviewer.readReview("checkout-flow", "005-shipping-label.md");
+      if (!preview) throw new Error("expected a preview");
+      reviewer.review(preview);
+
+      expect(deps.spawns).toEqual([]); // no 4th pass
+      const after = readFileSync(
+        join(root, "checkout-flow", "005-shipping-label.md"),
+        "utf8",
+      );
+      expect(after).toContain("status: human-review");
       expect(after).toContain("human_review_reason: non-convergence");
+      expect(after).not.toContain("human_review_reason: deviation");
     });
 
     it("builds a prompt carrying the worktree, branch, feature branch, and PRD body", () => {

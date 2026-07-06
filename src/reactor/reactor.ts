@@ -4,6 +4,8 @@ import { readDispatchView } from "../dispatch/reader.js";
 import { runDispatch, type FailureRecord } from "../dispatch/dispatch.js";
 import { featureBranchName, type GitSeam } from "../dispatch/gitSetup.js";
 import { buildImplementorPrompt } from "../dispatch/implementorPrompt.js";
+import { runAudit } from "../audit/audit.js";
+import { buildAuditorPrompt } from "../audit/auditorPrompt.js";
 import { driveReviewPass } from "../review/review.js";
 import { buildReviewerPrompt } from "../review/reviewerPrompt.js";
 import {
@@ -16,7 +18,11 @@ import {
   DEFAULT_REVIEW_CONFIG,
   type ReviewConfig,
 } from "../review/reviewConfig.js";
-import { DEFAULT_AGENT_CONFIG, type AgentConfig } from "../agentConfig.js";
+import {
+  DEFAULT_AGENT_CONFIG,
+  DEFAULT_AUDITOR_CONFIG,
+  type AgentConfig,
+} from "../agentConfig.js";
 import type { FrontierEntry } from "../dispatch/frontier.js";
 import { enumeratePrdDirs } from "./prds.js";
 import { sweepFrontier, type PrdInput, type SweptPrd } from "./sweep.js";
@@ -33,20 +39,21 @@ import { deriveActivity, type ReactorActivity } from "./reactorActivity.js";
 export type { ReactorActivity } from "./reactorActivity.js";
 
 /**
- * The I/O seams the Reactor injects into both spawn edges — the *same* the
- * dispatcher and reviewer take, so automated and manual (`d`/`r`) spawns use
- * identical validated git/spawn/log machinery (the CLI wires all three from one
- * `createSpawnEdge`). The `git` seam is the implementor edge's branch setup;
- * the reviewer edge needs no git seam (it merges into the existing feature
- * branch itself). The status-writer and prompt builders are not seams here
- * either: they are pure/fs-internal and exercised by their own modules.
+ * The I/O seams the Reactor injects into all three spawn edges — the *same* the
+ * dispatcher, auditor, and reviewer take, so automated and manual (`d`/`c`/`r`)
+ * spawns use identical validated git/spawn/log machinery (the CLI wires them from
+ * one `createSpawnEdge`). The `git` seam is the implementor edge's branch setup;
+ * the audit and reviewer edges need no git seam (the auditor only reads the
+ * worktree; the reviewer merges into the existing feature branch itself). The
+ * status-writer and prompt builders are not seams here either: they are
+ * pure/fs-internal and exercised by their own modules.
  */
 export interface ReactorDeps {
   /** Validate repos and ensure the per-repo PRD feature branch (implementor edge). */
   readonly git: GitSeam;
   /**
-   * Launch an agent (implementor or reviewer) in `repo` with `prompt`, returning
-   * the handle parsed from the launch stdout (or `undefined`); throws on failure.
+   * Launch an agent (implementor, auditor, or reviewer) in `repo` with `prompt`,
+   * returning the handle parsed from the launch stdout (or `undefined`); throws on failure.
    */
   readonly spawn: (
     repo: string,
@@ -95,7 +102,7 @@ export interface ReactorDeps {
    * to run. The CLI injects {@link import("../review/mergeSeam.js").realMergeSeam};
    * the Reactor's resolve tests inject a fake. Optional: when omitted the resolve
    * edge is inert — every verdict-bearing Issue is left `in-review` — which is what
-   * the Reactor's spawn-edge-wiring tests (focused on the two spawn edges) rely on.
+   * the Reactor's spawn-edge-wiring tests (focused on the three spawn edges) rely on.
    */
   readonly merge?: MergeSeam;
   /**
@@ -123,6 +130,15 @@ export interface ReactorDeps {
    * {@link DEFAULT_AGENT_CONFIG} (inherit), as the wiring tests rely on.
    */
   readonly reviewer?: AgentConfig;
+  /**
+   * The auditor agent runtime (model + effort) the audit edge launches at — the
+   * second spawn edge's counterpart to {@link implementor}/{@link reviewer},
+   * sourced from the CLI's `[auditor]` config and shared with the manual `c`
+   * auditor. Optional: omitted ⇒ {@link DEFAULT_AUDITOR_CONFIG} (**model
+   * `sonnet`**, **effort `medium`** — the one edge whose default is a pinned
+   * runtime, not inherit-everything, ADR 0026), as the wiring tests rely on.
+   */
+  readonly auditor?: AgentConfig;
 }
 
 /** The in-process automation the live loop drives after every board rebuild. */
@@ -130,12 +146,12 @@ export interface Reactor {
   /**
    * Sweep every PRD under the root and act on whatever is eligible right now,
    * reading only on-disk status (level-triggered, no diffing): spawn implementors
-   * for unblocked `ready-for-agent` Issues and reviewers for `ready-for-review`
-   * Issues with a recorded repo (the two spawn edges), then — the third,
-   * non-spawn edge (ADR 0019) — resolve every `in-review` Issue carrying
-   * `review_verdict: clean` by merging it into the feature branch and writing
-   * `done`. A no-op while a reconcile is already in flight, or while auto-run is
-   * disabled.
+   * for unblocked `ready-for-agent` Issues, auditors for `ready-for-audit` Issues,
+   * and reviewers for `ready-for-review` Issues with a recorded repo (the three
+   * spawn edges, ADR 0026), then — the fourth, non-spawn edge (ADR 0019) — resolve
+   * every `in-review` Issue carrying `review_verdict: clean` by merging it into the
+   * feature branch and writing `done`. A no-op while a reconcile is already in
+   * flight, or while auto-run is disabled.
    */
   reconcile(): void;
   /**
@@ -160,34 +176,40 @@ export interface Reactor {
 }
 
 /**
- * Build the Reactor: in-process automation that closes the pipeline's two
- * spawn-edge loops plus the resolve edge (ADR 0005 / 0019). On each
+ * Build the Reactor: in-process automation that closes the pipeline's three
+ * spawn-edge loops plus the resolve edge (ADR 0005 / 0019 / 0026). On each
  * {@link Reactor.reconcile} it enumerates
  * every PRD under `root`, reads each PRD's dispatch view, computes the cross-PRD
  * frontier (reusing `computeFrontier` via the sweep), and runs the existing
- * `runDispatch`/`runReview` per PRD — the very spawn edges the `d` and `r`
- * keybinds use, sharing the same `git`/`spawn`/`logFailure` seams.
+ * `runDispatch`/`runAudit`/`runReview` per PRD — the very spawn edges the `d`,
+ * `c`, and `r` keybinds use, sharing the same `git`/`spawn`/`logFailure` seams.
  *
- * Both spawn edges run in one pass:
+ * All three spawn edges run in one pass, in pipeline order:
  *
  * - **Implementor** for any `ready-for-agent` Issue whose blockers are all
  *   `done`. So completing one Issue's `done` unblocks its siblings, and the next
  *   reconcile dispatches them: one `d` cascades through the dependency graph with
  *   no second keypress.
+ * - **Auditor** for any `ready-for-audit` Issue with a recorded repo and worktree
+ *   (ADR 0026). The second spawn edge, between the implementor and reviewer
+ *   frontiers: a fresh-eyes agent compares the diff against the plan and records a
+ *   `deviation` only on a meaningful divergence, then flips the Issue on to
+ *   `ready-for-review`.
  * - **Reviewer** for any `ready-for-review` Issue with a recorded repo. So a
  *   reviewer reaching `done` re-dispatches the newly-unblocked siblings on the
  *   next pass, and any fresh `ready-for-review` Issue gets a reviewer with no `r`
- *   press — the pipeline cascades implement → review → done → re-dispatch
+ *   press — the pipeline cascades implement → audit → review → done → re-dispatch
  *   unattended after a single `d`.
  *
- * These are the two — and only two — spawn edges (CONTEXT.md → Status
- * lifecycle); the Reactor never spawns on an agent-owned transition or a human
- * gate. It sits *beside* `createDispatcher`/`createReviewer`, not on top of
- * them: it reuses only the spawn-edge cores (`runDispatch`/`runReview`),
+ * These are the three — and only three — spawn edges (CONTEXT.md → Status
+ * lifecycle; ADR 0026 reversed the prior two-edge invariant); the Reactor never
+ * spawns on an agent-owned transition or a human gate. It sits *beside*
+ * `createDispatcher`/`createReviewer` (and the `c` auditor), not on top of them:
+ * it reuses only the spawn-edge cores (`runDispatch`/`runAudit`/`runReview`),
  * deliberately not their preview/`lastRead` caching, which is a human-flow
  * concern and a re-entrancy footgun in a sweep.
  *
- * After the two spawn frontiers, a third **non-spawn** edge runs in the same pass
+ * After the three spawn frontiers, a fourth **non-spawn** edge runs in the same pass
  * (ADR 0019): the **resolve** edge merges every `in-review` Issue carrying
  * `review_verdict: clean` into its feature branch and writes `done`
  * (`resolveVerdict` over the injected `merge` seam). It is gated on the verdict,
@@ -195,7 +217,7 @@ export interface Reactor {
  * resolve analogue of flip-before-spawn. A transient (non-conflict) merge failure
  * is *suppressed* — the Issue stays `in-review` and the failure is recorded under
  * a `resolve` edge in the same failed-set the spawn edges use, never escalated to
- * `human-review`. Because it never spawns, the "exactly two **spawn** edges"
+ * `human-review`. Because it never spawns, the "exactly three **spawn** edges"
  * invariant survives literally; it is inert when no `merge` seam is injected.
  *
  * Three invariants keep it safe:
@@ -213,9 +235,10 @@ export interface Reactor {
  *   session-scoped {@link FailedSet} keyed by `(issueKey, edge)`; a transient
  *   merge failure on the resolve edge is recorded the same way under the `resolve`
  *   edge (the Issue stays `in-review`, nothing to roll back). The reconcile
- *   subtracts that set from each swept frontier — on *all three* edges — so a
- *   rolled-back Issue (still `ready-for-agent`/`ready-for-review` on disk) or a
- *   held verdict (still `in-review`) is not re-picked-up and retried forever. The
+ *   subtracts that set from each swept frontier — on *all four* edges — so a
+ *   rolled-back Issue (still `ready-for-agent`/`ready-for-audit`/`ready-for-review`
+ *   on disk) or a held verdict (still `in-review`) is not re-picked-up and retried
+ *   forever. The
  *   set is built per instance, so a fresh board (reopen) retries: a permanent
  *   failure re-attempts at most once per session, logged each time, never routed
  *   to `human-review`. The edge key keeps one failing edge from masking another
@@ -243,6 +266,10 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
   // matching edge, just as `review` is resolved once and shared.
   const implementor = deps.implementor ?? DEFAULT_AGENT_CONFIG;
   const reviewer = deps.reviewer ?? DEFAULT_AGENT_CONFIG;
+  // The auditor edge alone defaults to a pinned `sonnet`/`medium` (ADR 0026)
+  // rather than inheriting, so an unconfigured board still gates plan-conformance
+  // on a known runtime. Resolved once and threaded onto every audit spawn.
+  const auditor = deps.auditor ?? DEFAULT_AUDITOR_CONFIG;
   // Whether the most recent reconcile attempted any spawn — the second input
   // (beside `enabled`) to the board-level activity signal. Starts false so a
   // freshly-opened board with nothing eligible reads `idle` (on, but quiet)
@@ -272,7 +299,7 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
       // is "working" even if that one launch then throws (a failed launch is
       // already surfaced per-card by the suppressed marker — ADR 0011). The
       // counting wrapper sits over `deps.spawn` for the duration of this pass so
-      // every edge (`runDispatch`/`runReview`) is counted through one seam.
+      // every edge (`runDispatch`/`runAudit`/`runReview`) is counted through one seam.
       let spawnedThisReconcile = false;
       const countingDeps: ReactorDeps = {
         ...deps,
@@ -288,11 +315,16 @@ export function createReactor(root: string, deps: ReactorDeps): Reactor {
           // edges can't drift on how it's computed.
           const featureBranch = featureBranchName(basename(swept.prdDir));
           dispatchEligible(swept, featureBranch, countingDeps, failed, implementor);
+          // The audit edge (ADR 0026) sits between the implementor and reviewer
+          // frontiers: an implementor's `ready-for-audit` hand-off is audited
+          // before any reviewer sees it, so the deviation field is written by the
+          // fresh-eyes auditor ahead of review.
+          auditEligible(swept, countingDeps, failed, auditor);
           reviewEligible(swept, countingDeps, failed, review, reviewer);
-          // The third, non-spawn edge (ADR 0019): resolve a clean verdict by
-          // merging → `done`. Runs after the two spawn frontiers, synchronously
+          // The fourth, non-spawn edge (ADR 0019): resolve a clean verdict by
+          // merging → `done`. Runs after the three spawn frontiers, synchronously
           // under the same re-entrancy guard, gated on the verdict the sweep
-          // surfaced — not on a spawn, so "exactly two spawn edges" holds. Inert
+          // surfaced — not on a spawn, so "exactly three spawn edges" holds. Inert
           // when no merge seam is injected. Shares the failed-set so a transient
           // merge failure is suppressed (subtracted from the verdict frontier and
           // logged under the `resolve` edge), exactly as a spawn-launch failure is.
@@ -375,8 +407,54 @@ function dispatchEligible(
 }
 
 /**
+ * Run the `runAudit` spawn edge over one PRD's auditor candidates, minus the
+ * failed-set — the second spawn edge (ADR 0026), sitting between the implementor
+ * and reviewer frontiers. Each candidate is `ready-for-audit` and auditable (the
+ * sweep gated that via the shared `classifyAuditability`); `runAudit` flips it
+ * `ready-for-audit → in-audit` before spawning, so flip-before-spawn is the
+ * idempotency lock here exactly as it is for the other two edges, and rolls back
+ * + logs any post-flip failure under the `audit` edge label.
+ *
+ * The same failed-set suppression wraps this edge: an auditor candidate already
+ * recorded as a failed `audit` spawn this session is skipped (so a rolled-back
+ * `ready-for-audit` Issue is not retried forever), and any new auditor-spawn
+ * failure is recorded under the `audit` edge key. Keyed by full path and by edge,
+ * so it never masks the implementor or reviewer edge for the same Issue.
+ *
+ * No `blocked_by` re-check: blockers already gated the implementor frontier, as
+ * the reviewer edge does not re-check them either. Like the other edges, this
+ * never throws — `runAudit` is total — so an audit-edge failure can't crash the
+ * board or suppress the other PRDs' spawns.
+ */
+function auditEligible(
+  { prdDir, view, auditors }: SweptPrd,
+  deps: ReactorDeps,
+  failed: FailedSet,
+  auditor: AgentConfig,
+): void {
+  for (const issue of auditors) {
+    if (failed.has(issue.path, "audit")) continue; // suppressed this session
+
+    runAudit(issue, {
+      writeStatus,
+      buildPrompt: (auditIssue) =>
+        buildAuditorPrompt({
+          issue: auditIssue,
+          prdTitle: view.prdTitle,
+          prdBody: view.prdBody,
+        }),
+      spawn: deps.spawn,
+      agent: auditor,
+      logFailure: recordingLogFailure(failed, prdDir, deps.logFailure),
+      recordHandle: deps.recordHandle,
+    });
+  }
+}
+
+/**
  * Run the existing `runReview` spawn edge over one PRD's reviewer candidates,
- * minus the failed-set — the second of the two spawn edges. Each candidate is
+ * minus the failed-set — the third and final spawn edge (ADR 0026), running after
+ * the audit frontier. Each candidate is
  * `ready-for-review` and reviewable (the sweep gated that via the shared
  * `classifyReviewability`); `runReview` flips it `ready-for-review → in-review`
  * before spawning, so flip-before-spawn is the idempotency lock here exactly as
@@ -447,7 +525,7 @@ function reviewEligible(
  * writes use the same fs writers the rest of the Reactor does (`writeStatus`,
  * `writeHumanReview`).
  *
- * The same failed-set suppression that wraps the two spawn edges wraps this one
+ * The same failed-set suppression that wraps the three spawn edges wraps this one
  * (ADR 0019):
  *
  * - **Subtract.** Skip any resolve candidate whose `(path, resolve)` is already

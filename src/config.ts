@@ -5,16 +5,26 @@ import { parse } from "smol-toml";
 import { errorMessage } from "./errorMessage.js";
 import {
   DEFAULT_REVIEW_CONFIG,
+  isToleranceLevel,
+  REVIEW_CATEGORIES,
   REVIEW_EFFORTS,
+  type ReviewCategory,
   type ReviewConfig,
   type ReviewEffort,
+  type Tolerance,
+  type ToleranceLevel,
 } from "./review/reviewConfig.js";
 import {
   AGENT_EFFORTS,
   DEFAULT_AGENT_CONFIG,
+  DEFAULT_AUDITOR_CONFIG,
   type AgentConfig,
   type AgentEffort,
 } from "./agentConfig.js";
+import {
+  DEFAULT_ISSUE_STATUS_NAMES,
+  type IssueStatusNames,
+} from "./jira/statusMapping.js";
 
 /** The resolved configuration: one board, one root, the review-loop + agent knobs. */
 export interface Config {
@@ -41,7 +51,44 @@ export interface Config {
    * distinct from `review.effort`, which tunes the `/code-review` skill itself.
    */
   readonly reviewer: AgentConfig;
+  /**
+   * The auditor agent's runtime (model + effort), from `[auditor]`. Always
+   * present, but with a deliberately different default from the other two edges:
+   * absent config resolves to {@link DEFAULT_AUDITOR_CONFIG} (**model `sonnet`**,
+   * **effort `medium`**), so an unconfigured board still gates plan-conformance
+   * on a pinned runtime (ADR 0026). A present `[auditor]` table overrides either
+   * knob.
+   */
+  readonly auditor: AgentConfig;
+  /**
+   * The JIRA mirror's connection + status knobs, from `[jira]` (ADR 0028). Always
+   * present: absent `[jira]` config resolves to {@link DEFAULT_JIRA_CONFIG} (no
+   * default board, conventional status names), so the mirror stays *off by
+   * default* — it activates per-PRD via the authored `jira` block, never by the
+   * config's presence (ADR 0029). acli owns auth, so this table stores no
+   * credential — only the default board and any status-name overrides.
+   */
+  readonly jira: JiraConfig;
 }
+
+/**
+ * The resolved `[jira]` config. `defaultBoard` is the board a `jira`-opted PRD
+ * mirrors to when its block names none (the common case); it is optional because
+ * a PRD may name its own `board`, and a board is only *needed* once a PRD opts in.
+ * `statusNames` is always whole — the {@link IssueStatusNames} defaults filled in
+ * for any name the `[jira.status]` table did not override. It carries all four
+ * buckets (the epic half reads three of them, the Issue half all four), so one
+ * override map serves both.
+ */
+export interface JiraConfig {
+  readonly defaultBoard?: string;
+  readonly statusNames: IssueStatusNames;
+}
+
+/** The mirror's resolved defaults: no board configured, conventional status names. */
+export const DEFAULT_JIRA_CONFIG: JiraConfig = {
+  statusNames: DEFAULT_ISSUE_STATUS_NAMES,
+};
 
 /** Options for {@link loadConfig}; the defaults point at the real environment. */
 export interface LoadConfigOptions {
@@ -111,9 +158,130 @@ export function loadConfig(options: LoadConfigOptions = {}): Config {
   return {
     root,
     review: parseReview(parsed.review, configPath),
-    implementor: parseAgent(parsed.implementor, "implementor", configPath),
-    reviewer: parseAgent(parsed.reviewer, "reviewer", configPath),
+    implementor: parseAgent(
+      parsed.implementor,
+      "implementor",
+      configPath,
+      DEFAULT_AGENT_CONFIG,
+    ),
+    reviewer: parseAgent(
+      parsed.reviewer,
+      "reviewer",
+      configPath,
+      DEFAULT_AGENT_CONFIG,
+    ),
+    // The auditor edge alone defaults to a pinned `sonnet`/`medium` rather than
+    // inheriting (ADR 0026). Threading the default through `parseAgent` keeps one
+    // parser for all three edges — only the fallback differs.
+    auditor: parseAgent(
+      parsed.auditor,
+      "auditor",
+      configPath,
+      DEFAULT_AUDITOR_CONFIG,
+    ),
+    jira: parseJira(parsed.jira, configPath),
   };
+}
+
+/**
+ * Parse the optional `[jira]` table into a complete {@link JiraConfig}, filling
+ * absent knobs from {@link DEFAULT_JIRA_CONFIG} so the result is always whole. An
+ * absent table is the mirror-off default (no board, conventional status names); a
+ * present-but-malformed value is a user-fixable {@link ConfigError}, matching the
+ * rest of the module. acli owns auth, so nothing credential-like is read here.
+ */
+function parseJira(raw: unknown, configPath: string): JiraConfig {
+  if (raw === undefined) return DEFAULT_JIRA_CONFIG;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(
+      `Config at ${configPath} has a "[jira]" that is not a table.`,
+    );
+  }
+  const table = raw as Record<string, unknown>;
+  return {
+    defaultBoard: parseDefaultBoard(table.default_board, configPath),
+    statusNames: parseStatusNames(table.status, configPath),
+  };
+}
+
+/**
+ * A `default_board` is a board id. Absent ⇒ `undefined` (a PRD must then name its
+ * own `board`). A number is coerced to its string form (board ids are numeric, so
+ * `default_board = 42` and `default_board = "42"` mean the same board); any other
+ * type is a user-fixable {@link ConfigError}.
+ */
+function parseDefaultBoard(
+  raw: unknown,
+  configPath: string,
+): string | undefined {
+  if (raw === undefined) return undefined;
+  if (typeof raw === "number" && Number.isFinite(raw)) return String(raw);
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new ConfigError(
+      `Config at ${configPath} has an invalid "jira.default_board": expected a board id string, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw.trim();
+}
+
+/**
+ * Parse the optional `[jira.status]` override table into a complete
+ * {@link IssueStatusNames}, filling each absent name from
+ * {@link DEFAULT_ISSUE_STATUS_NAMES}. The bucket-named keys (`backlog`,
+ * `in-progress`, `in-review`, `done`) map onto the camelCased status fields; a
+ * present name must be a non-blank string or it is a user-fixable
+ * {@link ConfigError}.
+ */
+function parseStatusNames(raw: unknown, configPath: string): IssueStatusNames {
+  if (raw === undefined) return DEFAULT_ISSUE_STATUS_NAMES;
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    throw new ConfigError(
+      `Config at ${configPath} has a "[jira.status]" that is not a table.`,
+    );
+  }
+  const table = raw as Record<string, unknown>;
+  return {
+    backlog: parseStatusName(
+      table.backlog,
+      "backlog",
+      DEFAULT_ISSUE_STATUS_NAMES.backlog,
+      configPath,
+    ),
+    inProgress: parseStatusName(
+      table["in-progress"],
+      "in-progress",
+      DEFAULT_ISSUE_STATUS_NAMES.inProgress,
+      configPath,
+    ),
+    inReview: parseStatusName(
+      table["in-review"],
+      "in-review",
+      DEFAULT_ISSUE_STATUS_NAMES.inReview,
+      configPath,
+    ),
+    done: parseStatusName(
+      table.done,
+      "done",
+      DEFAULT_ISSUE_STATUS_NAMES.done,
+      configPath,
+    ),
+  };
+}
+
+/** A single status-name override: absent ⇒ the default; present ⇒ a non-blank string. */
+function parseStatusName(
+  raw: unknown,
+  key: string,
+  fallback: string,
+  configPath: string,
+): string {
+  if (raw === undefined) return fallback;
+  if (typeof raw !== "string" || raw.trim() === "") {
+    throw new ConfigError(
+      `Config at ${configPath} has an invalid "jira.status.${key}": expected a non-empty status name, got ${JSON.stringify(raw)}.`,
+    );
+  }
+  return raw.trim();
 }
 
 /**
@@ -134,7 +302,35 @@ function parseReview(raw: unknown, configPath: string): ReviewConfig {
   return {
     cap: parseCap(table.cap, configPath),
     effort: parseEffort(table.effort, configPath),
+    tolerance: parseTolerance(table.tolerance),
   };
+}
+
+/**
+ * Resolve the optional `[review.tolerance]` sub-table into a complete
+ * {@link Tolerance} map, filling each absent Category from
+ * {@link DEFAULT_REVIEW_CONFIG}. Unlike the rest of the module, a malformed value
+ * here **never throws**: an unknown Category key is ignored and an out-of-set
+ * Severity falls back to that Category's default (ADR 0027 / user story 19) — a
+ * typo in the tolerance table must not take config loading, and so the board, down.
+ */
+function parseTolerance(raw: unknown): Tolerance {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    // Absent or malformed sub-table: the default policy stands whole.
+    return DEFAULT_REVIEW_CONFIG.tolerance;
+  }
+  const table = raw as Record<string, unknown>;
+  const resolved: Record<ReviewCategory, ToleranceLevel> = {
+    ...DEFAULT_REVIEW_CONFIG.tolerance,
+  };
+  for (const category of REVIEW_CATEGORIES) {
+    const value = table[category];
+    if (typeof value === "string" && isToleranceLevel(value)) {
+      resolved[category] = value;
+    }
+    // Absent or out-of-set: keep this Category's default (never throw).
+  }
+  return resolved;
 }
 
 /** A review cap must be a positive integer; absent falls back to the default. */
@@ -163,19 +359,25 @@ function parseEffort(raw: unknown, configPath: string): ReviewEffort {
 }
 
 /**
- * Parse an optional agent-runtime table (`[implementor]` or `[reviewer]`) into a
- * complete {@link AgentConfig}, filling each absent knob from
- * {@link DEFAULT_AGENT_CONFIG} (`null` ⇒ inherit, pass no flag). An absent table
- * (or absent field) is the pre-knob behaviour; a present-but-malformed value is a
- * user-fixable {@link ConfigError}, matching the rest of the module's style.
- * `table` names which table for error messages (`implementor` / `reviewer`).
+ * Parse an optional agent-runtime table (`[implementor]`, `[reviewer]`, or
+ * `[auditor]`) into a complete {@link AgentConfig}, filling each absent knob from
+ * `defaults` (where `null` ⇒ inherit, pass no flag). An absent table (or absent
+ * field) takes the `defaults`; a present-but-malformed value is a user-fixable
+ * {@link ConfigError}, matching the rest of the module's style. `table` names
+ * which table for error messages (`implementor` / `reviewer` / `auditor`).
+ *
+ * `defaults` is threaded in rather than hardcoded so the auditor edge can default
+ * to a pinned `sonnet`/`medium` while the other two inherit (ADR 0026) — one
+ * parser, two fallbacks. An explicit value in the table always overrides the
+ * default.
  */
 function parseAgent(
   raw: unknown,
   table: string,
   configPath: string,
+  defaults: AgentConfig,
 ): AgentConfig {
-  if (raw === undefined) return DEFAULT_AGENT_CONFIG;
+  if (raw === undefined) return defaults;
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
     throw new ConfigError(
       `Config at ${configPath} has a "[${table}]" that is not a table.`,
@@ -183,18 +385,19 @@ function parseAgent(
   }
   const fields = raw as Record<string, unknown>;
   return {
-    model: parseModel(fields.model, table, configPath),
-    effort: parseAgentEffort(fields.effort, table, configPath),
+    model: parseModel(fields.model, table, configPath, defaults.model),
+    effort: parseAgentEffort(fields.effort, table, configPath, defaults.effort),
   };
 }
 
-/** A model must be a non-empty string if present; absent ⇒ `null` (inherit). */
+/** A model must be a non-empty string if present; absent ⇒ the table's default. */
 function parseModel(
   raw: unknown,
   table: string,
   configPath: string,
+  fallback: string | null,
 ): string | null {
-  if (raw === undefined) return DEFAULT_AGENT_CONFIG.model;
+  if (raw === undefined) return fallback;
   if (typeof raw !== "string" || raw.trim() === "") {
     throw new ConfigError(
       `Config at ${configPath} has an invalid "${table}.model": expected a non-empty string (e.g. "opus", "sonnet"), got ${JSON.stringify(raw)}.`,
@@ -203,13 +406,14 @@ function parseModel(
   return raw.trim();
 }
 
-/** An agent effort must be one of {@link AGENT_EFFORTS}; absent ⇒ `null` (inherit). */
+/** An agent effort must be one of {@link AGENT_EFFORTS}; absent ⇒ the table's default. */
 function parseAgentEffort(
   raw: unknown,
   table: string,
   configPath: string,
+  fallback: AgentEffort | null,
 ): AgentEffort | null {
-  if (raw === undefined) return DEFAULT_AGENT_CONFIG.effort;
+  if (raw === undefined) return fallback;
   if (
     typeof raw !== "string" ||
     !(AGENT_EFFORTS as readonly string[]).includes(raw)

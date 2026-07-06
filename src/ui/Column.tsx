@@ -24,6 +24,11 @@ export interface CardItem {
    */
   readonly stalled?: boolean;
   /**
+   * The tolerated marker, set on a `done` Issue that merged with tolerated findings
+   * and rolled up onto a PRD carrying ≥1 such Issue (ADR 0027). Neutral/informational.
+   */
+  readonly tolerated?: boolean;
+  /**
    * The review-pass count, set only on a *live* `in-review` Issue card (ADR 0018):
    * the numerator of the `N/cap` marker. Paired with the column-level
    * {@link ColumnProps.reviewCap} for the denominator.
@@ -126,6 +131,7 @@ export function Column({
           reviewPass={card.reviewPass}
           reviewCap={reviewCap}
           stalled={card.stalled}
+          tolerated={card.tolerated}
           autoRunOff={autoRunOff}
           selected={card.id === selectedId}
         />

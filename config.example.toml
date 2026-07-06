@@ -14,12 +14,23 @@ root = "~/work/prds"
 # capable model at high effort. The reviewer runs once per pass (and may run up
 # to `review.cap` times), so a faster model at medium effort keeps each pass
 # quick; bump it toward opus/high if you find reviews missing real bugs.
+#
+# The [auditor] is the one exception to inherit-by-default: even when the table
+# (or either field) is omitted, its `model` defaults to "sonnet" and its `effort`
+# to "medium", so the fresh-eyes plan-conformance gate is pinned to a known
+# runtime out of the box. Set the table only to override those defaults.
 
 [implementor]
 model = "opus"
 effort = "high"
 
 [reviewer]
+model = "sonnet"
+effort = "medium"
+
+# Optional — even if this whole table is absent, the auditor defaults to
+# model "sonnet" at "medium" effort.
+[auditor]
 model = "sonnet"
 effort = "medium"
 
@@ -32,3 +43,36 @@ effort = "medium"
 [review]
 cap = 3
 effort = "medium"
+
+# --- JIRA mirror (optional) ---------------------------------------------------
+# Overseer can mirror a PRD into JIRA as a read-only epic for stakeholders (ADR
+# 0028). Mirroring is OFF by default and opted in *per PRD* — add a `jira` block
+# to that PRD's `prd.md`, e.g.:
+#
+#   jira:
+#     board: "42"        # optional; falls back to default_board below
+#     project: "PROJ"    # optional; normally derived from the board
+#
+# A PRD with no `jira` block is invisible to the mirror. acli (already
+# configured on your machine) owns JIRA auth — this table stores no credential.
+#
+# `default_board` is the board a `jira`-opted PRD mirrors to when its block names
+# none. `[jira.status]` renames the statuses the mirror targets, for a JIRA
+# workflow whose columns aren't the conventional names below.
+#
+# There are FOUR status keys, one per bucket the mirror drives cards to. The PRD
+# epic only ever uses three (backlog / in-progress / done); the fourth,
+# `in-review`, applies to child Issues — every review-ish Issue status
+# (ready-for-audit, in-audit, ready-for-review, in-review, human-review) coarsens
+# to it. Override any key whose default name doesn't exist on your board (e.g. a
+# board with a "Code Review" column instead of "In Review"): a transition to a
+# status your workflow lacks is a logged no-op, so the card silently won't move.
+
+[jira]
+default_board = "42"
+
+[jira.status]
+backlog = "To Do"
+"in-progress" = "In Progress"
+"in-review" = "In Review"
+done = "Done"

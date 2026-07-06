@@ -10,6 +10,9 @@ import {
   safeMatter,
   writeStatus,
   writeHumanReview,
+  parseJiraOptIn,
+  writeJiraStory,
+  writeJiraKey,
 } from "./issueFile.js";
 
 describe("safeMatter", () => {
@@ -246,5 +249,194 @@ Body.
     const after = readFileSync(path, "utf8");
     expect(after).toContain("status: human-review");
     expect(after).toContain("swapped the parser library");
+  });
+});
+
+describe("parseJiraOptIn", () => {
+  it("returns undefined when the file carries no jira block (not opted in)", () => {
+    const { data } = safeMatter("---\ntitle: Private\n---\n\nBody.\n");
+    expect(parseJiraOptIn(data)).toBeUndefined();
+  });
+
+  it("reads board and project from a full jira block", () => {
+    const { data } = safeMatter(
+      '---\ntitle: X\njira:\n  board: "42"\n  project: "PROJ"\n---\n',
+    );
+    expect(parseJiraOptIn(data)).toEqual({ board: "42", project: "PROJ" });
+  });
+
+  it("reads a board-only block, leaving project undefined", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42" });
+  });
+
+  it("treats a present-but-empty jira block as opt-in with no fields", () => {
+    // The block's *presence* is the opt-in; an empty one defers board to config.
+    const { data } = safeMatter("---\ntitle: X\njira:\n---\n");
+    expect(parseJiraOptIn(data)).toEqual({});
+  });
+
+  it("coerces a numeric board id to a string", () => {
+    const { data } = safeMatter("---\njira:\n  board: 42\n---\n");
+    expect(parseJiraOptIn(data)).toEqual({ board: "42" });
+  });
+
+  it("drops blank board/project values to undefined", () => {
+    const { data } = safeMatter('---\njira:\n  board: ""\n  project: "  "\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({});
+  });
+
+  it("reads target: sprint from the block", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n  target: sprint\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42", target: "sprint" });
+  });
+
+  it("reads target: backlog from the block", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n  target: backlog\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42", target: "backlog" });
+  });
+
+  it("leaves target undefined when the block omits it (reconciler defaults it)", () => {
+    const { data } = safeMatter('---\njira:\n  board: "42"\n---\n');
+    expect(parseJiraOptIn(data)?.target).toBeUndefined();
+  });
+
+  it("drops an unrecognised target value to undefined", () => {
+    // A hand-edit typo (`target: current`) must never be read as a legal
+    // placement; the reconciler then falls back to its default.
+    const { data } = safeMatter('---\njira:\n  board: "42"\n  target: current\n---\n');
+    expect(parseJiraOptIn(data)).toEqual({ board: "42" });
+  });
+});
+
+describe("writeJiraStory", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "overseer-jira-story-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function file(name: string, contents: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  it("writes the jira_story backref, preserving the jira block and body", () => {
+    const path = file(
+      "prd.md",
+      `---
+title: Auth
+jira:
+  board: "42"
+---
+
+The plan.
+`,
+    );
+
+    writeJiraStory(path, "PROJ-100");
+
+    const after = readFileSync(path, "utf8");
+    expect(after).toContain("jira_story: PROJ-100");
+    expect(after).toContain("title: Auth");
+    // The opt-in block survives the write-back.
+    expect(after).toContain("board:");
+    expect(after).toContain("The plan.");
+    // Reading it back yields the key we wrote.
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraStory)).toBe(
+      "PROJ-100",
+    );
+  });
+
+  it("overwrites an existing jira_story value rather than adding a second", () => {
+    const path = file(
+      "prd.md",
+      `---
+title: Auth
+jira_story: PROJ-1
+---
+
+Body.
+`,
+    );
+
+    writeJiraStory(path, "PROJ-2");
+
+    const after = readFileSync(path, "utf8");
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraStory)).toBe(
+      "PROJ-2",
+    );
+    // Exactly one jira_story key.
+    expect(after.match(/jira_story/g)).toHaveLength(1);
+  });
+});
+
+describe("writeJiraKey", () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "overseer-jira-key-"));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  function file(name: string, contents: string): string {
+    const path = join(dir, name);
+    writeFileSync(path, contents);
+    return path;
+  }
+
+  it("writes the jira_key backref onto an Issue, preserving status, other keys, and body", () => {
+    const path = file(
+      "001-auth.md",
+      `---
+title: Login form
+status: in-progress
+blocked_by:
+  - 000-schema.md
+---
+
+The human-readable plan prose.
+`,
+    );
+
+    writeJiraKey(path, "DS-101");
+
+    const after = readFileSync(path, "utf8");
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraKey)).toBe(
+      "DS-101",
+    );
+    // The Issue's own content is untouched — the backref is the mirror's only reach.
+    expect(after).toContain("status: in-progress");
+    expect(after).toContain("title: Login form");
+    expect(after).toContain("000-schema.md");
+    expect(after).toContain("The human-readable plan prose.");
+  });
+
+  it("overwrites an existing jira_key value rather than adding a second", () => {
+    const path = file(
+      "001-auth.md",
+      `---
+title: Login form
+status: done
+jira_key: DS-1
+---
+
+Body.
+`,
+    );
+
+    writeJiraKey(path, "DS-2");
+
+    const after = readFileSync(path, "utf8");
+    expect(readPresentString(safeMatter(after).data, FIELD.jiraKey)).toBe("DS-2");
+    expect(after.match(/jira_key/g)).toHaveLength(1);
   });
 });

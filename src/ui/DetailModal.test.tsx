@@ -233,4 +233,75 @@ describe("DetailModal", () => {
       expect(bottomFrame).not.toContain("NOTELINE0"); // the note's start scrolled off
     });
   });
+
+  describe("tolerated header", () => {
+    it("renders the tolerated marker and the waved-through reason above the body", () => {
+      // The whole point of the fix: viewing a merged-with-tolerated Issue shows
+      // *what* was tolerated, not just the board's presence-only marker.
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{
+            title: "Shipping label",
+            body: "The Issue body proper.",
+            reviewTolerated: "style:low — two unaddressed lint nits in the label formatter",
+          }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      // The marker word matches the card's `◌ tolerated` marker.
+      expect(frame).toContain("tolerated");
+      // The reason text — what was waved through — renders in full.
+      expect(frame).toContain("two unaddressed lint nits");
+      // The body still renders beneath the header.
+      expect(frame).toContain("The Issue body proper.");
+    });
+
+    it("renders no tolerated header for a card without a reviewTolerated field", () => {
+      const { lastFrame } = render(
+        <DetailModal detail={{ title: "Plain", body: "Just the body." }} />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      expect(frame).toContain("Just the body.");
+      expect(frame).not.toContain("tolerated");
+    });
+
+    it("renders both headers when an Issue carries an escalation and tolerated findings", () => {
+      // A human-review Issue whose review converged clean-with-tolerated carries
+      // both: the escalation reads first, the tolerated audit trail beneath it.
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{
+            title: "T",
+            body: "REAL_BODY_TEXT",
+            humanReviewReason: "deviation",
+            humanReviewNote: "strayed from the planned approach",
+            reviewTolerated: "style:low — a nit left in",
+          }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      expect(frame).toContain("deviation"); // escalation header
+      expect(frame).toContain("strayed from the planned approach");
+      expect(frame).toContain("tolerated"); // tolerated header
+      expect(frame).toContain("a nit left in");
+      expect(frame).toContain("REAL_BODY_TEXT"); // body beneath both
+    });
+
+    it("renders the tolerated reason verbatim, not reinterpreted as markdown", () => {
+      // The reason quotes reviewer/agent output with markdown metacharacters — it
+      // must read literally and not collide with the header/body --- separator.
+      const { lastFrame } = render(
+        <DetailModal
+          detail={{
+            title: "T",
+            body: "REAL_BODY_TEXT",
+            reviewTolerated: "left as-is\n---\n# NIT\n```\ndiff\n```",
+          }}
+        />,
+      );
+      const frame = stripAnsi(lastFrame() ?? "");
+      expect(frame).toContain("# NIT");
+      expect(frame).toContain("REAL_BODY_TEXT");
+    });
+  });
 });

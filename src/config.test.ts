@@ -156,6 +156,79 @@ describe("loadConfig", () => {
     });
   });
 
+  describe("tolerance policy", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("resolves the default policy (style/docs low, rest none) when no table is present", () => {
+      writeFileSync(configPath, 'root = "~"\n');
+
+      expect(loadConfig({ configPath, home }).review.tolerance).toEqual({
+        correctness: "none",
+        security: "none",
+        architecture: "none",
+        style: "low",
+        test: "none",
+        docs: "low",
+      });
+    });
+
+    it("resolves the configured per-Category thresholds from a [review.tolerance] table", () => {
+      writeWithRoot(
+        '[review.tolerance]\nstyle = "medium"\ndocs = "high"\narchitecture = "low"\n',
+      );
+
+      expect(loadConfig({ configPath, home }).review.tolerance).toEqual({
+        correctness: "none",
+        security: "none",
+        architecture: "low",
+        style: "medium",
+        test: "none",
+        docs: "high",
+      });
+    });
+
+    it("reproduces today's behaviour byte-for-byte with an all-none config", () => {
+      writeWithRoot(
+        '[review.tolerance]\ncorrectness = "none"\nsecurity = "none"\narchitecture = "none"\nstyle = "none"\ntest = "none"\ndocs = "none"\n',
+      );
+
+      const { tolerance } = loadConfig({ configPath, home }).review;
+
+      expect(Object.values(tolerance).every((v) => v === "none")).toBe(true);
+    });
+
+    it("falls back to the default for an out-of-set Severity without throwing", () => {
+      writeWithRoot('[review.tolerance]\nstyle = "extreme"\ndocs = "high"\n');
+
+      const { tolerance } = loadConfig({ configPath, home }).review;
+
+      // The bad value reverts to that Category's default; the good one applies.
+      expect(tolerance.style).toBe("low");
+      expect(tolerance.docs).toBe("high");
+    });
+
+    it("ignores an unknown Category key without throwing", () => {
+      writeWithRoot('[review.tolerance]\nperformance = "high"\nstyle = "medium"\n');
+
+      const { tolerance } = loadConfig({ configPath, home }).review;
+
+      expect(tolerance).not.toHaveProperty("performance");
+      expect(tolerance.style).toBe("medium");
+    });
+
+    it("does not throw when the tolerance value is the wrong type", () => {
+      writeWithRoot("[review.tolerance]\nstyle = 3\n");
+
+      expect(() => loadConfig({ configPath, home })).not.toThrow();
+      expect(loadConfig({ configPath, home }).review.tolerance.style).toBe(
+        "low",
+      );
+    });
+  });
+
   describe("agent runtime knobs", () => {
     /** Write a valid root plus the given extra TOML body. */
     function writeWithRoot(extra: string): void {
@@ -225,6 +298,150 @@ describe("loadConfig", () => {
       expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
       // The message lists the session-effort vocabulary, including xhigh/max.
       expect(() => loadConfig({ configPath, home })).toThrow(/xhigh/i);
+    });
+  });
+
+  describe("jira mirror config", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults to no board and the conventional status names when [jira] is absent", () => {
+      writeFileSync(configPath, 'root = "~"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.jira.defaultBoard).toBeUndefined();
+      expect(config.jira.statusNames).toEqual({
+        backlog: "To Do",
+        inProgress: "In Progress",
+        inReview: "In Review",
+        done: "Done",
+      });
+    });
+
+    it("reads default_board from the [jira] table", () => {
+      writeWithRoot('[jira]\ndefault_board = "42"\n');
+
+      expect(loadConfig({ configPath, home }).jira.defaultBoard).toBe("42");
+    });
+
+    it("coerces a numeric default_board to a string board id", () => {
+      writeWithRoot("[jira]\ndefault_board = 42\n");
+
+      expect(loadConfig({ configPath, home }).jira.defaultBoard).toBe("42");
+    });
+
+    it("overrides individual status names from [jira.status], keeping defaults for the rest", () => {
+      writeWithRoot('[jira.status]\ndone = "Shipped"\n');
+
+      const config = loadConfig({ configPath, home });
+
+      expect(config.jira.statusNames).toEqual({
+        backlog: "To Do",
+        inProgress: "In Progress",
+        inReview: "In Review",
+        done: "Shipped",
+      });
+    });
+
+    it("overrides the in-progress name via the hyphenated [jira.status] key", () => {
+      writeWithRoot('[jira.status]\n"in-progress" = "Doing"\n');
+
+      expect(loadConfig({ configPath, home }).jira.statusNames.inProgress).toBe(
+        "Doing",
+      );
+    });
+
+    it("overrides the in-review name via the hyphenated [jira.status] key", () => {
+      writeWithRoot('[jira.status]\n"in-review" = "Reviewing"\n');
+
+      expect(loadConfig({ configPath, home }).jira.statusNames.inReview).toBe(
+        "Reviewing",
+      );
+    });
+
+    it("throws a ConfigError naming the table when [jira] is not a table", () => {
+      writeWithRoot('jira = "yes"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/jira/i);
+    });
+
+    it("throws a ConfigError for a blank status-name override", () => {
+      writeWithRoot('[jira.status]\ndone = ""\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/done/i);
+    });
+  });
+
+  describe("auditor runtime knobs", () => {
+    /** Write a valid root plus the given extra TOML body. */
+    function writeWithRoot(extra: string): void {
+      writeFileSync(configPath, `root = "~"\n${extra}`);
+    }
+
+    it("defaults the auditor to model sonnet and effort medium when the table is absent", () => {
+      // The auditor defaults to a pinned `sonnet`/`medium` — the deliberate
+      // divergence from the inherit-by-default of the other two edges (ADR 0026),
+      // so the gate against silent scope drift runs on a known runtime even on an
+      // unconfigured board.
+      writeFileSync(configPath, 'root = "~"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "sonnet",
+        effort: "medium",
+      });
+    });
+
+    it("reads model and effort from the [auditor] table when present", () => {
+      writeWithRoot('[auditor]\nmodel = "sonnet"\neffort = "high"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "sonnet",
+        effort: "high",
+      });
+    });
+
+    it("keeps the sonnet model default when only effort is set", () => {
+      writeWithRoot('[auditor]\neffort = "max"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "sonnet",
+        effort: "max",
+      });
+    });
+
+    it("overrides the model default when only the model is set, keeping the medium effort default", () => {
+      writeWithRoot('[auditor]\nmodel = "haiku"\n');
+
+      expect(loadConfig({ configPath, home }).auditor).toEqual({
+        model: "haiku",
+        effort: "medium",
+      });
+    });
+
+    it("throws a ConfigError naming the table for a non-table value", () => {
+      writeWithRoot('auditor = "opus"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/auditor/i);
+    });
+
+    it("throws a ConfigError for an empty model string", () => {
+      writeWithRoot('[auditor]\nmodel = ""\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/model/i);
+    });
+
+    it("throws a ConfigError naming the allowed values for an unknown effort", () => {
+      writeWithRoot('[auditor]\neffort = "extreme"\n');
+
+      expect(() => loadConfig({ configPath, home })).toThrow(ConfigError);
+      expect(() => loadConfig({ configPath, home })).toThrow(/effort/i);
     });
   });
 });

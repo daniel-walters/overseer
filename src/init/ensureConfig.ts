@@ -6,15 +6,17 @@ import { expandHome } from "../config.js";
 /**
  * Render the contents of a freshly-bootstrapped `config.toml` for the given
  * `root`. Beyond the required `root`, this ships the recommended Agent-runtime
- * split (`[implementor]` opus/high, `[reviewer]` sonnet/medium) and the review
- * loop (`[review]` cap 3, medium) so a first-time board is tuned out of the box
- * instead of leaving every knob at the inherit-the-launcher default — the user
- * no longer has to hand-add these tables after `overseer init`.
+ * split (`[implementor]` opus/high, `[reviewer]` sonnet/medium, `[auditor]`
+ * sonnet/medium) and the review loop (`[review]` cap 3, medium) so a first-time
+ * board is tuned out of the box instead of leaving every knob at the
+ * inherit-the-launcher default — the user no longer has to hand-add these
+ * tables after `overseer init`.
  *
  * Kept in lock-step with `config.example.toml`, which documents the same tables
  * as the copy-this reference. Note this only affects the *written file*: the
- * code-level default for an absent table remains "inherit" (see ADR 0020), so a
- * board that deletes a table still behaves exactly as before.
+ * code-level default for an absent table remains "inherit" (see ADR 0020) —
+ * except `[auditor]`, whose absent default is a pinned sonnet/medium (ADR 0026),
+ * so a board that deletes a table still behaves exactly as before.
  */
 export function defaultConfigContents(root: string): string {
   return `# Overseer config. \`root\` is the directory that holds your PRD folders.
@@ -38,6 +40,15 @@ model = "opus"
 effort = "high"
 
 [reviewer]
+model = "sonnet"
+effort = "medium"
+
+# The fresh-eyes plan-conformance auditor. Unlike the tables above, [auditor] is
+# NOT inherit-by-default: even if this table (or either field) is omitted it
+# defaults to sonnet/medium, so the gate is always pinned to a known runtime.
+# It's written out anyway to surface the knob — edit or delete it freely.
+
+[auditor]
 model = "sonnet"
 effort = "medium"
 

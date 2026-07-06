@@ -4,6 +4,7 @@ import {
   derivePrdLane,
   derivePrdNeedsReview,
   derivePrdStalled,
+  derivePrdTolerated,
   ISSUE_LANES,
   type Lane,
   type Issue,
@@ -54,6 +55,14 @@ describe("placeStatus", () => {
     expect(placeStatus("ready-for-agent")).toEqual({ lane: "ready", readyFor: "agent" });
   });
 
+  it("folds both audit-phase statuses into the single audit lane with no badge", () => {
+    // `ready-for-audit` (awaiting) and `in-audit` (active) collapse to one `audit`
+    // column; the active/waiting distinction is carried by the liveness overlay,
+    // not a second column (ADR 0026).
+    expect(placeStatus("ready-for-audit")).toEqual({ lane: "audit" });
+    expect(placeStatus("in-audit")).toEqual({ lane: "audit" });
+  });
+
   it("returns undefined for an unrecognised, empty, or non-string status", () => {
     expect(placeStatus("nonsense")).toBeUndefined();
     expect(placeStatus("")).toBeUndefined();
@@ -84,6 +93,8 @@ describe("placeStatus", () => {
       "ready-for-human",
       "ready-for-agent",
       "in-progress",
+      "ready-for-audit",
+      "in-audit",
       "ready-for-review",
       "in-review",
       "human-review",
@@ -106,8 +117,11 @@ describe("derivePrdLane", () => {
   });
 
   it("derives in-progress when any Issue is in-progress or later", () => {
+    // `audit` covers both ready-for-audit and in-audit (they fold to one lane): a
+    // PRD with an Issue in the audit phase reads as work-underway (ADR 0026).
     for (const lane of [
       "in-progress",
+      "audit",
       "ready-for-review",
       "in-review",
       "human-review",
@@ -179,6 +193,9 @@ describe("derivePrdStalled", () => {
   it("is false when an Issue is in flight, even with agent work waiting", () => {
     expect(derivePrdStalled([readyForAgent("001.md"), issue("in-progress")])).toBe(false);
     expect(derivePrdStalled([readyForAgent("001.md"), issue("in-review")])).toBe(false);
+    // `audit` lane covers both in-audit (active) and ready-for-audit (awaiting):
+    // either way work is in-flight or pending handoff, so the PRD is not stalled.
+    expect(derivePrdStalled([readyForAgent("001.md"), issue("audit")])).toBe(false);
   });
 
   it("is false when the ready-for-agent Issue is still blocked", () => {
@@ -205,5 +222,30 @@ describe("derivePrdStalled", () => {
   it("is false for a PRD with no waiting agent work", () => {
     expect(derivePrdStalled([])).toBe(false);
     expect(derivePrdStalled([issue("backlog"), issue("done")])).toBe(false);
+  });
+});
+
+/** A `done` Issue that merged with tolerated findings (carries the marker). */
+function toleratedIssue(id = "tolerated.md"): Issue {
+  return { id, title: id, lane: "done", tolerated: true };
+}
+
+/**
+ * The board-level tolerated roll-up: a PRD reads as carrying tolerated findings
+ * iff ≥1 of its Issues carries the `tolerated` marker (a `done` Issue that merged
+ * with tolerated findings — ADR 0027). A derived overlay, presence-only, computed
+ * from the Issues each scan and never written to `prd.md`.
+ */
+describe("derivePrdTolerated", () => {
+  it("is true when at least one Issue merged with tolerated findings", () => {
+    expect(derivePrdTolerated([issue("done"), toleratedIssue()])).toBe(true);
+  });
+
+  it("is false when no Issue carries the tolerated marker", () => {
+    expect(derivePrdTolerated([issue("done"), issue("in-progress")])).toBe(false);
+  });
+
+  it("is false for an empty PRD", () => {
+    expect(derivePrdTolerated([])).toBe(false);
   });
 });

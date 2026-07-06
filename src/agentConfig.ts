@@ -50,6 +50,19 @@ export interface AgentConfig {
 export const DEFAULT_AGENT_CONFIG: AgentConfig = { model: null, effort: null };
 
 /**
+ * The auditor edge's default runtime: model `sonnet`, effort `medium`. The one
+ * intentional asymmetry from {@link DEFAULT_AGENT_CONFIG}'s inherit-everything
+ * (ADR 0026) — a fresh-eyes plan-conformance gate is only worth having if it is
+ * pinned, so the auditor names an explicit model and effort by default even on a
+ * board that configures no `[auditor]` table, rather than inheriting whatever the
+ * launcher happens to run. An `[auditor]` table overrides either knob.
+ */
+export const DEFAULT_AUDITOR_CONFIG: AgentConfig = {
+  model: "sonnet",
+  effort: "medium",
+};
+
+/**
  * Build the `claude` CLI flag pair for an agent runtime: `--model <m>` and/or
  * `--effort <e>`, each emitted only when its value is set. A `null`/absent value
  * (or absent config) yields no flag for that knob, so the spawn inherits the
@@ -58,7 +71,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = { model: null, effort: null };
  */
 export function agentFlags(agent?: AgentConfig): string[] {
   const flags: string[] = [];
-  if (agent?.model) flags.push("--model", agent.model);
-  if (agent?.effort) flags.push("--effort", agent.effort);
+  if (agent?.model != null) flags.push("--model", agent.model);
+  if (agent?.effort != null) flags.push("--effort", agent.effort);
   return flags;
 }

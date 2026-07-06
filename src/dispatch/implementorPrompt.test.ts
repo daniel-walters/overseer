@@ -14,6 +14,7 @@ const issue: DispatchIssue = {
   reviewVerdict: undefined,
   slice: undefined,
   reviewFindings: undefined,
+  reviewTolerated: undefined,
   body: "Hash passwords with argon2id before persisting them.\n\n## AC\n- [ ] argon2id used",
   path: "/root/auth-system/001-password-hashing.md",
 };
@@ -77,23 +78,55 @@ describe("buildImplementorPrompt", () => {
     expect(prompt).toContain("overseer-tdd");
   });
 
+  it("instructs the agent to read and follow the repo's CLAUDE.md and use its skills", () => {
+    // Assert over the static template (empty Issue/PRD) so following the target
+    // repo's own CLAUDE.md and `.claude/skills/` is a property of the prompt
+    // itself — not something a caller-supplied body happened to mention. This is
+    // what stops a bare `claude --bg` implementor from ignoring repo-specific
+    // conventions that are loaded but not otherwise prioritised.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
+    });
+    expect(prompt).toContain("CLAUDE.md");
+    expect(prompt.toLowerCase()).toContain(".claude/skills");
+  });
+
   it("instructs the agent to commit to the worktree with no PR", () => {
     const prompt = build().toLowerCase();
     expect(prompt).toContain("commit");
     expect(prompt).toMatch(/no pull request|no pr|do not open a (pull request|pr)/);
   });
 
-  it("instructs the agent to park the Issue at ready-for-review on completion", () => {
+  it("instructs the agent to park the Issue at ready-for-audit on completion", () => {
+    // The implementor now hands off to the auditor, not the reviewer (ADR 0026):
+    // it flips to `ready-for-audit`, the awaiting half of the new audit spawn edge.
     const prompt = build();
-    expect(prompt).toContain("ready-for-review");
+    expect(prompt).toContain("ready-for-audit");
     // and to write that status into the Issue file in the Overseer root.
     expect(prompt).toContain(issue.path);
   });
 
+  it("does NOT instruct the agent to park at ready-for-review (that's now the auditor's flip)", () => {
+    // The implementor stops one step earlier than before: it parks at
+    // ready-for-audit, and the auditor flips in-audit → ready-for-review. Assert
+    // over the static template only, since caller-supplied bodies may mention it.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
+    });
+    expect(prompt).not.toContain("ready-for-review");
+  });
+
   it("does NOT instruct the agent to write in-review (that's the reviewer's flip)", () => {
-    // The implementor now stops one step earlier: it parks at ready-for-review,
-    // and the review trigger flips ready-for-review → in-review. Assert over the
-    // static template only, since caller-supplied bodies may mention in-review.
+    // Assert over the static template only, since caller-supplied bodies may
+    // mention in-review.
     const prompt = buildImplementorPrompt({
       issue: { ...issue, body: "", title: "" },
       prdTitle: "",
@@ -110,10 +143,19 @@ describe("buildImplementorPrompt", () => {
     expect(prompt).toContain("branch");
   });
 
-  it("instructs recording a deviation field only if it strayed from the plan", () => {
-    const prompt = build().toLowerCase();
-    expect(prompt).toContain("deviation");
-    expect(prompt).toMatch(/only if|iff|when you stray|if you stray/);
+  it("does NOT instruct the agent to record a deviation field (the auditor owns that now)", () => {
+    // There is now exactly one writer of the `deviation` field — the auditor, a
+    // fresh-eyes agent — so the implementor must not grade its own homework (ADR
+    // 0026). Assert over the static template only, since caller-supplied bodies may
+    // legitimately mention the word.
+    const prompt = buildImplementorPrompt({
+      issue: { ...issue, body: "", title: "" },
+      prdTitle: "",
+      prdBody: "",
+      repo: context.repo,
+      featureBranch: context.featureBranch,
+    });
+    expect(prompt.toLowerCase()).not.toContain("deviation");
   });
 
   it("does NOT instruct the agent to set in-progress (the dispatcher already did)", () => {

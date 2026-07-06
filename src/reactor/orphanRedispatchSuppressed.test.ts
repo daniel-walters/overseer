@@ -120,6 +120,37 @@ describe("orphan re-dispatch that fails to launch surfaces the suppressed marker
     expect(issue.suppressed).toBe(true);
   });
 
+  it("an orphaned in-audit Issue, rolled back then failing to relaunch, carries the marker on the audit edge", () => {
+    // The audit-edge twin (ADR 0026): an in-audit orphan rolls back to
+    // ready-for-audit and its failed auditor relaunch suppresses the audit edge.
+    // The auditor needs the recorded worktree the implementor left, so the orphan
+    // carries one (an in-audit Issue always does).
+    writePrd("alpha", {
+      "001-aud.md": fm({
+        status: "in-audit",
+        repo: "/repos/alpha",
+        worktree: "/wt/x",
+      }),
+    });
+    const file = join(root, "alpha", "001-aud.md");
+
+    const failedSet = createFailedSet();
+
+    const rollback = createRollback(root);
+    const preview = rollback.readRollback("alpha", "001-aud.md");
+    if (!preview) throw new Error("expected a re-dispatch preview");
+    expect(rollback.rollback(preview)).toBe("rolled-back");
+    expect(readFileSync(file, "utf8")).toContain("status: ready-for-audit");
+
+    createReactor(root, failingReactorDeps(failedSet)).reconcile();
+    expect(readFileSync(file, "utf8")).toContain("status: ready-for-audit");
+    expect(failedSet.has(file, "audit")).toBe(true);
+
+    const board = scanBoard(root, undefined, suppressedSeam(failedSet));
+    const issue = issueById(prdIssues(board, "alpha"), "001-aud.md");
+    expect(issue.suppressed).toBe(true);
+  });
+
   it("an orphaned in-review Issue, rolled back then failing to relaunch, carries the marker on the reviewer edge", () => {
     // The review-edge twin: an in-review orphan rolls back to ready-for-review and
     // its failed reviewer relaunch suppresses the reviewer edge.

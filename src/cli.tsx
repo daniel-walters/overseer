@@ -6,7 +6,9 @@ import { realpathSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { loadConfig, ConfigError } from "./config.js";
 import type { ReviewConfig } from "./review/reviewConfig.js";
+import type { JiraConfig } from "./config.js";
 import type { AgentConfig } from "./agentConfig.js";
+import { realMirrorReconciler } from "./jira/mirrorReconciler.js";
 import { scanBoard } from "./scanner.js";
 import { watchRoot } from "./watcher.js";
 import { LiveApp } from "./ui/LiveApp.js";
@@ -15,6 +17,7 @@ import { createDetailReader } from "./ui/detailReader.js";
 import { createAgentOutputReader, realLogs } from "./ui/agentOutputReader.js";
 import { createDispatcher } from "./dispatch/dispatcher.js";
 import { createReviewer } from "./review/reviewer.js";
+import { createAuditor } from "./audit/auditor.js";
 import { createRollback } from "./dispatch/rollback.js";
 import { createKiller, realStop } from "./dispatch/kill.js";
 import { createReactor } from "./reactor/reactor.js";
@@ -22,6 +25,7 @@ import { createFailedSet, suppressedSeam } from "./reactor/failedSet.js";
 import { realGitSeam } from "./dispatch/gitSetup.js";
 import { realMergeSeam } from "./review/mergeSeam.js";
 import { createSpawnEdge, realExec, defaultLogPath } from "./dispatch/spawn.js";
+import { appendSpawnAudit, defaultSpawnAuditPath } from "./dispatch/spawnAudit.js";
 import { createAgentSidecar, defaultSidecarPath } from "./dispatch/agentSidecar.js";
 import {
   createLivenessProbe,
@@ -64,12 +68,16 @@ function runBoard(): void {
   let review: ReviewConfig;
   let implementorAgent: AgentConfig;
   let reviewerAgent: AgentConfig;
+  let auditorAgent: AgentConfig;
+  let jira: JiraConfig;
   try {
     const config = loadConfig();
     root = config.root;
     review = config.review;
     implementorAgent = config.implementor;
     reviewerAgent = config.reviewer;
+    auditorAgent = config.auditor;
+    jira = config.jira;
   } catch (err) {
     if (err instanceof ConfigError) {
       fail(err.message);
@@ -80,10 +88,29 @@ function runBoard(): void {
   // The real spawn edge: confirming a dispatch validates each repo, ensures the
   // PRD feature branch, flips Issues to in-progress (driving the live board),
   // and launches a background `claude --bg` agent per spawn candidate.
-  const { spawn, logFailure } = createSpawnEdge({
+  const { spawn: rawSpawn, logFailure } = createSpawnEdge({
     exec: realExec,
     logPath: defaultLogPath(),
   });
+  // Wrap the one shared spawn seam every launch flows through — the Reactor's
+  // auto-spawns and the manual `d`/`c`/`r` cranks all call this `spawn` — with a
+  // best-effort spawn-audit line (timestamp, pid, edge, Issue, repo, outcome). It
+  // is purely observational: it makes an over-spawn catchable (the same edge
+  // relaunching the same Issue seconds apart shows as two lines) without changing
+  // any spawn behaviour, and never throws, so the launch it wraps is unaffected.
+  const spawnAuditPath = defaultSpawnAuditPath();
+  const spawn = (repo: string, prompt: string, agent?: AgentConfig) => {
+    try {
+      const handle = rawSpawn(repo, prompt, agent);
+      appendSpawnAudit(spawnAuditPath, { repo, prompt, handle });
+      return handle;
+    } catch (error) {
+      // Record the failed launch too — a rolled-back spawn that retries is exactly
+      // the double-spawn we want to see — then re-throw so rollback still happens.
+      appendSpawnAudit(spawnAuditPath, { repo, prompt, handle: undefined, error });
+      throw error;
+    }
+  };
   // The sidecar persists each spawned agent's captured `--bg` handle as
   // `issueKey → handle` outside the watched root (ADR 0008), so a later board
   // open can join a live `claude agents --json` row back to its Issue. Shared by
@@ -189,6 +216,18 @@ function runBoard(): void {
     failedSet,
     review,
   });
+  // The manual audit crank (`c`, PRD: Auditor Edge, ADR 0026): it reuses the very
+  // same `claude --bg` spawn edge, failure log, and shared failed-set the Reactor's
+  // audit pass uses, flipping ready-for-audit → in-audit and launching the auditor
+  // in the Issue's repo — so a hand-driven `c` and an auto-spawned auditor behave
+  // identically. It carries no review-pass count: the audit edge is a single pass.
+  const auditor = createAuditor(root, {
+    spawn,
+    agent: auditorAgent,
+    logFailure,
+    recordHandle,
+    failedSet,
+  });
   // Orphan recovery (ADR 0009): `R` on an orphaned card rolls its active status
   // back onto its frontier through the same status seam the launch-failure
   // rollback uses. It spawns nothing — the normal spawn edge (the Reactor below
@@ -267,7 +306,33 @@ function runBoard(): void {
     review,
     implementor: implementorAgent,
     reviewer: reviewerAgent,
+    auditor: auditorAgent,
   });
+  // The JIRA mirror (ADR 0028): the in-process sibling of the Linked-PR overlay,
+  // reconciled fire-and-forget after each board rebuild. It pushes each opted-in
+  // PRD's epic to JIRA off the render path — the board never blocks on it and its
+  // acli failures degrade to logged no-ops (never a board marker or a crash). It
+  // is always wired (the mirror is off *per PRD* via the authored `jira` block, not
+  // by config), so an unconfigured board simply finds no opted-in PRDs and makes no
+  // acli calls. The scheduling that keeps it off the render path lives in the live
+  // loop; here we hand it the config's default board and status-name overrides.
+  const mirrorReconciler = realMirrorReconciler({
+    root,
+    defaultBoard: jira.defaultBoard,
+    statusNames: jira.statusNames,
+  });
+  const mirror = {
+    reconcile: (b: Board): void => {
+      // Fire-and-forget: every JiraSeam call is async (acli via execFile, never
+      // execFileSync), so this call already returns before any subprocess I/O
+      // happens — the board render never waits on acli. The reconciler swallows
+      // its own per-PRD failures, so a rejected promise can't surface — but
+      // guard anyway to honour "never throws out".
+      void mirrorReconciler.reconcile(b).catch(() => {
+        // Fire-and-forget: a mirror failure is never allowed to reach the board.
+      });
+    },
+  };
   // Render on the terminal's alternate screen buffer (like vim/htop/less): the
   // board takes over the whole screen on launch and the user's prior shell
   // contents are restored untouched on quit. Ink manages enter/exit and restore.
@@ -285,6 +350,7 @@ function runBoard(): void {
       watch={watchRoot}
       dispatcher={dispatcher}
       reviewer={reviewer}
+      auditor={auditor}
       rollback={rollback}
       killer={killer}
       openPr={openPr}
@@ -295,6 +361,7 @@ function runBoard(): void {
       agentOutputReader={agentOutputReader}
       urlOpener={realUrlOpener}
       reactor={reactor}
+      mirror={mirror}
       reviewCap={review.cap}
     />,
     { alternateScreen: true },

@@ -53,7 +53,9 @@ describe("ensureConfig", () => {
 
     expect(config.implementor).toEqual({ model: "opus", effort: "high" });
     expect(config.reviewer).toEqual({ model: "sonnet", effort: "medium" });
-    expect(config.review).toEqual({ cap: 3, effort: "medium" });
+    // The scaffolded [review] table only pins cap + effort; tolerance falls back
+    // to DEFAULT_REVIEW_CONFIG, so match just the fields the scaffold controls.
+    expect(config.review).toMatchObject({ cap: 3, effort: "medium" });
   });
 
   it("creates the default root directory when none exists", () => {
@@ -68,6 +70,17 @@ describe("ensureConfig", () => {
     const config = loadConfig({ configPath, home });
 
     expect(config.root).toBe(join(home, "overseer"));
+  });
+
+  it("writes an explicit [auditor] table pinned to the sonnet/medium default", () => {
+    ensureConfig({ configPath, home, defaultRoot: "~/overseer" });
+
+    // The table is redundant with the built-in default, but is written so the
+    // knob is visible to new users. Assert it round-trips to that default.
+    expect(loadConfig({ configPath, home }).auditor).toEqual({
+      model: "sonnet",
+      effort: "medium",
+    });
   });
 
   it("leaves an existing config byte-for-byte unchanged", () => {

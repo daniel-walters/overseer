@@ -51,16 +51,16 @@ export interface ResolveVerdictDeps {
  *
  * The caller (the Reactor's resolve sweep) has already gated this on the verdict:
  * the Issue is `in-review` with `review_verdict: clean`. The decision forks on the
- * implementor's `deviation` field, then runs the merge:
+ * auditor's `deviation` field, then runs the merge:
  *
  * 1. A recorded `deviation` forecloses the clean auto-merge (a human owns every
- *    deviation). Overseer reads the implementor's field itself and routes the
- *    Issue to `human-review` with reason `deviation`, folding the implementor's
+ *    deviation). Overseer reads the auditor's field itself and routes the
+ *    Issue to `human-review` with reason `deviation`, folding the auditor's
  *    note into the `human_review_note` so the human reads one coherent reason —
  *    no merge. This is why the reviewer prompt no longer mentions deviations: the
  *    agent writes `review_verdict: clean` regardless, and Overseer owns the fork.
  *    Checked before the merge handoff guard because routing a deviation needs no
- *    worktree/branch — it never merges. The implementor's raw `deviation` field is
+ *    worktree/branch — it never merges. The auditor's raw `deviation` field is
  *    left untouched (the dispatch reader's audit trail).
  * 2. Guard that the merge handoff is present — a verdict-bearing Issue should
  *    carry the implementor's `repo`, `worktree`, and `branch`, but a hand-edited
@@ -153,14 +153,14 @@ export function resolveVerdict(
 }
 
 /**
- * The `human_review_note` for the deviation fork: fold the implementor's recorded
+ * The `human_review_note` for the deviation fork: fold the auditor's recorded
  * deviation into one coherent reason the human can read off the card without
  * opening the raw field, matching the prose {@link
  * import("./escalate.js").escalateNonConvergence} records for `non-convergence`.
  */
 function deviationNote(deviation: string): string {
   return (
-    `The implementor recorded a deviation from the planned approach: ` +
+    `The auditor recorded a deviation from the planned approach: ` +
     `"${deviation}". The AI review passed clean, but a deviation needs a human ` +
     `to confirm before the merge. Review the change against the Issue, then run ` +
     `the merge skill.`

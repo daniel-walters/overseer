@@ -1,5 +1,9 @@
 import { hasValue, type DispatchIssue } from "../dispatch/reader.js";
-import type { ReviewConfig } from "./reviewConfig.js";
+import {
+  REVIEW_CATEGORIES,
+  type ReviewConfig,
+  type Tolerance,
+} from "./reviewConfig.js";
 
 /**
  * The inputs to a single reviewer-prompt build: the Issue to review (as the
@@ -24,10 +28,11 @@ export interface ReviewerPromptInput {
   readonly prdBody: string;
   /**
    * The resolved review knobs from {@link import("../config.js").Config}. The
-   * prompt reads only the `effort` — the pass runs `/code-review` at that effort.
-   * The `cap` is the Reactor's concern (ADR 0018): it enforces the
-   * non-convergence escalation across passes, so the single-pass prompt never
-   * names the cap as a loop bound.
+   * prompt reads the `effort` (the pass runs `/code-review` at that effort) and the
+   * `tolerance` policy (embedded so the agent can classify and grade findings — ADR
+   * 0027). The `cap` is the Reactor's concern (ADR 0018): it enforces the
+   * non-convergence escalation across passes, so the single-pass prompt never names
+   * the cap as a loop bound.
    */
   readonly review: ReviewConfig;
 }
@@ -44,16 +49,28 @@ export interface ReviewerPromptInput {
  * 0018 — the Reactor owns the loop and spawns a fresh agent per pass): check out
  * the implementor's recorded worktree; review it *first* by running
  * `/code-review` at the configured effort on the code *as inherited*, before
- * changing anything (so the agent never reviews its own fixes); then take
- * exactly one exit:
+ * changing anything (so the agent never reviews its own fixes); classify each
+ * finding on two axes and grade it against the embedded tolerance policy (ADR
+ * 0027); then take exactly one exit, decided by whether any *blocking* finding
+ * remains:
  *
- * - **Zero findings** → clean exit: write `review_verdict: clean` to the Issue
- *   frontmatter, leave the status untouched, and stop. The agent does NOT merge
- *   and does NOT write a terminal status — Overseer reads the verdict, merges the
- *   worktree branch into the PRD feature branch, and marks the Issue `done`.
- * - **Findings** → fix them, commit to the worktree, record a one-line
- *   `review_findings` summary of what was fixed, set `status: ready-for-review`,
- *   and stop, so the Reactor spawns the next pass.
+ * - **No blocking findings** → clean exit: write `review_verdict: clean` to the
+ *   Issue frontmatter (and, if tolerable findings were waved through, a single-line
+ *   `review_tolerated` manifest of what the merge carries), leave the status
+ *   untouched, and stop. The agent does NOT merge and does NOT write a terminal
+ *   status — Overseer reads the verdict, merges the worktree branch into the PRD
+ *   feature branch, and marks the Issue `done`. Note "clean" means *no blocking
+ *   findings*, not literally zero findings (ADR 0027).
+ * - **Blocking findings** → fix them (and tolerable ones only when cheap and safe),
+ *   commit to the worktree, record a one-line `review_findings` summary of what was
+ *   fixed plus a disclosure of any tolerated findings and their classification, set
+ *   `status: ready-for-review`, and stop, so the Reactor spawns the next pass.
+ *
+ * Tolerance is config injected into the prompt and applied *by the agent* — Overseer
+ * never sees a Severity (ADR 0027): `clean` still means merge, the cap still means
+ * escalate. Only the agent's threshold for writing `clean` moved, from "zero
+ * findings" to "zero blocking findings". The resolved policy is embedded as a
+ * per-Category maximum-Severity table; `none` means a Category always blocks.
  *
  * That `review_findings` summary is the findings ledger (ADR 0024): a fresh pass
  * reviews honestly precisely *because* it did not write the code, but blind to
@@ -61,11 +78,15 @@ export interface ReviewerPromptInput {
  * the Issue carries a prior pass's `review_findings`, the template grows a
  * "confirm the previous pass" section folding it in, so the new agent verifies
  * each is genuinely resolved (and that no fix regressed) as part of its own
- * review. The ledger is last-pass-only — each findings exit overwrites it — so
- * the section is absent on the first pass (no prior findings) and after a clean
- * pass it is never read (the clean exit is terminal). It rides the Issue
- * frontmatter, the only channel a detached `--bg` reviewer has back to Overseer,
- * exactly as the implementor's `deviation` does.
+ * review. On a findings exit the ledger *also* discloses what this pass tolerated
+ * (with its classification) — framed for **independent re-judgment, not deference**
+ * (ADR 0027): the confirm-the-previous-pass section tells the next agent to
+ * re-judge the tolerated set itself, so a disagreement re-surfaces the finding.
+ * The ledger is last-pass-only — each findings exit overwrites it — so the section
+ * is absent on the first pass (no prior findings) and after a clean pass it is never
+ * read (the clean exit is terminal; the merge's tolerated set rides `review_tolerated`
+ * there, not the ledger). It rides the Issue frontmatter, the only channel a detached
+ * `--bg` reviewer has back to Overseer, exactly as the implementor's `deviation` does.
  *
  * The cap / non-convergence escalation lives in the Reactor, not here, so the
  * prompt never counts passes or names the cap. The agent no longer reasons about
@@ -74,10 +95,15 @@ export interface ReviewerPromptInput {
  */
 export function buildReviewerPrompt(input: ReviewerPromptInput): string {
   const { issue, prdTitle, prdBody, review } = input;
-  const { effort } = review;
+  const { effort, tolerance } = review;
   // The /code-review skill names effort in lowercase; the prompt has long
   // written it in caps for emphasis, so uppercase the configured value to match.
   const effortLabel = effort.toUpperCase();
+
+  // The resolved tolerance policy (ADR 0027), embedded so the agent grades each
+  // finding against it. Overseer never reads tolerance — the threshold reaches the
+  // only actor that edits code, the agent, exactly as `effort` does.
+  const toleranceTable = renderTolerance(tolerance);
 
   // The findings ledger (ADR 0024): when a prior pass recorded what it fixed,
   // fold it in so this fresh agent confirms closure. Absent on the first pass —
@@ -94,6 +120,11 @@ work back. You did not write those fixes, so confirm them: as part of the review
 above, verify each is genuinely resolved in the code you inherited, and that no
 fix introduced a regression. Treat anything still open, or any regression, as a
 finding of this pass.
+
+That summary may also disclose findings the previous pass *tolerated* (with their
+Category and Severity) rather than fixed. Re-judge each of those yourself against
+the tolerance policy above — this is independent re-judgment, not deference: if you
+disagree that one is tolerable, treat it as a finding of this pass.
 
 Previous pass's findings:
 
@@ -140,7 +171,25 @@ these — never guess or rederive them:
    ${effortLabel} effort on the worktree exactly as inherited. Reviewing before
    you touch the code is what keeps the review honest — you never grade your own
    fixes.
-3. Then take exactly one exit below based on what the review reported.${priorFindingsSection}
+3. Classify every finding \`/code-review\` reports on two axes. \`/code-review\`
+   does not emit them; assigning them is your judgment:
+   - **Category** (its kind): one of correctness, security, architecture, style,
+     test, docs.
+   - **Severity** (its grade): one of low, medium, high.
+   Then judge each finding against the tolerance policy below: a finding is
+   **blocking** if its Severity is above its Category's tolerated maximum (or that
+   Category tolerates none), and **tolerable** otherwise.
+4. Then take exactly one exit below, decided solely by whether any **blocking**
+   findings remain.
+
+## Tolerance policy
+
+This board tolerates findings at or below a per-Category maximum Severity — what it
+will accept into the merge rather than block on. \`none\` means that Category
+tolerates nothing (fix everything in it). A finding whose Severity is above its
+Category's maximum is blocking.
+
+${toleranceTable}${priorFindingsSection}
 
 ## How to finish
 
@@ -149,30 +198,57 @@ The Issue file to edit is:
 
    ${issue.path}
 
-Take exactly one of these two exits:
+Take exactly one of these two exits, decided solely by whether any **blocking**
+finding remains — tolerable findings never decide the exit:
 
-- CLEAN EXIT — the review reported ZERO findings. In a single edit, add the line
-  \`review_verdict: clean\` to the Issue's frontmatter and stop. Do NOT change the
+- CLEAN EXIT — NO blocking findings remain (there may be tolerable findings you
+  chose to leave). In a single edit, add the line \`review_verdict: clean\` to the
+  Issue's frontmatter. If you tolerated any findings, also add a single-line,
+  double-quoted \`review_tolerated\` manifest naming what the merge will carry and
+  its classification (e.g.
+  \`review_tolerated: "style:low formatter line length; docs:low stale comment"\`),
+  on one line so the frontmatter stays valid YAML. Then stop. Do NOT change the
   \`status\` field and do NOT merge anything: Overseer reads the verdict, performs
-  the merge into the feature branch, and writes the terminal status itself. Adding
-  the verdict and stopping is the entire clean exit.
+  the merge into the feature branch, and writes the terminal status itself.
 
-- FINDINGS EXIT — the review reported one or more findings. Fix every finding,
-  committing the fixes to the worktree (${issue.worktree}) as you go. Do NOT
-  re-review your own fixes. Then make a single edit to the Issue frontmatter:
+- FINDINGS EXIT — one or more BLOCKING findings remain. Fix every blocking finding,
+  committing the fixes to the worktree (${issue.worktree}) as you go; fix tolerable
+  findings too only when doing so is cheap and safe. Do NOT re-review your own
+  fixes. Then make a single edit to the Issue frontmatter:
     - The Issue ALREADY has a \`status:\` line. CHANGE that existing line's value
       in place to \`ready-for-review\` — do NOT add a second \`status:\` line. After
       your edit there must be exactly ONE \`status:\` line: a duplicate key makes
       the frontmatter invalid YAML, and Overseer can no longer read the Issue (it
       drops off the board flagged with a bad-status warning).
-    - Set \`review_findings\` to a one-line summary of the findings you fixed this
-      pass, written as a double-quoted string on one line (e.g.
+    - Set \`review_findings\` to a one-line summary of the blocking findings you
+      fixed this pass, written as a double-quoted string on one line (e.g.
       \`review_findings: "Unvalidated input in parser; missing test for the
-      empty-list case"\`). Keep it to one line and quote it so the frontmatter
-      stays valid YAML. If a \`review_findings\` line already exists from an earlier
-      pass, OVERWRITE that line in place rather than adding another — the same
-      no-duplicate-keys rule applies to every field.
+      empty-list case"\`). If you tolerated any findings rather than fixing them,
+      also disclose them and their Category/Severity in that same line, so the next
+      pass sees what this pass waved through and can **re-judge** them with fresh
+      eyes rather than rediscover them cold. This is disclosure for independent
+      re-judgment, not deference: if the next pass disagrees a finding is tolerable,
+      it treats it as a finding of its own. Keep it to one line and quote it so the
+      frontmatter stays valid YAML. If a \`review_findings\` line already exists from
+      an earlier pass, OVERWRITE that line in place rather than adding another — the
+      same no-duplicate-keys rule applies to every field.
   That summary lets the fresh agent on the next pass confirm your fixes actually
   landed. Then stop — Overseer picks it back up and a fresh agent reviews your
   fixes in the next pass.`;
+}
+
+/**
+ * Render the resolved {@link Tolerance} policy as a stable markdown list for the
+ * prompt: one line per Category in {@link REVIEW_CATEGORIES} order, naming its
+ * maximum tolerable Severity. `none` is annotated as always-blocking so the agent
+ * reads it as "fix everything in this Category." The fixed Category order keeps the
+ * prompt byte-stable for identical inputs (the determinism the test asserts).
+ */
+function renderTolerance(tolerance: Tolerance): string {
+  return REVIEW_CATEGORIES.map((category) => {
+    const level = tolerance[category];
+    const annotation =
+      level === "none" ? "none (always blocks)" : `${level} (tolerates at or below ${level})`;
+    return `- ${category}: ${annotation}`;
+  }).join("\n");
 }
